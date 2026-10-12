@@ -52,7 +52,7 @@
   .split { flex:1; min-height:0; display:grid; grid-template-columns:1fr 400px; gap:12px; padding:0 18px 18px; }
   .mapbox { position:relative; border-radius:16px; overflow:hidden; border:1px solid var(--line); box-shadow:var(--shadow); min-height:360px; }
   #map { position:absolute; inset:0; background:#e3e9ef; }
-  .legend { position:absolute; left:10px; bottom:10px; background:rgba(255,255,255,.93); color:#1c2330; border-radius:10px; padding:7px 10px; font-size:12px; box-shadow:0 2px 10px rgba(0,0,0,.12); }
+  .legend { position:absolute; left:10px; top:10px; max-width:calc(100% - 70px); background:rgba(255,255,255,.93); color:#1c2330; border-radius:10px; padding:7px 10px; font-size:12px; box-shadow:0 2px 10px rgba(0,0,0,.12); }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:16px; overflow:auto; box-shadow:var(--shadow); }
   .panel-head { position:sticky; top:0; background:var(--panel); padding:12px 14px 8px; border-bottom:1px solid var(--line); z-index:1; display:flex; justify-content:space-between; align-items:center; gap:8px; }
 
@@ -323,8 +323,12 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl(), "top-right");
 map.addControl(new maplibregl.FullscreenControl(), "top-right");
-let usedFallback = false;
-map.on("error", () => { if (!usedFallback && !map.isStyleLoaded()) { usedFallback = true; map.setStyle(FALLBACK); } });
+// Fall back only if the basemap style itself never loads (a failed tile or glyph must not trigger it).
+let styleReady = false, usedFallback = false;
+const useFallback = () => { if (!styleReady && !usedFallback) { usedFallback = true; map.setStyle(FALLBACK); } };
+map.on("style.load", () => { styleReady = true; });
+map.on("error", () => { if (!styleReady) useFallback(); });  // tiles load after the style, so they never trigger this
+setTimeout(useFallback, 8000);  // offline or blocked: no answer at all
 
 function geojson(rows) {
   return { type: "FeatureCollection", features: rows.filter((p) => p.lat != null).map((p) => ({
@@ -334,8 +338,14 @@ function geojson(rows) {
 }
 const colorExpr = ["match", ["get", "category"], ...Object.entries(COLORS).flat(), "#888"];
 const radiusExpr = ["interpolate", ["linear"], ["zoom"], 5, ["+", 4, ["*", 0.5, ["sqrt", ["get", "mw"]]]], 11, ["+", 8, ["*", 1.6, ["sqrt", ["get", "mw"]]]]];
+let regionDeps = [];
 function addLayers() {
   if (map.getSource("projects")) return;
+  // Dashed outline of the departments covered (as in the regional prototype).
+  map.addSource("region", { type: "geojson", data: "static/departements.geojson" });
+  const inRegion = ["in", ["get", "code"], ["literal", regionDeps]];
+  map.addLayer({ id: "region-fill", type: "fill", source: "region", filter: inRegion, paint: { "fill-color": "#2457d6", "fill-opacity": 0.04 } });
+  map.addLayer({ id: "region-line", type: "line", source: "region", filter: inRegion, paint: { "line-color": "#2457d6", "line-opacity": 0.45, "line-width": 1.2, "line-dasharray": [2, 1.5] } });
   map.addSource("projects", { type: "geojson", data: geojson(filtered()) });
   map.addLayer({ id: "halo", type: "circle", source: "projects", paint: { "circle-color": colorExpr, "circle-opacity": 0.16, "circle-blur": 0.6, "circle-radius": ["*", 1.9, radiusExpr] } });
   map.addLayer({ id: "dots", type: "circle", source: "projects", paint: {
@@ -407,6 +417,9 @@ async function init() {
       `<div class="tile"><h2>Dernières mises à jour</h2><ul class="plain">${Object.entries(info.last_runs).map(([k, v]) => `<li>${esc(k)} : ${esc((v || "").slice(0, 16).replace("T", " "))} UTC</li>`).join("")}</ul></div>`,
       `<div class="tile"><h2>À savoir</h2><ul>${info.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`].join("");
     const deps = [...new Set(projects.map((p) => p.department).filter(Boolean))].sort();
+    regionDeps = deps;
+    const inRegion = ["in", ["get", "code"], ["literal", regionDeps]];
+    ["region-fill", "region-line"].forEach((id) => map.getLayer(id) && map.setFilter(id, inRegion));
     $("dep").innerHTML += deps.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if (recent.length) { $("badge").textContent = recent.length; $("badge").hidden = false; }
     refresh();

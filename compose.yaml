@@ -1,0 +1,25 @@
+# docker compose up -d                          web + MCP on http://localhost:8765 (token required)
+# docker compose run --rm update                daily job (schedule it with cron / a systemd timer)
+# Secrets come from a local .env file (never committed): RADAR_API_TOKEN, optionally ANTHROPIC_API_KEY, RADAR_LLM_MODEL.
+services:
+  web:
+    build: .
+    image: radar-raccordement
+    ports: ["127.0.0.1:8765:8765"]
+    volumes: ["radar-data:/data"]
+    environment:
+      RADAR_API_TOKEN: ${RADAR_API_TOKEN:?set RADAR_API_TOKEN in .env}
+    command: ["radar", "web", "--host", "0.0.0.0", "--port", "8765", "--public-host", "${RADAR_PUBLIC_HOST:-localhost}"]
+    restart: unless-stopped
+
+  update:
+    image: radar-raccordement
+    profiles: ["jobs"]
+    volumes: ["radar-data:/data"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      RADAR_LLM_MODEL: ${RADAR_LLM_MODEL:-}
+    command: ["radar", "update"]
+
+volumes:
+  radar-data:

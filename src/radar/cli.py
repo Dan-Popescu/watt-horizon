@@ -3,6 +3,7 @@
 radar import files|signals|gold|cache|communes ...   load data already on disk (no network)
 radar collect dreal|mrae|georisques|registry|press|prefectures ...   polite network collection
 radar process | link | run                           build filings, links, projects (idempotent)
+radar update                                         scheduled job: polite collect of recent items + run
 radar changes --since D | export csv|geojson      alerts and files for clients
 radar web                                            map + JSON API + MCP over HTTP
 radar eval | stats | mcp
@@ -13,7 +14,7 @@ import json
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -74,32 +75,49 @@ def cmd_import(args: argparse.Namespace, s: Settings) -> Any:
     return {"communes": importers.import_communes(Path(args.path), s.communes_path)}
 
 
-def cmd_collect(args: argparse.Namespace, s: Settings) -> Any:
+def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: PoliteHttp, db: Database) -> Any:
+    """Run one collector; a site that blocks us ends this source for the run (never retried in a loop)."""
     region = get_region(args.region)
+    blobs = BlobStore(s.blobs_dir)
+    run_id = db.start_run(f"collect:{source}")
+    try:
+        if source == "dreal":
+            listings = tuple(args.listing) if args.listing else region.dreal_listings[:2]
+            report = dreal.collect_dreal(http, db, blobs, region, listings, args.max_offset, args.max_items)
+        elif source == "mrae":
+            report = mrae.collect_mrae(http, db, blobs, region, args.year, args.max_items)
+        elif source == "georisques":
+            report = georisques.collect_georisques(http, db, region.departments)
+        elif source == "registry":
+            report = registry.collect_registry(http, db, region.departments, date.fromisoformat(args.since))
+        elif source == "press":
+            ref = ReferenceCommunes(s.communes_path)
+            names = [c.name for dep in region.departments for c in ref.communes_in(dep)]
+            report = press.collect_press(http, db, names)
+        else:
+            report = prefectures.collect_prefectures(http, db, blobs, region, args.max_pages)
+    except SiteBlockedError as exc:
+        db.finish_run(run_id, {"stopped": str(exc)})
+        return {"stopped": str(exc), "advice": "Site closed the connection: retry another day, never in a loop."}
+    db.finish_run(run_id, asdict(report))
+    return report
+
+
+def cmd_collect(args: argparse.Namespace, s: Settings) -> Any:
     with _require_http(s) as http, Database(s.db_path) as db:
-        blobs = BlobStore(s.blobs_dir)
-        run_id = db.start_run(f"collect:{args.source}")
-        try:
-            if args.source == "dreal":
-                listings = tuple(args.listing) if args.listing else region.dreal_listings[:2]
-                report = dreal.collect_dreal(http, db, blobs, region, listings, args.max_offset, args.max_items)
-            elif args.source == "mrae":
-                report = mrae.collect_mrae(http, db, blobs, region, args.year, args.max_items)
-            elif args.source == "georisques":
-                report = georisques.collect_georisques(http, db, region.departments)
-            elif args.source == "registry":
-                report = registry.collect_registry(http, db, region.departments, date.fromisoformat(args.since))
-            elif args.source == "press":
-                ref = ReferenceCommunes(s.communes_path)
-                names = [c.name for dep in region.departments for c in ref.communes_in(dep)]
-                report = press.collect_press(http, db, names)
-            else:
-                report = prefectures.collect_prefectures(http, db, blobs, region, args.max_pages)
-        except SiteBlockedError as exc:
-            db.finish_run(run_id, {"stopped": str(exc)})
-            return {"stopped": str(exc), "advice": "Site closed the connection: retry another day, never in a loop."}
-        db.finish_run(run_id, asdict(report))
-        return report
+        return _collect_one(args.source, args, s, http, db)
+
+
+UPDATE_SOURCES = ("dreal", "mrae", "registry", "press")  # prefectures: opt-in only (they blocked us once)
+
+
+def cmd_update(args: argparse.Namespace, s: Settings) -> Any:
+    """Scheduled job: light collection of recent items, then rebuild. Safe to run daily."""
+    collected: dict[str, Any] = {}
+    with _require_http(s) as http, Database(s.db_path) as db:
+        for source in args.sources:
+            collected[source] = _collect_one(source, args, s, http, db)
+    return {"collect": collected, **cmd_run(args, s)}
 
 
 def cmd_process(args: argparse.Namespace, s: Settings) -> Any:
@@ -202,6 +220,19 @@ def build_parser() -> argparse.ArgumentParser:
     col.add_argument("--year", type=int, default=date.today().year)
     col.add_argument("--since", default=f"{date.today().year - 2}-01-01", help="registry: creation date lower bound")
 
+    upd = sub.add_parser("update", help="scheduled job: collect recent items (polite), then run")
+    upd.add_argument(
+        "--sources", nargs="*", default=list(UPDATE_SOURCES), choices=[*UPDATE_SOURCES, "georisques", "prefectures"]
+    )
+    upd.add_argument("--region", default="hauts-de-france")
+    upd.add_argument("--listing", action="append", help=argparse.SUPPRESS)
+    upd.add_argument("--max-offset", type=int, default=16, help="DREAL: newest pages only (8 articles per page)")
+    upd.add_argument("--max-items", type=int, default=None)
+    upd.add_argument("--max-pages", type=int, default=10)
+    upd.add_argument("--year", type=int, default=date.today().year)
+    upd.add_argument("--since", default=(date.today() - timedelta(days=90)).isoformat())
+    upd.add_argument("--only", nargs="*", help=argparse.SUPPRESS)
+
     proc = sub.add_parser("process", help="(re)build filings from stored documents")
     proc.add_argument("--only", nargs="*", help="filing keys")
     run = sub.add_parser("run", help="process + link + build projects")
@@ -232,6 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
 COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "import": cmd_import,
     "collect": cmd_collect,
+    "update": cmd_update,
     "process": cmd_process,
     "link": cmd_link,
     "run": cmd_run,

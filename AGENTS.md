@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Early detection of French grid-connection projects (battery storage "BESS", data centers) from public filings.
-Output: a SQLite dataset of evidence-backed projects, served read-only to agents over MCP.
-Human docs (French): `README.md`, `docs/architecture.md`. This file is the agent contract.
+Output: a SQLite dataset of evidence-backed projects, served read-only over MCP (stdio and HTTP), a JSON API and a map.
+Human docs (French): `README.md`, `docs/architecture.md`, `docs/deploiement.md`. This file is the agent contract.
 
 ## Commands
 
@@ -14,7 +14,14 @@ uv run radar --help                       # CLI; every command prints ONE JSON o
 RADAR_OFFLINE=1 uv run radar run          # rebuild filings -> links -> projects, no network
 uv run radar eval                         # gold-set report (screening recall, completeness)
 uv run radar mcp                          # MCP server, stdio
+uv run radar web                          # map + JSON API + MCP over HTTP on http://127.0.0.1:8765 (/mcp)
+uv run radar changes --since 2026-10-01   # change log (new / changed / removed projects)
+uv run radar export csv|geojson           # files in <data>/exports/
+uv run radar update                       # scheduled job: polite collect of recent items + run (network!)
+docker build -t radar-raccordement .      # image used in production (see compose.yaml)
 ```
+
+Never run `collect`/`update` unless the task explicitly asks for new data: collection hits public sites.
 
 Definition of done: format + ruff + mypy strict + pytest green, and `radar run` + `radar eval` still work on `data/`.
 
@@ -27,6 +34,7 @@ Definition of done: format + ruff + mypy strict + pytest green, and `radar run` 
 | `RADAR_LLM_MODEL` | unset | e.g. `claude-opus-5-5`: enables the LLM classifier (extra `llm` + `ANTHROPIC_API_KEY`); unset = gold set only |
 | `RADAR_TESSERACT` | `1` | OCR scanned pages with local Tesseract when the binary is on PATH (after transcripts); `0` disables |
 | `RADAR_USER_AGENT` | project UA | sent on every request |
+| `RADAR_API_TOKEN` | unset | `radar web`: require `Authorization: Bearer <token>` on `/api/*` and `/mcp`; mandatory off localhost |
 
 `data/` is git-ignored and rebuildable from `blobs/` (content-addressed raw files are the source of truth).
 
@@ -39,12 +47,13 @@ extraction/    PdfContent/text -> Facts (value + Evidence per field): cerfa.py, 
 classification/ rules.screen (layer 1, recall-first) -> Classifier chain (LLM, then gold set)
 validation/    Facts + Lookups port -> Checks (GDPR, SIRET, commune, GPS, power, dates) + confidence
 linking/       filings + signals -> proposed Links (same commune / developer word / substation)
-pipeline/      orchestration: ingest, build_filing, process_filings, link_and_build, importers, evaluate
+pipeline/      orchestration: ingest, build_filing, process_filings, link_and_build, changes (log), importers, evaluate
 store/         db.py (SQLite, migrations) + blobs.py (sha256 files)
 net/http.py    PoliteHttp: per-host pacing, retries, SiteBlockedError
 sources/       collectors (network -> store): dreal, mrae, georisques, registry, press, prefectures
-api/           read-only queries -> pydantic views (the only thing MCP/CLI expose)
+api/           read-only queries -> pydantic views (the only thing MCP/CLI/web expose); exports.py = CSV/GeoJSON
 mcp_server.py  MCP tools = thin wrappers over api/queries.py
+web/app.py     Starlette: /api/* (same queries), / (static/index.html map), /mcp (streamable HTTP, stateless)
 wiring.py      composition root (Settings -> concrete services). cli.py = argparse -> wiring
 ```
 
@@ -64,8 +73,13 @@ documents) + `Signal` (company, article, installation) -> `Link` -> `Project` (w
 6. **Idempotence**: `process`/`link`/`run` rebuild from stored documents; re-running gives the same result.
 7. **Layer 1 screen is recall-first**: it may keep noise (layer 2 rejects it), it must not drop a target.
    Any regex change needs a test with the verbatim title that motivated it.
-8. **Read API is read-only.** MCP tools open one short-lived connection per call and raise `ToolError` on bad input.
-9. Code, identifiers, comments, docstrings: English. User-facing labels/caveats in `api/`: French.
+8. **Read API is read-only.** MCP tools and web endpoints open one short-lived connection per call; bad input ->
+   `ToolError` (MCP) / HTTP 400 (web). New read features go in `api/queries.py` first, then MCP + web.
+9. Code, identifiers, comments, docstrings: English. User-facing labels/caveats in `api/` and `web/`: French.
+10. **Change log**: `link_and_build` diffs old vs new projects (`pipeline/changes.py`) and writes links, projects and
+    `project_changes` in one transaction. Unchanged projects keep `updated_at`. Track a new field in `changes.TRACKED`.
+11. **Web UI** (`web/static/index.html`): one file, no build step, escapes every value (`esc`, `safeUrl`). Basemap =
+    OpenFreeMap positron; the self-hosted `departements.geojson` fallback is used only if the style itself fails.
 
 ## Recipes
 
@@ -81,6 +95,8 @@ documents) + `Signal` (company, article, installation) -> `Link` -> `Project` (w
   `wiring.make_classifier`. Measure with `radar eval` before/after.
 - **New MCP tool**: add the query to `api/queries.py` returning a view from `api/views.py`, then a thin
   `@mcp.tool(annotations=READ_ONLY)` in `mcp_server.py`; test it in `tests/test_pipeline_api_mcp.py`.
+- **New web endpoint**: a query in `api/queries.py`, then a `Route` in `web/app.py` wrapped by `endpoint(...)`;
+  test it in `tests/test_web.py` with Starlette's `TestClient` (base_url `http://127.0.0.1:8765`).
 - **Schema change**: append a migration to `store/db.py` (`user_version` increments); never edit old ones.
 
 ## Tests
@@ -88,6 +104,7 @@ documents) + `Signal` (company, article, installation) -> `Link` -> `Project` (w
 - Offline by default; HTTP is mocked with `httpx.MockTransport`. Real network tests: `@pytest.mark.network`.
 - Test text comes from real public documents (verbatim excerpts). Say so when values are combined.
 - PDFs are generated in tests with `tests.conftest.make_pdf(pages, fields)`; no binary fixtures.
+- Shared end-to-end dataset: fixture `loaded_db` in `tests/conftest.py` (2 projects, 1 signal).
 - Lookups use `StaticLookups` (fixtures `AUBENTON`, `BONNEUIL`, `VERS_SUR_SELLE`, `MERU` in `conftest.py`).
 
 ## Gotchas
@@ -98,3 +115,6 @@ documents) + `Signal` (company, article, installation) -> `Link` -> `Project` (w
 - Cerfa 14734 has two field layouts plus flattened PDFs (see `extraction/cerfa.py` docstring).
 - `Filing.key` = `"<source>:<region>:<normalized number>"`; gold labels are keyed by normalized number.
 - MCP SDK v2 API: `mcp.server.mcpserver.MCPServer`; tests use `mcp.Client(server)` in memory.
+- MCP over HTTP rejects Host headers other than localhost when bound locally (DNS-rebinding protection); behind a
+  proxy pass `radar web --public-host <host>`.
+- Line endings are LF (`.gitattributes`); the Docker image runs as a non-root user with `/data` as volume.

@@ -4,10 +4,10 @@
 
 ```
 sources ──► store (PDF bruts + SQLite) ──► lecture ──► extraction ──► tri ──► contrôles ──► dossiers
-                                                                                              │
-signaux (sociétés, presse, ICPE) ──────────────────────────────────────────► liens ──► projets
-                                                                                              │
-                                                                       API lecture ──► CLI / MCP
+signaux (sociétés, presse, ICPE) ─────────────────────────────────────────────────────────────┤
+                                                                                   liens ──► projets
+                                                                      journal des changements ──┤
+                                                         API lecture ──► CLI / MCP / carte web ◄┘
 ```
 
 Chaque couche ne dépend que des couches situées en amont. Le domaine (`domain/`) est pur : il ne fait aucune entrée-sortie. Tous les assemblages concrets sont faits dans `wiring.py`.
@@ -26,7 +26,10 @@ Chaque couche ne dépend que des couches situées en amont. Le domaine (`domain/
 | Puissance « estimée » toujours séparée de la « déclarée » | L'estimation (nombre de conteneurs, surface) est calibrée sur trois dossiers réels. Elle est donnée en fourchette, avec sa base de calcul. |
 | Masquage des personnes physiques avant stockage | Minimisation RGPD : la base ne contient jamais leurs noms. |
 | Client HTTP poli | Une requête par seconde et par site, au plus. Un site qui bloque est abandonné pour toute l'exécution. Les préfectures en ont déjà bloqué une (octobre 2026). |
-| MCP en lecture seule, branché sur `api/queries.py` | Une seule logique de requête pour la CLI, MCP et une future API web. |
+| MCP, API JSON et carte branchés sur `api/queries.py` | Une seule logique de requête pour tout le monde. Le MCP fonctionne en local (stdio) et à distance (HTTP). |
+| Journal des changements calculé à chaque reconstruction | Ce que paie un client, c'est l'alerte : « nouveau projet », « puissance modifiée », « décision rendue ». |
+| Carte en un seul fichier HTML, sans étape de build | Rien à compiler, facile à modifier pour un agent. Si le fond de carte externe ne charge pas, un fond de secours servi par le serveur prend le relais. |
+| Docker avec un volume `/data` | Une seule image pour la carte et pour la tâche quotidienne. Il n'y a qu'un dossier à sauvegarder. |
 
 ## État mesuré (2026-10-12, Hauts-de-France, hors ligne)
 
@@ -41,14 +44,16 @@ Chaque couche ne dépend que des couches situées en amont. Le domaine (`domain/
 | Date | 10/10 |
 | SIRET | 7/10 |
 | Puissance | 7/10 |
+| Poste | 6/10 (4/10 avant le correctif du 2026-10-12) |
 | GPS exact | 5/10 |
-| Poste | 4/10 |
+
+Les manques restants ont été vérifiés un par un : l'information est **absente des documents**. Ce ne sont pas des erreurs de lecture.
 
 - L'accord du LLM avec le jeu de vérité n'est pas encore mesuré : il faut une clé d'API et `RADAR_LLM_MODEL`.
 
 ## Questions ouvertes
 
-- Hébergement et fréquence de mise à jour (tâche quotidienne, base en lecture partagée).
-- MCP distant (transport HTTP et authentification) en plus de stdio.
+- Hébergement et nom de domaine. Tout est prêt côté code : voir [deploiement.md](deploiement.md).
+- Comptes clients : un jeton unique pour l'instant.
 - Jeu de vérité à agrandir (environ 200 dossiers) avant de comparer des modèles moins chers.
 - Extension à l'Île-de-France : les data centers y relèvent surtout de la MRAe et des préfectures.
