@@ -1,0 +1,11 @@
+# Local data: downloaded documents, database, caches (public data, but large and regenerable)
+/data/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.env

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "radar": {
+      "command": "uv",
+      "args": ["run", "radar", "mcp"],
+      "env": { "RADAR_OFFLINE": "1" }
+    }
+  }
+}

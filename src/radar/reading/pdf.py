@@ -1,0 +1,49 @@
+"""PDF reading: form fields (most reliable) > text layer > scanned pages flagged for OCR."""
+
+from dataclasses import dataclass, field
+
+import pymupdf
+
+from radar.domain.text import squash
+
+MIN_TEXT_CHARS_PER_PAGE = 200  # below this, a page is considered a scan
+
+
+@dataclass(frozen=True)
+class PdfContent:
+    pages: int
+    fields: dict[str, str]  # filled AcroForm fields, first non-empty value per name
+    page_texts: tuple[str, ...]
+    scanned_pages: tuple[int, ...]  # 1-based page numbers without a usable text layer
+    ocr_texts: dict[int, str] = field(default_factory=dict)  # 1-based page -> OCR text, filled by an OcrEngine
+
+    @property
+    def text(self) -> str:
+        """Whole document text (text layer, completed by OCR where available), whitespace-squashed."""
+        parts = [self.ocr_texts.get(i + 1) or t for i, t in enumerate(self.page_texts)]
+        return squash(" ".join(parts))
+
+    @property
+    def unread_scanned_pages(self) -> tuple[int, ...]:
+        return tuple(p for p in self.scanned_pages if p not in self.ocr_texts)
+
+    @property
+    def is_mostly_scanned(self) -> bool:
+        return self.pages > 0 and len(self.scanned_pages) * 2 > self.pages
+
+
+def read_pdf(data: bytes) -> PdfContent:
+    with pymupdf.open(stream=data, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
+        fields: dict[str, str] = {}
+        texts: list[str] = []
+        scanned: list[int] = []
+        for page in doc:
+            for widget in page.widgets() or []:
+                name, value = (widget.field_name or "").strip(), widget.field_value
+                if name and value not in (None, "", "Off") and name not in fields:
+                    fields[name] = str(value).replace("\r", "\n").strip()
+            text = page.get_text()
+            texts.append(text)
+            if len(text.strip()) < MIN_TEXT_CHARS_PER_PAGE:
+                scanned.append(page.number + 1)
+        return PdfContent(pages=doc.page_count, fields=fields, page_texts=tuple(texts), scanned_pages=tuple(scanned))
