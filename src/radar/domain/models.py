@@ -104,7 +104,11 @@ class Filing(Model):
     checks: tuple[Check, ...] = ()
     confidence: Confidence = Confidence.REVIEW
     evidence: dict[str, Evidence] = Field(default_factory=dict)
-    unread_scans: tuple[str, ...] = ()  # document ids with scanned pages and no OCR text
+    unread_scans: tuple[str, ...] = ()
+    reading: dict[str, str] = Field(default_factory=dict)  # document id -> how it was read (text layer, OCR engine)
+    versions: dict[str, str] = Field(
+        default_factory=dict
+    )  # extraction, classifier, ocr: for regression tracking  # document ids with scanned pages and no OCR text
 
 
 class Signal(Model):

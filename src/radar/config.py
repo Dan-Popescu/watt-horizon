@@ -32,6 +32,11 @@ class Settings:
         return self.data_dir / "cache" / "lookups.json"
 
     @property
+    def cache_path(self) -> Path:
+        """Disposable cache of expensive derived results (OCR pages, LLM answers)."""
+        return self.data_dir / "cache" / "derived.sqlite"
+
+    @property
     def communes_path(self) -> Path:
         """All French communes with centroids (geo.api.gouv.fr export), used offline."""
         return self.data_dir / "reference" / "communes.json"

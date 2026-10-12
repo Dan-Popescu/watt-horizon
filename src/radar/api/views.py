@@ -39,6 +39,7 @@ class DocumentView(View):
     title: str
     url: str
     role: str
+    read_by: str = Field(default="", description="text layer and/or OCR engine that read it (with pages)")
 
 
 class CheckView(View):
@@ -62,6 +63,7 @@ class ProjectDetail(View):
     siret: str | None
     classification: str
     classification_method: str
+    versions: dict[str, str] = Field(default_factory=dict, description="extraction / classification / OCR versions")
     power_basis: str
     documents: list[DocumentView]
     evidence: list[EvidenceView]

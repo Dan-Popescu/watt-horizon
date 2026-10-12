@@ -11,6 +11,7 @@ from radar.domain.models import Classification, DocumentRecord, Filing, Location
 from radar.domain.power import estimate_power
 from radar.domain.privacy import PersonScrubber
 from radar.domain.text import squash
+from radar.extraction import EXTRACTION_VERSION
 from radar.extraction.cerfa import extract_cerfa
 from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
@@ -40,6 +41,7 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
     form, decision, unread = Facts(), Facts(), []
     texts: list[str] = []
     form_fields: list[dict[str, str]] = []
+    reading: dict[str, str] = {}
 
     for doc in documents:
         data = services.blobs.get(doc.id)
@@ -48,6 +50,7 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
             unread.append(doc.id)
         texts.append(content.text)
         form_fields.append(content.fields)
+        reading[doc.id] = content.read_by
         if doc.role is DocumentRole.FORM:
             form.fill_from(extract_cerfa(doc.id, content))
         elif doc.role is DocumentRole.DECISION:
@@ -102,6 +105,12 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
         confidence=validation.confidence(needs_review),
         evidence=dict(facts.evidence),
         unread_scans=tuple(unread),
+        reading=reading,
+        versions={
+            "extraction": EXTRACTION_VERSION,
+            "classification": classification.method,
+            "ocr": services.ocr.label,
+        },
     )
 
 

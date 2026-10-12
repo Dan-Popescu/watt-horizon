@@ -129,8 +129,12 @@ def get_project(db: Database, project_id: str) -> ProjectDetail | None:
         siret=filing.siret,
         classification=filing.classification.category.value,
         classification_method=filing.classification.method,
+        versions=filing.versions,
         power_basis=project.power.basis,
-        documents=[DocumentView(title=d.title, url=d.url, role=d.role.value) for d in docs.values()],
+        documents=[
+            DocumentView(title=d.title, url=d.url, role=d.role.value, read_by=filing.reading.get(d.id, ""))
+            for d in docs.values()
+        ],
         evidence=[
             EvidenceView(
                 field=name,

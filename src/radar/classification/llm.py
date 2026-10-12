@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     import anthropic
 
 MAX_INPUT_CHARS = 12_000
+PROMPT_VERSION = "2026-10-12"  # bump on any change to SYSTEM_PROMPT, OUTPUT_SCHEMA or the message layout
 LLM_CATEGORIES = [c for c in Category if c not in {Category.NEEDS_REVIEW, Category.UNCLASSIFIED}]
 SYSTEM_PROMPT = (
     "Tu classes des documents administratifs français (décisions et formulaires d'examen au cas par cas, arrêtés, "
@@ -40,7 +41,7 @@ class LlmClassifier:
 
         self.model = model
         self.client = client or anthropic.Anthropic()
-        self.name = f"llm:{model}"
+        self.name = f"llm:{model}@{PROMPT_VERSION}"
 
     def classify(self, item: ClassificationInput) -> Classification | None:
         categories = "\n".join(f"- {c.value} : {CATEGORY_LABELS_FR[c]}" for c in LLM_CATEGORIES)

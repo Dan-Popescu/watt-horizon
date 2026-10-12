@@ -16,6 +16,7 @@ class PdfContent:
     page_texts: tuple[str, ...]
     scanned_pages: tuple[int, ...]  # 1-based page numbers without a usable text layer
     ocr_texts: dict[int, str] = field(default_factory=dict)  # 1-based page -> OCR text, filled by an OcrEngine
+    ocr_engines: dict[int, str] = field(default_factory=dict)  # 1-based page -> engine label (provenance)
 
     @property
     def text(self) -> str:
@@ -24,12 +25,35 @@ class PdfContent:
         return squash(" ".join(parts))
 
     @property
+    def read_by(self) -> str:
+        """Provenance summary: "text", or e.g. "text + transcript (p1) + tesseract-5.5.0:fra@300dpi (p2-3)"."""
+        by_engine: dict[str, list[int]] = {}
+        for page, label in sorted(self.ocr_engines.items()):
+            by_engine.setdefault(label, []).append(page)
+        parts = ["text"] if len(self.scanned_pages) < self.pages else []
+        parts += [f"{label} (p{_ranges(pages)})" for label, pages in by_engine.items()]
+        if self.unread_scanned_pages:
+            parts.append(f"unread (p{_ranges(list(self.unread_scanned_pages))})")
+        return " + ".join(parts) or "empty"
+
+    @property
     def unread_scanned_pages(self) -> tuple[int, ...]:
         return tuple(p for p in self.scanned_pages if p not in self.ocr_texts)
 
     @property
     def is_mostly_scanned(self) -> bool:
         return self.pages > 0 and len(self.scanned_pages) * 2 > self.pages
+
+
+def _ranges(pages: list[int]) -> str:
+    """[1, 2, 3, 5] -> "1-3,5"."""
+    out: list[str] = []
+    for page in pages:
+        if out and page == int(out[-1].split("-")[-1]) + 1:
+            out[-1] = f"{out[-1].split('-')[0]}-{page}"
+        else:
+            out.append(str(page))
+    return ",".join(out)
 
 
 def read_pdf(data: bytes) -> PdfContent:
