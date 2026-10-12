@@ -182,5 +182,5 @@ def _complete_from_text(doc: str, text: str, facts: Facts) -> None:
         )
         facts.set("department", m[2])
     facts.set("containers", facts.containers or read_containers(text))
-    if facts.substation is None and (found := find_substation(facts.description) or find_substation(text)):
+    if facts.substation is None and (found := find_substation(facts.description, text)):
         facts.set("substation", found[0], Evidence(document_id=doc, locator="text", quote=found[1]))

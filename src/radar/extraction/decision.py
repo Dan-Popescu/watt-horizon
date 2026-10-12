@@ -16,6 +16,7 @@ from radar.domain.enums import ReviewDecision
 from radar.domain.models import Evidence
 from radar.domain.text import squash
 from radar.extraction.facts import Facts
+from radar.extraction.substation import find_substation
 
 MONTHS = {
     name: i
@@ -107,4 +108,6 @@ def extract_decision(document_id: str, text: str, title: str = "") -> Facts:
     ):
         facts.set("commune", m[1].strip(), ev("title", title))
         facts.set("department", m[2])
+    if found := find_substation(t):
+        facts.set("substation", found[0], ev("text", found[1]))
     return facts

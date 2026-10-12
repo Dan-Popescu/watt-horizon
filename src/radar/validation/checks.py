@@ -44,11 +44,21 @@ def check_siret(facts: Facts, lookups: Lookups) -> Check:
         return Check(name="siret", status=CheckStatus.UNKNOWN, detail="SIREN non vérifié (hors cache ou introuvable)")
     official = fold(company.name)
     candidates = [fold(facts.developer), fold(facts.legal_name)]  # brand vs project company: accept either
-    matched = any(c and (c in official or official in c or official.split()[0] in c.split()) for c in candidates)
+    matched = any(c and _same_company(c, official) for c in candidates)
     detail = f"SIREN {s[:9]} = {company.name}"
     if matched:
         return Check(name="siret", status=CheckStatus.OK, detail=detail)
     return Check(name="siret", status=CheckStatus.ALERT, detail=detail + " (nom différent du porteur)")
+
+
+def _same_company(declared: str, official: str) -> bool:
+    """Folded names; spacing differs between forms and the registry (« AFR59 » vs « AFR 59 »)."""
+    compact_declared, compact_official = declared.replace(" ", ""), official.replace(" ", "")
+    return (
+        compact_declared in compact_official
+        or compact_official in compact_declared
+        or official.split()[0] in declared.split()
+    )
 
 
 def check_commune(facts: Facts, lookups: Lookups) -> tuple[Check, CommuneInfo | None]:

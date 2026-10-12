@@ -13,6 +13,7 @@ from radar.domain.text import squash
 from radar.extraction.cerfa import extract_cerfa
 from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
+from radar.extraction.substation import is_voltage_only
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import read_pdf
 from radar.store.blobs import BlobStore
@@ -51,6 +52,9 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
     facts = Facts()
     facts.fill_from(form)
     facts.fill_from(decision, override=DECISION_WINS)
+    if is_voltage_only(facts.substation) and decision.substation and not is_voltage_only(decision.substation):
+        facts.evidence.pop("substation", None)
+        facts.set("substation", decision.substation, decision.evidence.get("substation"))
     facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(documents)
     title = _best_title(documents, facts)
 

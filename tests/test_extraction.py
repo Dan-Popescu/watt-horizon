@@ -6,7 +6,7 @@ from radar.domain.enums import ReviewDecision
 from radar.extraction.cerfa import extract_cerfa
 from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
-from radar.extraction.substation import find_substation
+from radar.extraction.substation import find_substation, is_voltage_only
 from radar.reading.pdf import PdfContent
 
 MERU_CLAUSE = (
@@ -50,8 +50,33 @@ def test_substation() -> None:
         "afin d'etre au plus proche du poste RTE « Margot », en cours de construction",
     )
     assert find_substation("raccordement depuis le poste source de SAUCOURT jusqu'au poste")[0] == "SAUCOURT"  # type: ignore[index]
-    assert find_substation("L'installation sera raccordée au poste électrique RTE 400kV.")[0] == "400kV"  # type: ignore[index]
+    assert (
+        find_substation("d’une capacité de stockage de 260 MWh, via le poste source de La Capelle. 3.")[0]
+        == "La Capelle"
+    )  # type: ignore[index]
+    assert (
+        find_substation("en face du poste électrique existant des Mandarins, relève de la rubrique 32")[0]
+        == "Mandarins"
+    )  # type: ignore[index]
+    assert find_substation("Ce poste source prive et le poste RTE/Enedis de Lislet 2 seront separes")[0] == "Lislet 2"  # type: ignore[index]
+    assert find_substation("POSTE ELECTRIQUE DU CHEMIN DE VAILLY POSTE")[0] == "CHEMIN DE VAILLY"  # type: ignore[index]
+    assert find_substation("Renovation du Poste Electrique de SEQUEDIN ENEDIS Enedis")[0] == "SEQUEDIN"  # type: ignore[index]
+    assert (
+        find_substation("en antenne sur le poste RTE de Le Long-Champ sur la commune de Couvrelles")[0]
+        == "Le Long-Champ"
+    )  # type: ignore[index]
+    # Flattened form fields run into each other: the name must not swallow the next « Poste ».
+    assert find_substation("POSTE ELECTRIQUE DU CHEMIN DE Poste electrique du chemin")[0] == "CHEMIN"  # type: ignore[index]
     assert find_substation("poste de livraison permettant le raccordement") is None
+    assert find_substation("poste électrique, sur la commune de La Capelle, dans le département de l’Aisne") is None
+
+
+def test_substation_name_beats_earlier_voltage() -> None:
+    first = "Raccordement au poste électrique RTE 400kV."  # synthetic: a generic first mention
+    later = "L'installation sera raccordée au poste électrique RTE 400kV/225kV de Famars par un poste 225kV/33kV"
+    assert find_substation(first) == ("400kV", "Raccordement au poste électrique RTE 400kV")
+    assert find_substation(first, later)[0] == "Famars"  # type: ignore[index]
+    assert is_voltage_only("400kV") and not is_voltage_only("Famars")
 
 
 def _content(fields: dict[str, str], text: str = "") -> PdfContent:
@@ -121,14 +146,15 @@ def test_cerfa_flattened_text_fallback() -> None:
         "Projet de stockage d'électricité par batteries à proximité du poste électrique sur la commune de Famars (59) "
         "AFR59 AFR59 JAILLON SAS 92187337800019 X 22 11 2024 2024_8433 22 11 2024 Le projet consiste à construire sur "
         "la commune de Famars, dans le département du Nord, une installation de stockage d'énergie d'une puissance "
-        "de 110 MW et d'une capacité de 220 MWh. L'installation sera raccordée au poste électrique RTE 400kV."
+        "de 110 MW et d'une capacité de 220 MWh. L'installation sera raccordée au poste électrique RTE 400kV/225kV de "
+        "Famars par un poste 225kV/33kV de dimensions 52m x 28m (1456 m²)"
     )
     facts = extract_cerfa("f3", _content({}, text))
     assert facts.siret == "92187337800019"
     assert facts.filed_on == date(2024, 11, 22)
     assert (facts.mw_max, facts.mwh) == (110.0, 220.0)
     assert (facts.commune, facts.department) == ("Famars", "59")
-    assert facts.substation == "400kV"
+    assert facts.substation == "Famars"
 
 
 def test_facts_merge_priority() -> None:

@@ -8,8 +8,8 @@ from radar.domain.enums import Category, CheckStatus, Confidence, SourceKind
 from radar.domain.models import Filing, Location, Signal
 from radar.extraction.facts import Facts
 from radar.linking.linker import propose_links
-from radar.validation.checks import MASKED_PERSON, check_dates, check_power, luhn_ok
-from radar.validation.lookups import StaticLookups
+from radar.validation.checks import MASKED_PERSON, check_dates, check_power, check_siret, luhn_ok
+from radar.validation.lookups import CompanyInfo, StaticLookups
 from radar.validation.validator import validate
 from radar.wiring import make_classifier
 from tests.conftest import BONNEUIL
@@ -112,3 +112,13 @@ def test_offline_disables_llm(tmp_path) -> None:  # type: ignore[no-untyped-def]
         data_dir=tmp_path, offline=True, llm_model="claude-opus-5-5", use_tesseract=False, user_agent="t"
     )
     assert make_classifier(settings) is None  # no LLM offline, and no gold file yet
+
+
+def test_siret_name_ignores_spacing() -> None:
+    lookups = StaticLookups(
+        companies={
+            "921873378": CompanyInfo(siren="921873378", name="AFR 59", naf=None, created_on=None, legal_form=None)
+        }
+    )
+    check = check_siret(Facts(developer="AFR59", siret="92187337800019"), lookups)
+    assert check.status is CheckStatus.OK, check.detail
