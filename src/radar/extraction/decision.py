@@ -46,7 +46,7 @@ _NUMBER = re.compile(r"n\s*[°º]\s*([\w/ -]{3,20}?)\s*,")
 _DATE = re.compile(r"le (\d{1,2})(?:er)? ([a-zéû]+) (\d{4})", re.IGNORECASE)
 # « par » follows « au cas » in « au cas par cas »: the look-behind skips it.
 _DEVELOPER = re.compile(
-    rf"(?<!cas )\bpar (?:la société |la |le |l{APOS}|Monsieur |Madame )?(.+?)"
+    rf"(?<!cas )\bpar (?:la (?:société |SASU |SAS |SARL |SA )|la |le |l{APOS}|Monsieur |Madame )?(.+?)"
     rf"(?:,? le \d|,? relati(?:f|ve)\b|,? (?:située? à [^,]+,\s*)?concernant\b)",
     re.IGNORECASE,
 )

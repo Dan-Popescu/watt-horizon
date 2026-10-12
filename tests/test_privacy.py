@@ -63,3 +63,11 @@ def test_stored_filing_has_no_person_names(
     assert filing is not None and "DUPONT" not in filing.model_dump_json()
     assert filing.developer == "APAL MW" and filing.power.mw_max == 47.0
     assert audit_privacy(db, blobs) == []
+
+
+def test_phone_mask_spares_dates_and_case_numbers() -> None:
+    scrub = PersonScrubber()
+    for kept in ["05 11 2024 2024_8373", "le 28 07 2025 2025_9097", "07 10 2025 2025-8770"]:
+        assert scrub.scrub(kept) == kept  # flattened cerfa header: filing date + case number
+    for phone in ["Tél. : 03 20 30 59 59", "06.12.34.56.78", "0612345678", "+33 6 12 34 56 78"]:
+        assert "[téléphone]" in (scrub.scrub(phone) or "")

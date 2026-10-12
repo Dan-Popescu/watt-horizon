@@ -8,11 +8,11 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from radar.classification.rules import screen
 from radar.domain.enums import SourceKind
 from radar.domain.ids import normalize_filing_number
 from radar.net.http import PoliteHttp
 from radar.pipeline.ingest import ingest_pdf
+from radar.quality.audit import decide
 from radar.sources.base import CollectReport
 from radar.sources.html import links
 from radar.sources.regions import Region
@@ -63,16 +63,21 @@ def collect_dreal(
     max_offset: int,
     max_articles: int | None = None,
 ) -> CollectReport:
-    """Screen titles (layer 1), download the PDFs of kept articles, ingest them. Idempotent."""
+    """Screen titles (layer 1), download the PDFs of kept articles and of the audit sample, ingest them. Idempotent.
+    Every listed item is recorded (`listing_items`) so the screen's recall can be estimated later."""
     report = CollectReport()
     for listing in listings:
         for article in iter_articles(http, region, listing, max_offset):
             report.seen += 1
-            if not screen(article.title).keep:
+            kept, audit = decide(article.title, article.url)
+            with db.transaction():
+                db.record_listing_item(article.url, SourceKind.DREAL_CASE_BY_CASE.value, article.title, kept, audit)
+            if not kept and audit is None:
                 continue
-            if max_articles is not None and report.kept >= max_articles:
+            if max_articles is not None and report.kept + report.audited >= max_articles:
                 return report
-            report.kept += 1
+            report.kept += kept
+            report.audited += audit is not None
             for pdf_url in parse_article_pdfs(http.get_text(article.url), article.url):
                 filename = pdf_url.rsplit("/", 1)[-1]
                 number = normalize_filing_number(filename) or normalize_filing_number(article.title)
@@ -91,6 +96,7 @@ def collect_dreal(
                         url=pdf_url,
                         title=article.title,
                         filename=filename,
+                        audit=audit,
                     )
                 report.documents += 1
     return report

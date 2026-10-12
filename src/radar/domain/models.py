@@ -12,6 +12,7 @@ from radar.domain.enums import (
     DocumentRole,
     PowerStatus,
     ReviewDecision,
+    Severity,
     SignalKind,
     SourceKind,
 )
@@ -78,6 +79,17 @@ class DocumentRecord(Model):
     filename: str
     pages: int = 0
     scanned_pages: tuple[int, ...] = ()
+    # Why a document the screen rejected was still fetched: "random" (unbiased recall estimate) or "near-miss:<why>".
+    audit: str | None = None
+
+
+class Flag(Model):
+    """A detected reason to doubt a filing (see quality/flags.py for codes, labels and suggested fixes)."""
+
+    code: str
+    severity: Severity
+    field: str | None = None
+    detail: str = ""
 
 
 class MachineOutput(Model):
@@ -115,6 +127,7 @@ class Filing(Model):
     # What the machine produced before human corrections: evaluation always measures this, never the corrections.
     machine: MachineOutput | None = None
     reviewed_at: datetime | None = None  # last human validation or correction
+    flags: tuple[Flag, ...] = ()  # computed at every build: what a reviewer should look at first
 
 
 class Correction(Model):

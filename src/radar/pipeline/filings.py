@@ -13,11 +13,12 @@ from radar.domain.power import estimate_power
 from radar.domain.privacy import PersonScrubber
 from radar.domain.text import contains_quote, squash
 from radar.extraction import EXTRACTION_VERSION
-from radar.extraction.cerfa import extract_cerfa
+from radar.extraction.cerfa import extract_cerfa, form_layout
 from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
 from radar.extraction.llm import ExtractionInput, FieldExtractor
 from radar.extraction.substation import is_voltage_only
+from radar.quality.flags import QualityInput, ReadDocument, detect
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
 from radar.store.blobs import BlobStore
@@ -92,6 +93,31 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
     if services.extractor and classification.category in TARGET_CATEGORIES:
         extractor_used = _llm_fallback(key, title, facts, documents, texts, services.extractor)
     validation = validate(facts, services.lookups)
+    flags = detect(
+        QualityInput(
+            documents=[
+                ReadDocument(
+                    id=doc.id,
+                    role=doc.role,
+                    text=text,
+                    fields=content.fields,
+                    layout=form_layout(content.fields) if doc.role is DocumentRole.FORM else None,
+                    ocr_texts=content.ocr_texts,
+                    ocr_engines=content.ocr_engines,
+                    audit=doc.audit,
+                )
+                for doc, content, text in zip(documents, contents, texts, strict=True)
+            ],
+            form=form,
+            decision=decision,
+            facts=facts,
+            classification=classification,
+            checks=validation.checks,
+            target=classification.category in TARGET_CATEGORIES,
+            kept_by_text=screen(title, facts.description, *texts).keep,
+            unread=unread,
+        )
+    )
     gps_ok = any(c.name == "gps" and c.status is CheckStatus.OK for c in validation.checks)
     needs_review = (
         bool(unread)
@@ -123,6 +149,7 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
         evidence=dict(facts.evidence),
         unread_scans=tuple(unread),
         reading=reading,
+        flags=flags,
         versions={
             "extraction": EXTRACTION_VERSION,
             "classification": classification.method,

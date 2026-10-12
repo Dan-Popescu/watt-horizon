@@ -24,7 +24,8 @@ _CIVILITY = re.compile(
     r"(?P<name>(?:[A-ZÉÈÊÎÔ][A-Za-zÀ-ÿ'’\-]+\.?\s?){1,3})"
 )
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-_PHONE = re.compile(r"(?<!\d)(?:\+33\s?|0)[1-9](?:[\s.-]?\d{2}){4}(?!\d)")
+# Pairs with one consistent separator, or 10 digits in a row; « 05 11 2024 2024_8373 » (date + case number) is not a phone.
+_PHONE = re.compile(r"(?<![\d_-])(?:\+33\s?|0)[1-9](?:(?P<sep>[ .-])\d{2}(?:(?P=sep)\d{2}){3}|\d{8})(?![\d_-])")
 _REPEATED_MASK = re.compile(rf"{re.escape(MASK)}(?:\s*{re.escape(MASK)})+")
 _LABELS = frozenset({"nom", "prenom", "prenoms", "s", "madame", "monsieur"})  # form labels, not names
 

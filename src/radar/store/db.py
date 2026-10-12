@@ -57,6 +57,13 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX corrections_filing ON corrections(filing_key);
     """,
+    """
+    CREATE TABLE listing_items (
+        url TEXT PRIMARY KEY, source TEXT NOT NULL, title TEXT NOT NULL, kept INTEGER NOT NULL,
+        audit TEXT, first_seen TEXT NOT NULL
+    );
+    CREATE INDEX listing_items_source ON listing_items(source);
+    """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -270,6 +277,28 @@ class Database:
             )
             for r in self.conn.execute(sql + " ORDER BY id", args)
         ]
+
+    # Listing items: every item a collector saw (kept or not), for unbiased screen-recall estimates ---------
+    def record_listing_item(self, url: str, source: str, title: str, kept: bool, audit: str | None) -> None:
+        self.conn.execute(
+            "INSERT INTO listing_items (url, source, title, kept, audit, first_seen) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET title=excluded.title, kept=excluded.kept, audit=excluded.audit",
+            (url, source, title, int(kept), audit, utcnow().isoformat()),
+        )
+
+    def listing_counts(self) -> dict[str, int]:
+        """seen / kept / rejected / audit_random / audit_near_miss over all sources."""
+        row = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(kept), 0), COALESCE(SUM(audit = 'random'), 0), "
+            "COALESCE(SUM(audit LIKE 'near-miss:%'), 0) FROM listing_items"
+        ).fetchone()
+        return {
+            "seen": row[0],
+            "kept": row[1],
+            "rejected": row[0] - row[1],
+            "audit_random": row[2],
+            "audit_near_miss": row[3],
+        }
 
     # Change log -------------------------------------------------------------------------------------
     def add_changes(self, changes: Iterable[ProjectChange]) -> None:

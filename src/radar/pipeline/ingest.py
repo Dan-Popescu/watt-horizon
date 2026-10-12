@@ -35,6 +35,7 @@ def ingest_pdf(
     filename: str,
     role: DocumentRole | None = None,
     fetched_at: datetime | None = None,
+    audit: str | None = None,
 ) -> DocumentRecord:
     """Idempotent: the same bytes always give the same document id. Caller owns the transaction."""
     digest = blobs.put(data, ".pdf")
@@ -50,6 +51,7 @@ def ingest_pdf(
         filename=filename,
         pages=content.pages,
         scanned_pages=content.scanned_pages,
+        audit=audit,
     )
     db.upsert_document(record)
     return record

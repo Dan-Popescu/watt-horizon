@@ -90,3 +90,9 @@ class ChangeKind(StrEnum):
     NEW = "new"
     CHANGED = "changed"
     REMOVED = "removed"  # no longer a target project (reclassified, or its filing disappeared)
+
+
+class Severity(StrEnum):
+    INFO = "info"  # worth sampling (e.g. value found by the LLM)
+    WARNING = "warning"  # probable error or gap
+    ERROR = "error"  # something is certainly wrong or unread

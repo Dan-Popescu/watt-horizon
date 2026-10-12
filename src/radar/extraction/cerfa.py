@@ -66,6 +66,17 @@ def _commune_from_locality(raw: str) -> tuple[str, str | None]:
     return squash(raw), None
 
 
+def form_layout(fields: dict[str, str]) -> str:
+    """ "camelcase" | "numbered" | "flattened" (no fields) | "unknown" (fields, but none we know: a new layout)."""
+    if not fields:
+        return "flattened"
+    known = {name for names in FIELD_ALIASES.values() for name in names}
+    matched = known & {k for k, v in fields.items() if v}
+    if not matched:
+        return "unknown"
+    return "numbered" if any(name[:1].isdigit() for name in matched) else "camelcase"
+
+
 def extract_cerfa(document_id: str, content: PdfContent) -> Facts:
     facts = _from_fields(document_id, content.fields) if content.fields else Facts()
     text = content.text
