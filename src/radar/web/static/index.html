@@ -88,11 +88,11 @@
   .diff s { color:var(--muted); }
   details summary { cursor:pointer; list-style:none; } details[open] summary { display:none; }
   .page.wide { max-width:none; }
-  .rv-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(660px,100%),1fr)); gap:14px; }
+  .rv-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(720px,100%),1fr)); gap:14px; }
   .rv-head { display:flex; justify-content:space-between; align-items:center; gap:8px 16px; flex-wrap:wrap; }
   .rv-id { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
   .rv-title { margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .rv .fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px 14px; margin-top:12px; }
+  .rv .fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px 16px; margin-top:12px; }
   .rv .fld { display:flex; flex-direction:column; gap:3px; min-width:0; font-size:15px; }
   .rv .fld > span { font-size:13.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
   .rv .fld-2 { grid-column:span 2; }
@@ -118,6 +118,17 @@
     .view.on { overflow:auto; }
     .head, .filters, .page { padding-left:16px; padding-right:16px; }
   }
+  /* Reading pages (review, quality, changes, exports, about): larger text than the dense map view. */
+  .page { font-size:17.5px; }
+  .page h1 { font-size:23px; } .page h2 { font-size:19.5px; }
+  .page .sub { font-size:16px; } .page .tag, .page .kind { font-size:14.5px; }
+  .page .chip, .page .head select, .btn { font-size:16px; }
+  .page .check { font-size:16.5px; } .page .diff { font-size:16.5px; } .page pre { font-size:15.5px; }
+  .page .tile { padding:16px 18px; }
+  .rv .fld { font-size:16.5px; } .rv .fld > span { font-size:14.5px; }
+  .rv input, .rv select { font-size:16.5px; padding:6px 9px; }
+  .rv .q { font-size:14.5px; }
+  .page .grid { grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); }
 </style>
 </head>
 <body>
@@ -618,7 +629,7 @@ async function loadQuality() {
     <li>Régressions : <b class="${regressed.length ? "error" : ""}">${esc(regressed.length)}</b> ${esc(regressed.join(", "))}</li></ul>`));
   if (q.trend.length) {
     const keys = Object.keys(q.trend[0]).filter((k) => k !== "at");
-    tiles.push(tile("Évolution", `<div style="overflow:auto"><table style="font-size:14px;border-collapse:collapse"><tr><th style="text-align:left">date</th>${keys.map((k) => `<th style="text-align:left;padding:0 6px">${esc(k)}</th>`).join("")}</tr>${q.trend.map((t) =>
+    tiles.push(tile("Évolution", `<div style="overflow:auto"><table style="font-size:15.5px;border-collapse:collapse"><tr><th style="text-align:left">date</th>${keys.map((k) => `<th style="text-align:left;padding:0 6px">${esc(k)}</th>`).join("")}</tr>${q.trend.map((t) =>
       `<tr><td>${esc((t.at || "").slice(5, 16).replace("T", " "))}</td>${keys.map((k) => `<td style="padding:0 6px">${esc(t[k] ?? "—")}</td>`).join("")}</tr>`).join("")}</table></div>`));
   }
   $("quality").innerHTML = tiles.join("");
