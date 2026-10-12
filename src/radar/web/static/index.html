@@ -95,6 +95,7 @@
   .rv .fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px 16px; margin-top:12px; }
   .rv .fld { display:flex; flex-direction:column; gap:3px; min-width:0; font-size:15px; }
   .rv .fld > span { font-size:13.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .rv .fld > span .tag { text-transform:none; letter-spacing:0; margin-left:4px; vertical-align:1px; }
   .rv .fld-2 { grid-column:span 2; }
   .rv input, .rv select { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:5px 8px; font-size:15px; }
   .rv .q { font-size:13.5px; color:var(--muted); font-style:italic; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
@@ -206,6 +207,7 @@
             <select id="review-filter" aria-label="Filtre" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
               <option value="todo">File de relecture</option><option value="all">Tous les dossiers</option></select>
             <select id="review-flag" aria-label="Signalement" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px"><option value="">Tous les signalements</option></select>
+            <label class="chip" title="Masquer les champs dont la confiance calibrée est élevée"><input type="checkbox" id="review-uncertain"> Champs incertains seulement</label>
             <label class="chip" title="Saisir sans voir les valeurs de la machine : mesure non biaisée"><input type="checkbox" id="review-blind"> À l'aveugle</label>
             <button class="chip" id="review-author"></button>
           </div>
@@ -481,6 +483,19 @@ $("review-author").onclick = askAuthor;
 $("review-filter").onchange = renderReview;
 $("review-flag").onchange = renderReview;
 $("review-blind").onchange = renderReview;
+$("review-uncertain").onchange = renderReview;
+const CONF_OF = { power_mw_min: "power_mw" };  // fields sharing one confidence
+function confBadge(it, name) {
+  const key = CONF_OF[name] || name, c = it.field_confidence[key];
+  if (c === undefined) return "";
+  if (it.auto_accepted.includes(key)) return `<span class="tag high" title="confiance prouvée : relecture inutile">auto ${pct(c)}</span>`;
+  const [cls, word] = c >= 0.9 ? ["high", "sûr"] : c >= 0.6 ? ["", "à vérifier"] : ["review", "incertain"];
+  return `<span class="tag ${cls}" title="confiance calibrée">${word} ${pct(c)}</span>`;
+}
+function isSure(it, name) {
+  const key = CONF_OF[name] || name, c = it.field_confidence[key];
+  return c !== undefined && (c >= 0.9 || it.auto_accepted.includes(key));
+}
 const CAUSES = { ocr: "lecture / OCR", layout: "mise en page du document", rule: "règle d'extraction",
   classification: "classement", merge: "fusion des documents du dossier", source: "document ambigu ou erroné", other: "autre" };
 const blindMode = () => $("review-blind").checked;
@@ -497,7 +512,8 @@ function options(map, current) {
 }
 function reviewCard(it) {
   const blind = blindMode();  // blind: empty inputs, no machine value, no quote (unbiased measurement)
-  const fields = REVIEW_FIELDS.map(([name, label, type]) => {
+  const onlyUncertain = !blind && $("review-uncertain").checked;
+  const fields = REVIEW_FIELDS.filter(([name]) => !onlyUncertain || !isSure(it, name)).map(([name, label, type]) => {
     const value = blind ? "" : str(it.values[name]), machine = str(it.machine_values[name]);
     const input = type === "select"
       ? `<select data-f="${name}">${blind ? '<option value="" selected>— à lire dans le document —</option>' : ""}${options(DECISIONS, value)}</select>`
@@ -505,7 +521,7 @@ function reviewCard(it) {
     const ev = it.evidence[EVIDENCE_OF[name] || name];
     const hint = blind ? "" : [ev ? `« ${esc(ev.quote.slice(0, 160))} »` : "",
       machine !== value ? `<span class="machine">machine : ${esc(machine || "—")}</span>` : ""].filter(Boolean).join(" · ");
-    return `<label class="fld"><span>${label}</span>${input}${hint ? `<div class="q" title="${esc(ev ? ev.quote : "")}">${hint}</div>` : ""}</label>`;
+    return `<label class="fld"><span>${label} ${blind ? "" : confBadge(it, name)}</span>${input}${hint ? `<div class="q" title="${esc(ev ? ev.quote : "")}">${hint}</div>` : ""}</label>`;
   }).join("");
   const reasons = blind ? "" : it.reasons.map((r) => `<span class="tag review" title="${esc(r)}">${esc(r.length > 70 ? r.slice(0, 70) + "…" : r)}</span>`).join(" ");
   const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a> <span class="sub">${esc(d.read_by)}</span>`).join(" · ");
@@ -606,6 +622,11 @@ async function loadQuality() {
     tiles.push(tile("Justesse par champ (dev)", rateRows(r.fields_verified.dev, label)));
     tiles.push(tile("Justesse par champ (test, scores seuls)", rateRows(r.fields_verified.test, label)));
     tiles.push(tile("Mesure à l'aveugle", rateRows(r.blind, label)));
+    const fc = r.field_calibration || { diagram: [] };
+    tiles.push(tile("Confiance par champ (calibration)", `<ul class="plain">${fc.diagram.filter((b) => b.seen).map((b) =>
+      `<li>score ${esc(b.bin)} : juste <b>${pct(b.accuracy)}</b>${ci(b.ci95)} <span class="sub">n=${esc(b.seen)}</span></li>`).join("") ||
+      '<li class="sub">Pas encore de valeurs relues.</li>'}</ul>
+      <div class="sub">Erreur de calibration : ${fc.ece === null || fc.ece === undefined ? "—" : pct(fc.ece)} · champs acceptés automatiquement : ${pct(fc.auto_accept_share)}</div>`));
     tiles.push(tile("Calibration de la confiance", rateRows(r.calibration, (k) => `confiance « ${CONFIDENCE[k] || k} » : part avec erreur`)));
     const est = r.screening.recall_estimate;
     tiles.push(tile("Tri : rappel estimé", est.recall === null ? `<div class="sub">${esc(est.why)}</div>`

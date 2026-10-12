@@ -12,6 +12,7 @@ from radar.pipeline.changes import track_changes
 from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.projects import build_projects
 from radar.quality.arbiter import learn
+from radar.quality.confidence import calibrate
 from radar.store.db import Database, utcnow
 
 
@@ -25,10 +26,15 @@ class StepReport:
 
 def process_filings(db: Database, services: Services, only: set[str] | None = None) -> StepReport:
     """(Re)build every filing that has documents. One failing filing never stops the others.
-    Source reliabilities are re-learned from human reviews first, unless `services.arbiter` is given."""
+    Source reliabilities and confidence calibration are re-learned from human reviews first, unless given."""
     report = StepReport()
-    if services.arbiter is None:
-        services = replace(services, arbiter=learn(db.filings(), db.corrections()))
+    if services.arbiter is None or services.calibration is None:
+        filings, corrections = db.filings(), db.corrections()
+        services = replace(
+            services,
+            arbiter=services.arbiter or learn(filings, corrections),
+            calibration=services.calibration or calibrate(filings, corrections),
+        )
     for key in db.filing_keys_with_documents():
         if only is not None and key not in only:
             continue

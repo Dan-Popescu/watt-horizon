@@ -18,10 +18,18 @@ from radar.evaluation.fields import score_fields
 from radar.evaluation.gold import FieldGold
 from radar.evaluation.stats import split_of
 from radar.quality.arbiter import learn
+from radar.quality.confidence import calibrate, observations
 from radar.quality.errors import analyse
 
 LOWER_IS_BETTER = frozenset(
-    {"privacy.leaks", "ocr.mean_word_miss_rate", "integrity.quote_not_found", "cases.regressed", "undecided.share"}
+    {
+        "privacy.leaks",
+        "ocr.mean_word_miss_rate",
+        "integrity.quote_not_found",
+        "cases.regressed",
+        "undecided.share",
+        "calibration.ece",
+    }
 )
 TEST_SPLIT_CAVEAT = (
     "Les dossiers traités avant le 2026-10-12 ont servi à régler les règles, y compris ceux du jeu de test : "
@@ -70,6 +78,18 @@ def _fields_by_split(filings: list[Filing], gold: dict[str, FieldGold]) -> dict[
     return out
 
 
+def _field_calibration(filings: list[Filing], corrections: list[Correction]) -> dict[str, Any]:
+    calibration = calibrate(filings, corrections)
+    targets = [f for f in filings if f.classification.category in TARGET_CATEGORIES]
+    scored = sum(len(f.field_score) for f in targets)
+    accepted = sum(len(f.auto_accepted) for f in targets)
+    return {
+        "diagram": calibration.diagram(),
+        "ece": calibration.ece(observations(filings, corrections)),
+        "auto_accept_share": round(accepted / scored, 3) if scored else None,
+    }
+
+
 def build_report(inputs: ReportInputs) -> dict[str, Any]:
     filings = inputs.filings
     screening = screening_report(filings, inputs.labels)
@@ -111,6 +131,7 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
             "by_flag": errors.by_flag,
         },
         "arbitration": learn(filings, inputs.corrections).table(),
+        "field_calibration": _field_calibration(filings, inputs.corrections),
         "integrity": {"quote_not_found": sum(g.code == "quote_not_found" for f in filings for g in f.flags)},
         "undecided": {"share": rigor.undecided_share(filings)},
         "cases": cases,
@@ -139,6 +160,10 @@ def metrics(report: dict[str, Any]) -> dict[str, float]:
     for k, s in report["blind"].items():
         if s["rate"] is not None:
             out[f"blind.{k}.accuracy"] = s["rate"]
+    if (ece := report["field_calibration"]["ece"]) is not None:
+        out["calibration.ece"] = ece
+    if (share := report["field_calibration"]["auto_accept_share"]) is not None:
+        out["auto_accept.share"] = share
     out["privacy.leaks"] = float(len(report["privacy"]["leaks"]))
     out["integrity.quote_not_found"] = float(report["integrity"]["quote_not_found"])
     if (share := report["undecided"]["share"]) is not None:

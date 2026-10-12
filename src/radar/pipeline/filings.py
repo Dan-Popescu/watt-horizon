@@ -9,6 +9,7 @@ from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.rules import screen
 from radar.domain.departments import code_from_postcode
 from radar.domain.enums import TARGET_CATEGORIES, Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
+from radar.domain.fields import field_values
 from radar.domain.models import (
     Candidate,
     Classification,
@@ -30,6 +31,7 @@ from radar.extraction.llm import ExtractionInput, FieldExtractor
 from radar.extraction.substation import is_voltage_only
 from radar.pipeline.corrections import apply_corrections, with_machine
 from radar.quality.arbiter import Arbiter, comparable
+from radar.quality.confidence import Calibration, raw_scores
 from radar.quality.flags import QualityInput, ReadDocument, detect
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
@@ -49,6 +51,7 @@ class Services:
     lookups: Lookups
     extractor: FieldExtractor | None = None  # LLM fallback for fields the rules missed (target filings only)
     arbiter: Arbiter | None = None  # learned source reliabilities (None: priors = hand-written precedence)
+    calibration: Calibration | None = None  # raw field score -> observed accuracy (None: raw scores, no auto-accept)
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -249,6 +252,15 @@ def build_filing(
             "ocr": services.ocr.label,
             **({"extraction_llm": extractor_used} if extractor_used else {}),
         },
+    )
+    raw = raw_scores(field_values(machine), extraction.support, flags, validation.checks, machine.strata["read"])
+    calibration = services.calibration or Calibration()
+    machine = machine.model_copy(
+        update={
+            "field_score": raw,
+            "field_confidence": {name: calibration.confidence(score) for name, score in raw.items()},
+            "auto_accepted": tuple(name for name, score in raw.items() if calibration.auto_accepted(score)),
+        }
     )
     texts_by_doc = {doc.id: text for doc, text in zip(documents, texts, strict=True)}
     return apply_corrections(with_machine(machine), corrections, services.lookups, texts_by_doc)

@@ -140,7 +140,9 @@ class Filing(Model):
     # Slices for metrics and error analysis: source, form_layout, read (text|ocr|transcript|unread), department.
     strata: dict[str, str] = Field(default_factory=dict)
     candidates: dict[str, list[Candidate]] = Field(default_factory=dict)  # field -> every source's value
+    field_score: dict[str, float] = Field(default_factory=dict)  # field -> raw evidence score (quality/confidence.py)
     field_confidence: dict[str, float] = Field(default_factory=dict)  # field -> calibrated probability of being right
+    auto_accepted: tuple[str, ...] = ()  # fields whose calibrated confidence is proven high enough to skip review
 
 
 class Correction(Model):

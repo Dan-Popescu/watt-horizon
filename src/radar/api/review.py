@@ -70,6 +70,8 @@ def _item(db: Database, f: Filing, label: GoldLabel | None, corrections: Iterabl
             for d in docs.values()
         ],
         checks=[CheckView(name=c.name, status=c.status.value, detail=c.detail) for c in f.checks],
+        field_confidence=f.field_confidence,
+        auto_accepted=list(f.auto_accepted),
         flags=[
             FlagView(
                 code=g.code, severity=g.severity.value, field=g.field, detail=g.detail, label=FLAGS[g.code].label_fr

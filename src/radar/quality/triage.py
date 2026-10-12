@@ -24,6 +24,9 @@ BASE_DOUBT = 0.5
 AUDIT_RANDOM_BONUS = 6.0
 STALE_BONUS = 6.0
 RECENT_DAYS = 120
+UNCERTAIN = 0.9  # calibrated field confidence below this adds doubt
+LOW_CONFIDENCE = 0.6  # ... and below this, the field is named in the reasons
+UNCERTAINTY_WEIGHT = 2.0
 
 
 @dataclass
@@ -65,6 +68,13 @@ def triage(filings: Iterable[Filing], corrections: Iterable[Correction], today: 
             doubt += POINTS[g.severity]
             label = FLAGS[g.code].label_fr + (f" ({g.field})" if g.field else "")
             item.reasons.append(f"{label} : {g.detail}" if g.detail else label)
+        if f.classification.category in TARGET_CATEGORIES:
+            uncertain = {
+                name: c for name, c in f.field_confidence.items() if c < UNCERTAIN and name not in f.auto_accepted
+            }
+            doubt += sum(UNCERTAIN - c for c in uncertain.values()) * UNCERTAINTY_WEIGHT
+            if low := sorted((c, n) for n, c in uncertain.items() if c < LOW_CONFIDENCE):
+                item.reasons.append("champs incertains : " + ", ".join(f"{n} ({c:.0%})" for c, n in low))
         stakes = 1.0
         if f.classification.category in TARGET_CATEGORIES:
             stakes += 1.0 + math.log1p(f.power.mw or 0) / 4
