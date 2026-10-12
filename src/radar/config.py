@@ -13,6 +13,9 @@ class Settings:
     use_tesseract: bool
     user_agent: str
     api_token: str | None = None  # if set, `radar web` requires `Authorization: Bearer <token>`
+    llm_fast_model: str | None = None  # e.g. claude-haiku-5-5: classify first, escalate when doubtful (measure first)
+    llm_passages: bool = False  # extraction sends windows around clues instead of the first 20k chars (measure first)
+    llm_check: bool = True  # model pre-review of uncertain values (needs llm_model; uses the fast model if set)
     gold_dir: Path = Path("gold")  # reference sets and review exports (in the repository, not in data/)
 
     @property
@@ -103,5 +106,8 @@ def load_settings() -> Settings:
             "RADAR_USER_AGENT", "radar-raccordement/0.1 (+polite crawler; one request per second per host)"
         ),
         api_token=os.environ.get("RADAR_API_TOKEN") or None,
+        llm_fast_model=os.environ.get("RADAR_LLM_FAST_MODEL") or None,
+        llm_passages=_flag("RADAR_LLM_PASSAGES", False),
+        llm_check=_flag("RADAR_LLM_CHECK", True),
         gold_dir=Path(os.environ.get("RADAR_GOLD_DIR", "gold")).resolve(),
     )

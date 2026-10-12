@@ -38,7 +38,7 @@ from radar.evaluation.report import metrics as eval_metrics
 from radar.evaluation.stats import split_of
 from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
-from radar.pipeline import importers
+from radar.pipeline import importers, llm_batch
 from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import Services, read_documents
 from radar.pipeline.health import collector_health
@@ -56,7 +56,7 @@ from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
 from radar.store.db import Database
 from radar.validation.lookups import JsonCache, ReferenceCommunes
-from radar.wiring import make_classifier, make_http, make_services
+from radar.wiring import batch_client, make_classifier, make_http, make_services
 
 
 def _emit(payload: Any) -> None:
@@ -148,6 +148,7 @@ def cmd_update(args: argparse.Namespace, s: Settings) -> Any:
     with _require_http(s) as http, Database(s.db_path) as db:
         for source in args.sources:
             collected[source] = _collect_one(source, args, s, http, db)
+    args.llm_batch = True  # scheduled: model calls go through half-price batches, answers read at the next run
     result = {"collect": collected, **cmd_run(args, s)}
     with Database(s.db_path) as db:
         health = collector_health(db.runs("collect:"), now=datetime.now(UTC))
@@ -157,12 +158,44 @@ def cmd_update(args: argparse.Namespace, s: Settings) -> Any:
 
 
 def cmd_process(args: argparse.Namespace, s: Settings) -> Any:
+    """Rebuild filings. With --llm-batch, model calls missing from the cache go into a Message Batch (half price):
+    answers of ended batches are collected first, new requests are submitted last; --wait loops until done."""
+    batch = bool(getattr(args, "llm_batch", False)) and bool(s.llm_model) and not s.offline
     with Database(s.db_path) as db:
         run_id = db.start_run("process")
         only = set(args.only) if args.only else None
-        report = process_filings(db, make_services(s, make_http(s)), only=only, full=getattr(args, "full", False))
-        db.finish_run(run_id, asdict(report))
-        return report
+        services = make_services(s, make_http(s), llm="batch" if batch else "live")
+        full = getattr(args, "full", False)
+        if not batch:
+            report = process_filings(db, services, only=only, full=full)
+            db.finish_run(run_id, asdict(report))
+            return report
+        client, queue = batch_client(s), services.llm_queue
+        rounds: list[dict[str, Any]] = []
+        for _ in range(MAX_BATCH_ROUNDS if getattr(args, "wait", False) else 1):
+            collected = llm_batch.collect(client, queue, services.llm_tasks)
+            report = process_filings(db, services, only=only, full=full)
+            submitted = llm_batch.submit(client, queue)
+            rounds.append({"collected": collected, "processed": report.processed, "submitted": submitted})
+            full = False
+            if not submitted or not getattr(args, "wait", False) or not llm_batch.wait(client, queue):
+                break
+        db.finish_run(run_id, {**asdict(report), "llm_batches": rounds})
+        return {**asdict(report), "llm_batches": rounds}
+
+
+MAX_BATCH_ROUNDS = 3  # classification, then extraction of target filings, then pre-review of their values
+
+
+def cmd_llm_batch(args: argparse.Namespace, s: Settings) -> Any:
+    """Model batches: status (queued / in flight), collect (write the answers of ended batches into the cache)."""
+    if not s.llm_model or s.offline:
+        return {"error": "No model configured (RADAR_LLM_MODEL), or offline."}
+    services = make_services(s, None, llm="batch")
+    queue = services.llm_queue
+    if args.action == "collect":
+        return {**llm_batch.collect(batch_client(s), queue, services.llm_tasks), "next": "radar run"}
+    return {"queued": len(queue.pending()), "in_flight": [batch_id for batch_id, _ in queue.in_flight()]}
 
 
 def cmd_link(_: argparse.Namespace, s: Settings) -> Any:
@@ -200,7 +233,7 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
             if llm is None:
                 return {"error": "No model classifier: set RADAR_LLM_MODEL (and ANTHROPIC_API_KEY), not offline."}
             classifier = evaluate_classifier(llm, db, services, labels)
-        eval_services = make_services(s, None)
+        eval_services = make_services(s, None, llm="cached")
         report = build_report(
             ReportInputs(
                 filings=filings,
@@ -429,7 +462,7 @@ def cmd_aliases(_: argparse.Namespace, s: Settings) -> Any:
 def cmd_shadow(args: argparse.Namespace, s: Settings) -> Any:
     """Dry run of the current code on every stored filing: what would change, judged against verified values."""
     with Database(s.db_path) as db:
-        report = shadow.shadow(db, make_services(s, make_http(s)), set(args.only) if args.only else None)
+        report = shadow.shadow(db, make_services(s, make_http(s), llm="cached"), set(args.only) if args.only else None)
     order = {"breaks": 0, "fixes": 1, "changes-wrong-to-wrong": 2, "unknown": 3, "unchanged-verdict": 4}
     changes = sorted(report.changes, key=lambda c: (order.get(c.verdict, 9), c.field, c.number))
     lines = ["# Shadow run: effect of the current code on every filing", "", f"Summary: `{report.summary}`", ""]
@@ -527,7 +560,7 @@ def corpus_documents(db: Database, services: Services) -> list[tuple[str, list[r
 def cmd_robustness(_: argparse.Namespace, s: Settings) -> Any:
     """Perturb every stored document like real PDFs differ; list values that move (brittle rules)."""
     with Database(s.db_path) as db:
-        report = robustness.check_robustness(corpus_documents(db, make_services(s, make_http(s))))
+        report = robustness.check_robustness(corpus_documents(db, make_services(s, make_http(s), llm="cached")))
     path = s.data_dir / "improve" / "robustness.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(robustness.render(report), encoding="utf-8", newline="\n")
@@ -655,6 +688,11 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="process + link + build projects")
     run.add_argument("--only", nargs="*", help="filing keys")
     run.add_argument("--full", action="store_true", help="rebuild every filing (ignore fingerprints)")
+    for rebuild in (proc, run):
+        rebuild.add_argument("--llm-batch", action="store_true", help="model calls via Message Batches (half price)")
+        rebuild.add_argument("--wait", action="store_true", help="with --llm-batch: wait for answers and rebuild")
+    lb = sub.add_parser("llm-batch", help="model batches: status, collect answers of ended batches")
+    lb.add_argument("action", nargs="?", choices=["status", "collect"], default="status")
     chg = sub.add_parser("changes", help="change log since a date (new / changed / removed projects)")
     chg.add_argument("--since", required=True, help="ISO date, e.g. 2026-10-01")
     exp = sub.add_parser("export", help="write projects to CSV (Excel, ';') or GeoJSON (GIS)")
@@ -750,6 +788,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "templates": cmd_templates,
     "rules": cmd_rules,
     "screen-terms": cmd_screen_terms,
+    "llm-batch": cmd_llm_batch,
     "corpus": cmd_corpus,
     "robustness": cmd_robustness,
 }

@@ -20,6 +20,7 @@ from radar.evaluation.fields import same
 from radar.pipeline.corrections import VALIDATED, latest
 from radar.quality.agreement import second_review_due
 from radar.quality.flags import FLAGS
+from radar.quality.model_check import reliability
 
 POINTS = {Severity.ERROR: 5.0, Severity.WARNING: 2.0, Severity.INFO: 0.5}
 BASE_DOUBT = 0.5
@@ -64,6 +65,8 @@ def triage(
     machine_changes: dict[str, list[dict[str, object]]] | None = None,
 ) -> list[TriageItem]:
     """`machine_changes` (db.machine_changes()): outputs changed by a new version and not reviewed since."""
+    filings, corrections = list(filings), list(corrections)
+    model_proven = reliability(filings, corrections).proven  # until proven, the model's « agree » changes nothing
     by_key: dict[str, list[Correction]] = {}
     for c in corrections:
         by_key.setdefault(c.filing_key, []).append(c)
@@ -82,7 +85,11 @@ def triage(
             item.reasons.append(f"{label} : {g.detail}" if g.detail else label)
         if f.classification.category in TARGET_CATEGORIES:
             uncertain = {
-                name: c for name, c in f.field_confidence.items() if c < UNCERTAIN and name not in f.auto_accepted
+                name: c
+                for name, c in f.field_confidence.items()
+                if c < UNCERTAIN
+                and name not in f.auto_accepted
+                and not (model_proven and f.model_checks.get(name) == "agree")
             }
             doubt += sum(UNCERTAIN - c for c in uncertain.values()) * UNCERTAINTY_WEIGHT
             if low := sorted((c, n) for n, c in uncertain.items() if c < LOW_CONFIDENCE):

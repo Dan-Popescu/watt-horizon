@@ -73,6 +73,11 @@ FLAGS: dict[str, FlagInfo] = {
         "le classifieur local propose une autre catégorie",
         "check the category; if the local model is right, the classifier or the screen needs a fix",
     ),
+    "model_disagrees": FlagInfo(
+        Severity.WARNING,
+        "la pré-relecture automatique conteste la valeur",
+        "check this field first; the model's proposal is in the detail (never applied automatically)",
+    ),
     "audit_sample": FlagInfo(
         Severity.INFO, "échantillon d'audit (rejeté par le tri)", "label it: it measures what the screen misses"
     ),

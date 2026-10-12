@@ -4,6 +4,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.bayes import BayesModel, vocabulary
@@ -34,7 +35,8 @@ from radar.extraction.substation import is_voltage_only
 from radar.pipeline.corrections import apply_corrections, with_machine
 from radar.quality.arbiter import Arbiter, comparable
 from radar.quality.confidence import Calibration, raw_scores
-from radar.quality.flags import QualityInput, ReadDocument, detect
+from radar.quality.flags import QualityInput, ReadDocument, detect, flag
+from radar.quality.model_check import build_input as build_check_input
 from radar.quality.propagate import ALIAS_FIELDS, Aliases
 from radar.quality.rulebook import LearnedRule, RuleHit, apply_rules
 from radar.quality.templates import Registry, fingerprint
@@ -66,6 +68,9 @@ class Services:
     # Fingerprint of the setup (gold files, OCR, classifiers; see pipeline/fingerprint.py). None: always rebuild.
     fingerprint: str | None = None
     reader: PdfReader = field(default_factory=PdfReader)  # PDF parsing, cached (reading/pdf.PdfReader)
+    verifier: Any = None  # model pre-review of uncertain values (quality/model_check.py), None = off
+    llm_queue: Any = None  # batch mode (pipeline/llm_batch.LlmQueue): builds waiting for an answer
+    llm_tasks: tuple[Any, ...] = ()  # model tasks (request/parse/key), to read batch answers
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -75,6 +80,16 @@ def read_documents(documents: list[DocumentRecord], services: Services) -> list[
         data = services.blobs.get(doc.id)
         contents.append(services.ocr.complete(doc.id, data, services.reader.read(doc.id, data)))
     return contents
+
+
+ROLE_RANK = {DocumentRole.DECISION: 0, DocumentRole.OPINION: 1, DocumentRole.FORM: 2}  # others after
+
+
+def decision_first(documents: Sequence[DocumentRecord], texts: Sequence[str]) -> list[str]:
+    """Texts with the decision first: it is short and explicit, while a form can fill the whole model input
+    (seen: the decision cut off in 11 of 22 filings when the form came first)."""
+    pairs = sorted(zip(documents, texts, strict=True), key=lambda p: ROLE_RANK.get(p[0].role, 3))
+    return [t for _, t in pairs]
 
 
 def classification_text(description: str | None, texts: list[str]) -> str:
@@ -220,7 +235,9 @@ def build_filing(
     title = privacy.scrub(_best_title(documents, facts)) or ""
 
     screening = screen(title, facts.description, *texts, extra=services.screen_terms)
-    classification = _classify(key, number, title, facts, texts, services, bool(unread), screening)
+    classification = _classify(
+        key, number, title, facts, decision_first(documents, texts), services, bool(unread), screening
+    )
     classification = classification.model_copy(update={"quote": privacy.scrub(classification.quote) or ""})
     extractor_used = None
     if services.extractor and classification.category in TARGET_CATEGORIES:
@@ -322,7 +339,24 @@ def build_filing(
         }
     )
     texts_by_doc = {doc.id: text for doc, text in zip(documents, texts, strict=True)}
+    if services.verifier is not None and classification.category in TARGET_CATEGORIES:
+        machine = _model_check(machine, texts_by_doc, services.verifier)
     return apply_corrections(with_machine(machine), corrections, services.lookups, texts_by_doc)
+
+
+def _model_check(machine: Filing, texts_by_doc: dict[str, str], verifier: Any) -> Filing:
+    """A model re-reads uncertain values against their passage; « disagree » becomes a flag, never a correction."""
+    item = build_check_input(machine, texts_by_doc, field_values(machine))
+    if item is None:
+        return machine
+    verdicts = verifier.check(item)
+    checks = {name: str(v.get("verdict")) for name, v in verdicts.items() if v.get("verdict")}
+    flags = [
+        flag("model_disagrees", name, f"propose : {v.get('value') or '—'}")
+        for name, v in verdicts.items()
+        if v.get("verdict") == "disagree"
+    ]
+    return machine.model_copy(update={"model_checks": checks, "flags": (*machine.flags, *flags)})
 
 
 def _strata(
@@ -371,7 +405,8 @@ def _llm_fallback(
         missing = tuple(m for m in missing if m != "power_mw_min")  # a single declared power is not a range
     if not missing:
         return None
-    found = extractor.extract(ExtractionInput(key, title, classification_text(facts.description, texts), missing))
+    text = classification_text(facts.description, decision_first(documents, texts))
+    found = extractor.extract(ExtractionInput(key, title, text, missing))
     for name, (value, quote) in found.items():
         doc = next((d.id for d, t in zip(documents, texts, strict=True) if contains_quote(t, quote)), documents[0].id)
         evidence = Evidence(document_id=doc, locator=extractor.name, quote=quote)

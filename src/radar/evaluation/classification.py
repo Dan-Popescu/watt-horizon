@@ -14,7 +14,7 @@ from radar.classification.rules import screen
 from radar.domain.enums import TARGET_CATEGORIES, Category, DocumentRole
 from radar.domain.models import Classification, Filing
 from radar.domain.privacy import PersonScrubber
-from radar.pipeline.filings import Services, classification_text, read_documents
+from radar.pipeline.filings import Services, classification_text, decision_first, read_documents
 from radar.store.db import Database
 
 
@@ -92,7 +92,10 @@ def evaluate_classifier(
         if not screen(filing.title, filing.project_description, *texts, extra=services.screen_terms).keep:
             continue
         item = ClassificationInput(
-            filing.key, filing.number, filing.title, classification_text(filing.project_description, texts)
+            filing.key,
+            filing.number,
+            filing.title,
+            classification_text(filing.project_description, decision_first(documents, texts)),
         )
         result = classifier.classify(item)
         report.evaluated += 1

@@ -2,9 +2,12 @@
 
 import base64
 import json
+import os
 import re
 import zlib
 from collections import OrderedDict
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import cached_property
 
@@ -105,6 +108,11 @@ def read_pdf(data: bytes) -> PdfContent:
 READER_VERSION = f"1:{pymupdf.VersionBind}:{MIN_TEXT_CHARS_PER_PAGE}"
 
 
+PARALLEL_MIN = 24  # documents to parse before a process pool pays off
+MAX_WORKERS = 8
+CHUNK = 64
+
+
 class PdfReader:
     """`read_pdf` with a persistent cache (derived.sqlite, compressed) keyed by document hash + reader version,
     and a small in-process memo: parsing is most of the build time and the same PDF is read by several steps.
@@ -116,6 +124,28 @@ class PdfReader:
     def __init__(self, cache: KeyValueCache | None = None) -> None:
         self.cache = cache
         self._memo: OrderedDict[str, PdfContent] = OrderedDict()
+
+    def prefetch(self, documents: list[tuple[str, Callable[[], bytes]]], workers: int | None = None) -> int:
+        """Parse in parallel the documents missing from the cache (CPU only: no network, same output as `read`).
+        Below PARALLEL_MIN documents, starting processes (~4 s each on Windows) costs more than it saves."""
+        if self.cache is None:
+            return 0
+        missing = [
+            (doc_id, load)
+            for doc_id, load in documents
+            if doc_id not in self._memo and self.cache.get(self.NAMESPACE, f"{doc_id}:{READER_VERSION}") is None
+        ]
+        workers = workers or min(MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1))
+        if len(missing) < PARALLEL_MIN or workers < 2:
+            return 0
+        with ProcessPoolExecutor(workers) as pool:
+            for start in range(0, len(missing), CHUNK):  # bounded memory: a chunk of PDFs at a time
+                chunk = missing[start : start + CHUNK]
+                for (doc_id, _), encoded in zip(
+                    chunk, pool.map(_parse_encoded, [load() for _, load in chunk]), strict=True
+                ):
+                    self.cache.put(self.NAMESPACE, f"{doc_id}:{READER_VERSION}", encoded)
+        return len(missing)
 
     def read(self, document_id: str, data: bytes) -> PdfContent:
         if (hit := self._memo.get(document_id)) is not None:
@@ -133,6 +163,10 @@ class PdfReader:
         if len(self._memo) > self.MEMO:
             self._memo.popitem(last=False)
         return content
+
+
+def _parse_encoded(data: bytes) -> str:
+    return _encode(read_pdf(data))  # runs in a worker process
 
 
 def _encode(c: PdfContent) -> str:

@@ -3,6 +3,7 @@
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import partial
 
 from radar.classification.bayes import train, trusted_examples
 from radar.domain.enums import TARGET_CATEGORIES
@@ -61,20 +62,26 @@ def process_filings(
         )
     state = _state(db, services) if services.fingerprint else None
     may_skip = only is None and not full
+    todo = []
     for key in db.filing_keys_with_documents():
         if only is not None and key not in only:
             continue
+        previous, documents = db.filing(key), db.documents(key)
+        fingerprint = filing_fingerprint(state, documents) if state else None
+        if may_skip and fingerprint and previous and previous.versions.get("input") == fingerprint:
+            report.unchanged += 1
+            continue
+        todo.append((key, previous, documents, fingerprint))
+    # PDF parsing of new documents in parallel (CPU only); the builds below then read from the cache.
+    services.reader.prefetch([(d.id, partial(services.blobs.get, d.id)) for _, _, docs, _ in todo for d in docs])
+    for key, previous, documents, fingerprint in todo:
         try:
-            previous = db.filing(key)
-            documents = db.documents(key)
-            fingerprint = filing_fingerprint(state, documents) if state else None
-            if may_skip and fingerprint and previous and previous.versions.get("input") == fingerprint:
-                report.unchanged += 1
-                continue
             filing = build_filing(key, documents, services, db.corrections(key))
         except Exception as exc:  # recorded and reported; the run continues
             report.failed[key] = f"{type(exc).__name__}: {exc}"
             continue
+        if services.llm_queue is not None and services.llm_queue.waiting(key):
+            fingerprint = None  # built without a model answer still in a batch: rebuild once it is there
         trace = {"code": code_fingerprint(), **({"git": commit} if (commit := git_commit()) else {})}
         filing = filing.model_copy(
             update={"versions": filing.versions | trace | ({"input": fingerprint} if fingerprint else {})}

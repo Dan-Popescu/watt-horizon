@@ -45,7 +45,8 @@ class CachedClassifier:
         self.name = inner.name
 
     def classify(self, item: ClassificationInput) -> Classification | None:
-        key = cache_key(self.name, item.title, item.text)
+        # A paid classifier keys on its exact request (`key`): what is not sent cannot change the answer.
+        key = self.inner.key(item) if hasattr(self.inner, "key") else cache_key(self.name, item.title, item.text)
         if (hit := self.cache.get(self.NAMESPACE, key)) is not None:
             return Classification.model_validate(hit["result"]) if hit["result"] else None
         result = self.inner.classify(item)

@@ -39,6 +39,10 @@ docker build -t radar-raccordement .      # production image (see compose.yaml);
 
 Never run `collect`/`update` unless the task explicitly asks for new data: collection hits public sites.
 Never run `eval --classifier` or set `RADAR_LLM_MODEL` without being asked: model calls are paid.
+Model modes (`wiring.make_llm`): `live` = direct calls, cached by the exact request; `batch` = cache misses queued
+for a Message Batch (half price; `radar update` uses it, `radar run --llm-batch [--wait]`, `radar llm-batch
+status|collect`); `cached` = cache only, never a paid call (`shadow`, `robustness`, `eval` rebuilds). A filing
+waiting for a batch answer stores no input fingerprint, so it is rebuilt when the answer arrives.
 
 Definition of done: format + ruff + mypy strict + pytest green, and `radar run` + `radar eval` show no regression on
 `data/` (or every regression is explained, checked in the document, and the reference fixed).
@@ -51,6 +55,9 @@ Definition of done: format + ruff + mypy strict + pytest green, and `radar run` 
 | `RADAR_GOLD_DIR` | `gold` | versioned references: `labels.jsonl`, `fields.jsonl`, `corrections.jsonl`, `link_decisions.jsonl`, adopted `rules.json` / `screen_terms.json` / `aliases.json` / `templates.json` (human work: in git) |
 | `RADAR_OFFLINE` | `0` | `1` = no network at all: no HTTP, no LLM; lookups from cache + reference files only |
 | `RADAR_LLM_MODEL` | unset | e.g. `claude-opus-5-5`: enables LLM classification + fallback extraction (extra `llm` + `ANTHROPIC_API_KEY`) |
+| `RADAR_LLM_FAST_MODEL` | unset | e.g. `claude-haiku-5-5`: classify with it first, escalate to the main model when doubtful; also runs the pre-review. Switch on only after `radar eval --classifier` shows no loss |
+| `RADAR_LLM_PASSAGES` | `0` | extraction sends windows around clues instead of the first 20k chars (fewer tokens; measure recall first) |
+| `RADAR_LLM_CHECK` | `1` | model pre-review of uncertain values (`quality/model_check.py`): flags disagreements; skips review only once proven on human reviews |
 | `RADAR_TESSERACT` | `1` | OCR scanned pages with local Tesseract when on PATH (after transcripts); `0` disables |
 | `RADAR_USER_AGENT` | project UA | sent on every request |
 | `RADAR_API_TOKEN` | unset | `radar web`: require `Authorization: Bearer <token>` on `/api/*` and `/mcp`; mandatory off localhost |
@@ -72,7 +79,8 @@ validation/     Facts + Lookups port -> Checks (GDPR, SIRET, commune, GPS, power
 linking/        linker (related links), resolve (same-project groups, must/cannot-link), registry
                 (commissioned installations), review (human link verdicts: queue, linker/grouping metrics)
 pipeline/       filings (build), corrections (human overrides), run (process / link_and_build), changes (log),
-                projects, health (collectors), importers, fingerprint (incremental: skip unchanged filings)
+                projects, health (collectors), importers, fingerprint (incremental: skip unchanged filings),
+                llm_batch (Message Batches: queue, submit, collect)
 evaluation/     gold (field references), fields, ocr, classification, privacy, stats (Wilson, dev/test split),
                 rigor (strata, calibration, blind, recall estimate), report (run-to-run comparison)
 quality/        flags (doubt detectors), audit (fetch although rejected), triage (review queue), errors (learn
@@ -158,6 +166,9 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
 9. **Project level**: review mode « Liens entre dossiers » (pairs ordered by consequence: machine merges first).
 10. **References**: ~10 % of reviewed filings come back for a blind second review by another reviewer
    (`quality/agreement.py`); accuracy above the agreement rate is not meaningful.
+12. **Model pre-review** (`quality/model_check.py`, with a model configured): uncertain values are re-read against
+   their passage; « disagree » = flag `model_disagrees`; « agree » removes the field from the uncertain ones only once
+   proven on human reviews (`radar eval` > `model_check`). Never a correction, never gold.
 11. **Robustness**: `radar robustness` (perturbed texts) and the redacted real-PDF corpus replay
    (`tests/test_corpus.py`) catch reading/library changes. Review shows each value on its PDF page
    (`/api/review/{key}/evidence/{field}.png`, rendered in memory, names blacked out).

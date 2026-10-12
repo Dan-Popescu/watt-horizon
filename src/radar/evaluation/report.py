@@ -19,7 +19,7 @@ from radar.evaluation.fields import score_fields
 from radar.evaluation.gold import FieldGold
 from radar.evaluation.stats import split_of
 from radar.linking import review as link_review
-from radar.quality import agreement
+from radar.quality import agreement, model_check
 from radar.quality.arbiter import learn
 from radar.quality.confidence import calibrate, observations
 from radar.quality.errors import analyse
@@ -146,6 +146,7 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
                 filings, inputs.corrections, {n for n in (f.number for f in filings) if split_of(n) == "test"}
             )
         ),
+        "model_check": model_check.reliability(filings, inputs.corrections).as_dict(),
         "arbitration": learn(filings, inputs.corrections).table(),
         "field_calibration": _field_calibration(filings, inputs.corrections),
         "integrity": {"quote_not_found": sum(g.code == "quote_not_found" for f in filings for g in f.flags)},

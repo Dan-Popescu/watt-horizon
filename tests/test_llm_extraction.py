@@ -7,7 +7,14 @@ from typing import Any
 
 from radar.classification.gold import GoldClassifier, GoldLabel
 from radar.domain.enums import Category, SourceKind
-from radar.extraction.llm import CachedExtractor, ExtractionInput, LlmExtractor, parse_value, verify
+from radar.extraction.llm import (
+    PROMPT_VERSION,
+    CachedExtractor,
+    ExtractionInput,
+    LlmExtractor,
+    parse_value,
+    verify,
+)
 from radar.pipeline.filings import Services
 from radar.pipeline.ingest import ingest_pdf
 from radar.pipeline.run import process_filings
@@ -104,8 +111,8 @@ def test_pipeline_asks_llm_only_for_what_rules_missed(db: Database, blobs: BlobS
         and filing.filed_on is not None
         and filing.filed_on.isoformat() == "2026-03-03"
     )
-    assert filing.evidence["developer"].locator == "llm-extract:model-x@2026-10-12"
-    assert filing.versions["extraction_llm"] == "llm-extract:model-x@2026-10-12"
+    assert filing.evidence["developer"].locator == f"llm-extract:model-x@{PROMPT_VERSION}"
+    assert filing.versions["extraction_llm"] == f"llm-extract:model-x@{PROMPT_VERSION}"
 
 
 def test_sources_have_no_control_characters() -> None:

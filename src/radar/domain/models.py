@@ -154,6 +154,8 @@ class Filing(Model):
     # Lowercase words of the scrubbed text (no names by construction): the second-opinion classifier learns from them.
     vocabulary: tuple[str, ...] = ()
     second_opinion: SecondOpinion | None = None
+    # Model pre-review (quality/model_check.py): field -> agree | disagree | unsure. Never a reference.
+    model_checks: dict[str, str] = Field(default_factory=dict)
 
 
 class Correction(Model):

@@ -18,7 +18,7 @@ from radar.store.cache import KeyValueCache, cache_key
 if TYPE_CHECKING:
     import anthropic
 
-PROMPT_VERSION = "2026-10-12"  # bump on any change to SYSTEM_PROMPT, FIELD_HINTS or OUTPUT_SCHEMA
+PROMPT_VERSION = "2026-10-13"  # bump on any change to SYSTEM_PROMPT, FIELD_HINTS or OUTPUT_SCHEMA
 MAX_INPUT_CHARS = 20_000
 FIELD_HINTS: dict[str, str] = {
     "developer": "société qui porte le projet (dénomination), jamais une personne physique",
@@ -115,37 +115,81 @@ def verify(answer: dict[str, Any], item: ExtractionInput) -> Extracted:
     return kept
 
 
+# Passage selection (opt-in, `RADAR_LLM_PASSAGES=1`): instead of the first MAX_INPUT_CHARS, send only windows
+# around the clues of the missing fields. ~60 % fewer tokens; to be switched on after `radar eval` shows no recall loss.
+CLUES: dict[str, str] = {
+    "developer": r"soci[ée]t[ée]|d[ée]nomination|porteur|p[ée]titionnaire|ma[îi]tre d.ouvrage",
+    "siret": r"siret|siren",
+    "commune": r"commune|lieu-dit|localit[ée]",
+    "power_mw": r"\bMW|puissance",
+    "power_mw_min": r"\bMW|puissance",
+    "energy_mwh": r"MWh|capacit[ée]",
+    "substation": r"poste|raccord",
+    "filed_on": r"d[ée]pos[ée]|complet le|re[çc]u le",
+}
+WINDOW = 400
+
+
+def select_passages(text: str, fields: tuple[str, ...], budget: int = MAX_INPUT_CHARS // 2) -> str:
+    """Merged windows of ±WINDOW chars around every clue of the requested fields, in document order."""
+    spans: list[tuple[int, int]] = []
+    for name in fields:
+        for m in re.finditer(CLUES.get(name, r"$^"), text, re.IGNORECASE):
+            spans.append((max(0, m.start() - WINDOW), min(len(text), m.end() + WINDOW)))
+    merged: list[list[int]] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    out = " […] ".join(text[a:b] for a, b in merged)
+    return out[:budget] if out else text[:budget]
+
+
 class LlmExtractor:
-    def __init__(self, model: str, client: "anthropic.Anthropic | None" = None) -> None:
-        if client is None:
+    NAMESPACE = "extraction"
+
+    def __init__(self, model: str, client: "anthropic.Anthropic | None" = None, passages: bool = False) -> None:
+        self.model, self._client, self.passages = model, client, passages
+        self.name = f"llm-extract:{model}@{PROMPT_VERSION}" + (":passages" if passages else "")
+
+    @property
+    def client(self) -> "anthropic.Anthropic":
+        if self._client is None:
             import anthropic  # lazy: optional extra
 
-            client = anthropic.Anthropic()
-        self.model, self.client = model, client
-        self.name = f"llm-extract:{model}@{PROMPT_VERSION}"
+            self._client = anthropic.Anthropic()
+        return self._client
+
+    def request(self, item: ExtractionInput) -> dict[str, Any]:
+        asked = "\n".join(f"- {name} : {FIELD_HINTS[name]}" for name in item.fields)
+        text = select_passages(item.text, item.fields) if self.passages else item.text[:MAX_INPUT_CHARS]
+        return {
+            "model": self.model,
+            "max_tokens": 2048,
+            "system": SYSTEM_PROMPT,
+            "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": output_schema(item.fields)}},
+            "messages": [
+                {"role": "user", "content": f"Champs :\n{asked}\n\nTitre : {item.title}\n\nDocument :\n{text}"}
+            ],
+        }
+
+    def key(self, item: ExtractionInput) -> str:
+        return cache_key(self.name, json.dumps(self.request(item), sort_keys=True, ensure_ascii=False))
+
+    def parse(self, message: Any, item: ExtractionInput) -> Extracted:
+        if getattr(message, "stop_reason", None) == "refusal":
+            return {}
+        raw = next((block.text for block in message.content if block.type == "text"), None)
+        return verify(json.loads(raw), item) if raw else {}
 
     def extract(self, item: ExtractionInput) -> Extracted:
         if not item.fields:
             return {}
-        asked = "\n".join(f"- {name} : {FIELD_HINTS[name]}" for name in item.fields)
         response = self.client.beta.messages.create(
-            model=self.model,
-            max_tokens=2048,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            system=SYSTEM_PROMPT,
-            output_config={"effort": "low", "format": {"type": "json_schema", "schema": output_schema(item.fields)}},
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Champs :\n{asked}\n\nTitre : {item.title}\n\nDocument :\n{item.text[:MAX_INPUT_CHARS]}",
-                }
-            ],
+            **self.request(item), betas=["server-side-fallback-2026-07-01"], fallbacks="default"
         )
-        if response.stop_reason == "refusal":
-            return {}
-        raw = next((block.text for block in response.content if block.type == "text"), None)
-        return verify(json.loads(raw), item) if raw else {}
+        return self.parse(response, item)
 
 
 class CachedExtractor:
@@ -156,7 +200,13 @@ class CachedExtractor:
         self.name = inner.name
 
     def extract(self, item: ExtractionInput) -> Extracted:
-        key = cache_key(self.name, ",".join(item.fields), item.title, item.text)
+        if not item.fields:
+            return {}
+        key = (
+            self.inner.key(item)
+            if hasattr(self.inner, "key")
+            else cache_key(self.name, ",".join(item.fields), item.title, item.text)
+        )
         if (hit := self.cache.get(self.NAMESPACE, key)) is not None:
             return {name: (value, quote) for name, (value, quote) in hit.items()}
         result = self.inner.extract(item)

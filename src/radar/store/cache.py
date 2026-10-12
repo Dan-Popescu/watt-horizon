@@ -43,5 +43,13 @@ class KeyValueCache:
         )
         self.conn.commit()
 
+    def items(self, namespace: str) -> list[tuple[str, Any]]:
+        rows = self.conn.execute("SELECT key, value FROM kv WHERE namespace = ? ORDER BY created_at, key", (namespace,))
+        return [(key, json.loads(value)) for key, value in rows]
+
+    def delete(self, namespace: str, key: str) -> None:
+        self.conn.execute("DELETE FROM kv WHERE namespace = ? AND key = ?", (namespace, key))
+        self.conn.commit()
+
     def close(self) -> None:
         self.conn.close()

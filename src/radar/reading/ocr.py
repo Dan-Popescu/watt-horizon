@@ -9,9 +9,11 @@ Every engine fills only pages still unread and records its label in `PdfContent.
 To add an engine (cloud OCR, vision model): implement `label` + `complete`, then add it to `make_ocr`.
 """
 
+import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
@@ -76,6 +78,18 @@ def tesseract_version() -> str | None:
     return m[1] if m else "unknown"
 
 
+OCR_PARALLEL_MIN_PAGES = 4
+OCR_MAX_WORKERS = 8
+
+
+def _ocr_page(data: bytes, number: int, language: str, dpi: int) -> str:
+    """OCR of one page (1-based); module-level so a worker process can run it."""
+    with pymupdf.open(stream=data, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
+        page = doc[number - 1]
+        textpage = page.get_textpage_ocr(language=language, dpi=dpi, full=True)
+        return str(page.get_text(textpage=textpage))
+
+
 class TesseractOcr:
     def __init__(self, language: str = "fra", dpi: int = 300) -> None:
         self.language, self.dpi = language, dpi
@@ -88,12 +102,16 @@ class TesseractOcr:
     def complete(self, document_id: str, data: bytes, content: PdfContent) -> PdfContent:
         if not content.unread_scanned_pages:
             return content
-        texts: dict[int, str] = {}
-        with pymupdf.open(stream=data, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
-            for number in content.unread_scanned_pages:
-                page = doc[number - 1]
-                textpage = page.get_textpage_ocr(language=self.language, dpi=self.dpi, full=True)
-                texts[number] = page.get_text(textpage=textpage)
+        pages = list(content.unread_scanned_pages)
+        workers = min(OCR_MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1), len(pages))
+        if len(pages) >= OCR_PARALLEL_MIN_PAGES and workers >= 2:  # ~2.5 s per page: worth a process pool
+            with ProcessPoolExecutor(workers) as pool:
+                done = pool.map(
+                    _ocr_page, [data] * len(pages), pages, [self.language] * len(pages), [self.dpi] * len(pages)
+                )
+                texts = dict(zip(pages, done, strict=True))
+        else:
+            texts = {number: _ocr_page(data, number, self.language, self.dpi) for number in pages}
         return _with_pages(content, texts, self.label)
 
 
