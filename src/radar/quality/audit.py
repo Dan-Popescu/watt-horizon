@@ -31,9 +31,12 @@ def near_miss(title: str) -> str | None:
     return next((name for name, pattern in NEAR_MISS.items() if pattern.search(title)), None)
 
 
-def decide(title: str, key: str, rate: float = AUDIT_RATE) -> tuple[bool, str | None]:
-    """(kept by the screen, audit reason). Fetch when kept or when an audit reason is given."""
-    if screen(title).keep:
+def decide(
+    title: str, key: str, rate: float = AUDIT_RATE, extra: re.Pattern[str] | None = None
+) -> tuple[bool, str | None]:
+    """(kept by the screen, audit reason). Fetch when kept or when an audit reason is given.
+    `extra`: adopted screen terms (gold/screen_terms.json)."""
+    if screen(title, extra=extra).keep:
         return True, None
     if reason := near_miss(title):
         return False, f"near-miss:{reason}"

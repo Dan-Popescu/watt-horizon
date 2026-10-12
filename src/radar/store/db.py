@@ -310,6 +310,10 @@ class Database:
             (url, source, title, int(kept), audit, utcnow().isoformat()),
         )
 
+    def rejected_titles(self) -> list[tuple[str, str]]:
+        """(url, title) of every listed item the title screen rejected (negatives for screen-term suggestions)."""
+        return [(r[0], r[1]) for r in self.conn.execute("SELECT url, title FROM listing_items WHERE kept = 0")]
+
     def listing_counts(self) -> dict[str, int]:
         """seen / kept / rejected / audit_random / audit_near_miss over all sources."""
         row = self.conn.execute(

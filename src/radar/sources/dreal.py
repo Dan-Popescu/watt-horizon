@@ -62,6 +62,7 @@ def collect_dreal(
     listings: tuple[str, ...],
     max_offset: int,
     max_articles: int | None = None,
+    screen_terms: re.Pattern[str] | None = None,
 ) -> CollectReport:
     """Screen titles (layer 1), download the PDFs of kept articles and of the audit sample, ingest them. Idempotent.
     Every listed item is recorded (`listing_items`) so the screen's recall can be estimated later."""
@@ -69,7 +70,7 @@ def collect_dreal(
     for listing in listings:
         for article in iter_articles(http, region, listing, max_offset):
             report.seen += 1
-            kept, audit = decide(article.title, article.url)
+            kept, audit = decide(article.title, article.url, extra=screen_terms)
             with db.transaction():
                 db.record_listing_item(article.url, SourceKind.DREAL_CASE_BY_CASE.value, article.title, kept, audit)
             if not kept and audit is None:

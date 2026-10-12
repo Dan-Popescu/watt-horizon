@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from radar.classification.base import ClassificationInput, Classifier
+from radar.classification.bayes import BayesModel, vocabulary
 from radar.classification.rules import screen
 from radar.domain.departments import code_from_postcode
 from radar.domain.enums import TARGET_CATEGORIES, Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
@@ -19,6 +20,7 @@ from radar.domain.models import (
     Filing,
     Location,
     Power,
+    SecondOpinion,
 )
 from radar.domain.power import estimate_power
 from radar.domain.privacy import PersonScrubber
@@ -58,6 +60,9 @@ class Services:
     aliases: Aliases | None = None  # learned spellings of names (gold/aliases.json), applied to every build
     templates: Registry | None = None  # known document templates (gold/templates.json); None: nothing flagged as new
     rules: tuple[LearnedRule, ...] = ()  # adopted rules (gold/rules.json) still trusted by the reviews
+    labels: dict[str, Category] | None = None  # trusted category labels (verified gold), by filing number
+    opinion: BayesModel | None = None  # second-opinion classifier, re-learned by process_filings
+    screen_terms: re.Pattern[str] | None = None  # adopted screen terms (gold/screen_terms.json)
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -211,7 +216,7 @@ def build_filing(
     }
     title = privacy.scrub(_best_title(documents, facts)) or ""
 
-    classification = _classify(key, number, title, facts, texts, services.classifier, bool(unread))
+    classification = _classify(key, number, title, facts, texts, services, bool(unread))
     classification = classification.model_copy(update={"quote": privacy.scrub(classification.quote) or ""})
     extractor_used = None
     if services.extractor and classification.category in TARGET_CATEGORIES:
@@ -221,6 +226,8 @@ def build_filing(
             if ev is not None and ev.locator.startswith("llm-extract:"):
                 value = getattr(facts, ARBITRATED_ATTRS[name][0])
                 extraction.candidates.setdefault(name, []).append(Candidate(source="llm", value=comparable(value)))
+    words = vocabulary(classification_text(facts.description, texts))
+    opinion = services.opinion.predict(words) if services.opinion and services.opinion.reliable else None
     validation = validate(facts, services.lookups)
     templates = {
         doc.id: fingerprint(doc.role, c.field_names, c.text) for doc, c in zip(documents, contents, strict=True)
@@ -248,8 +255,9 @@ def build_filing(
             classification=classification,
             checks=validation.checks,
             target=classification.category in TARGET_CATEGORIES,
-            kept_by_text=screen(title, facts.description, *texts).keep,
+            kept_by_text=screen(title, facts.description, *texts, extra=services.screen_terms).keep,
             unread=unread,
+            second_opinion=opinion,
         )
     )
     gps_ok = any(c.name == "gps" and c.status is CheckStatus.OK for c in validation.checks)
@@ -285,6 +293,12 @@ def build_filing(
         reading=reading,
         flags=flags,
         candidates=extraction.candidates,
+        vocabulary=words,
+        second_opinion=SecondOpinion(
+            category=opinion.category, probability=round(opinion.probability, 3), clues=opinion.clues
+        )
+        if opinion
+        else None,
         strata=_strata(source.value, documents, contents, unread, facts.department)
         | {"template": "+".join(sorted(set(templates.values())))},
         versions={
@@ -367,9 +381,10 @@ def _llm_fallback(
 
 
 def _classify(
-    key: str, number: str, title: str, facts: Facts, texts: list[str], classifier: Classifier | None, has_unread: bool
+    key: str, number: str, title: str, facts: Facts, texts: list[str], services: Services, has_unread: bool
 ) -> Classification:
-    screening = screen(title, facts.description, *texts)
+    screening = screen(title, facts.description, *texts, extra=services.screen_terms)
+    classifier = services.classifier
     if not screening.keep:
         return Classification(category=Category.OTHER, method="rules", confidence="no clue")
     if classifier is not None:

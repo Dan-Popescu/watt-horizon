@@ -24,6 +24,7 @@ from typing import Any
 from radar.api import digest, exports, queries, review
 from radar.api.quality import quality_overview
 from radar.classification.gold import load_gold
+from radar.classification.terms import ScreenTerms
 from radar.config import Settings, load_settings
 from radar.domain.privacy import PersonScrubber
 from radar.evaluation.classification import evaluate_classifier
@@ -42,7 +43,7 @@ from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import Services, read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
-from radar.quality import cases, corpus, errors, improve, propagate, robustness, rulebook, shadow
+from radar.quality import cases, corpus, errors, improve, propagate, robustness, rulebook, screen_terms, shadow
 from radar.quality.arbiter import learn
 from radar.quality.drift import drift
 from radar.quality.suggest import suggest
@@ -110,7 +111,10 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
     try:
         if source == "dreal":
             listings = tuple(args.listing) if args.listing else region.dreal_listings[:2]
-            report = dreal.collect_dreal(http, db, blobs, region, listings, args.max_offset, args.max_items)
+            terms = ScreenTerms.load(s.screen_terms_path).pattern()
+            report = dreal.collect_dreal(
+                http, db, blobs, region, listings, args.max_offset, args.max_items, screen_terms=terms
+            )
         elif source == "mrae":
             report = mrae.collect_mrae(http, db, blobs, region, args.year, args.max_items)
         elif source == "georisques":
@@ -460,6 +464,36 @@ def cmd_rules(args: argparse.Namespace, s: Settings) -> Any:
     return {"path": str(s.rules_path), "rules": rows}
 
 
+def cmd_screen_terms(args: argparse.Namespace, s: Settings) -> Any:
+    """Screen terms (gold/screen_terms.json): suggest from screen misses, list, adopt, disable."""
+    book = ScreenTerms.load(s.screen_terms_path)
+    if args.action in {"suggest", "adopt"} and not (args.action == "adopt" and args.term):
+        with Database(s.db_path) as db:
+            filings = db.filings()
+            documents = {f.key: db.documents(f.key) for f in filings}
+            found = screen_terms.suggest(filings, documents, db.rejected_titles(), book.pattern())
+        if args.action == "suggest":
+            return {
+                "suggestions": [x.as_dict() for x in found[: args.limit]],
+                "how": "radar screen-terms adopt --rank N (or --term ...), then radar run; collection uses it too",
+            }
+        if len(found) < args.rank:
+            return {"error": f"no suggestion #{args.rank}"}
+        chosen = found[args.rank - 1]
+        origin = f"rescues {', '.join(chosen.rescues)} ({chosen.scope}); admits {chosen.admits}/{chosen.negatives}"
+        term = book.adopt(chosen.term, origin)
+    elif args.action == "adopt":
+        term = book.adopt(args.term, "manual")
+    elif args.action == "disable":
+        book.disable(args.id or "")
+        book.save(s.screen_terms_path)
+        return {"disabled": args.id}
+    else:
+        return {"path": str(s.screen_terms_path), "terms": [dataclasses.asdict(t) for t in book.terms]}
+    book.save(s.screen_terms_path)
+    return {"adopted": dataclasses.asdict(term), "next": "radar run (the full-text screen uses it at every build)"}
+
+
 def corpus_documents(db: Database, services: Services) -> list[tuple[str, list[robustness.Document]]]:
     """Every stored filing as (number, documents with GDPR-scrubbed text), for corpus-wide checks."""
     items = []
@@ -640,6 +674,12 @@ def build_parser() -> argparse.ArgumentParser:
     ru.add_argument("--regex", help="adopt: explicit regex on fold_keep text (group 1 = value)")
     ru.add_argument("--rank", type=int, default=1, help="adopt: n-th validated suggestion (radar improve)")
     ru.add_argument("--id", help="disable: rule id")
+    st = sub.add_parser("screen-terms", help="layer-1 screen terms learned from misses: suggest, list, adopt")
+    st.add_argument("action", nargs="?", choices=["suggest", "list", "adopt", "disable"], default="suggest")
+    st.add_argument("--term", help="adopt: explicit term (words, accents and case ignored)")
+    st.add_argument("--rank", type=int, default=1, help="adopt: n-th suggestion")
+    st.add_argument("--id", help="disable: term id")
+    st.add_argument("--limit", type=int, default=20)
     tp = sub.add_parser("templates", help="document templates seen; export = accept them (gold/templates.json)")
     tp.add_argument("action", nargs="?", choices=["list", "export"], default="list")
     sh = sub.add_parser("shadow", help="dry run on the whole corpus: changed values, fixes / breaks vs verified")
@@ -692,6 +732,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "shadow": cmd_shadow,
     "templates": cmd_templates,
     "rules": cmd_rules,
+    "screen-terms": cmd_screen_terms,
     "corpus": cmd_corpus,
     "robustness": cmd_robustness,
 }

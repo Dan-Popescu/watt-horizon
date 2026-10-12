@@ -8,6 +8,7 @@ share of flagged filings that were really corrected, and errors no flag predicte
 import re
 from dataclasses import dataclass, field
 
+from radar.classification.bayes import CONFIDENT, Opinion
 from radar.domain.enums import CheckStatus, DocumentRole, Severity
 from radar.domain.ids import luhn_ok
 from radar.domain.models import Check, Classification, Flag
@@ -67,6 +68,11 @@ FLAGS: dict[str, FlagInfo] = {
         "rejeté sur son titre, retenu sur son texte",
         "the title screen missed it: add the pattern to classification/rules.py (recall bug)",
     ),
+    "second_opinion_disagrees": FlagInfo(
+        Severity.WARNING,
+        "le classifieur local propose une autre catégorie",
+        "check the category; if the local model is right, the classifier or the screen needs a fix",
+    ),
     "audit_sample": FlagInfo(
         Severity.INFO, "échantillon d'audit (rejeté par le tri)", "label it: it measures what the screen misses"
     ),
@@ -104,6 +110,7 @@ class QualityInput:
     target: bool
     kept_by_text: bool  # the full-text screen keeps it
     unread: list[str]
+    second_opinion: Opinion | None = None  # local classifier, only when proven reliable
 
 
 def flag(code: str, field_name: str | None = None, detail: str = "") -> Flag:
@@ -192,6 +199,9 @@ def _decisions(q: QualityInput) -> list[Flag]:
         out.append(flag("classification_unverified", detail=q.classification.quote[:120]))
     if q.classification.category.value in {"needs_review", "unclassified"}:
         out.append(flag("category_undecided"))
+    opinion = q.second_opinion
+    if opinion and opinion.category is not q.classification.category and opinion.probability >= CONFIDENT:
+        out.append(flag("second_opinion_disagrees", detail=opinion.describe()))
     audits = [d.audit for d in q.documents if d.audit]
     if audits:
         out.append(flag("audit_sample", detail=audits[0]))

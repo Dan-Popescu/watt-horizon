@@ -18,6 +18,7 @@ def audit_privacy(db: Database, blobs: BlobStore) -> list[str]:
             "description": filing.project_description or "",
             "classification": filing.classification.quote,
             **{f"evidence:{name}": ev.quote for name, ev in filing.evidence.items()},
+            "vocabulary": " ".join(filing.vocabulary),
         }
         leaks += [f"{filing.key} {where}" for where, text in texts.items() if audit.leaks(text)]
     return leaks

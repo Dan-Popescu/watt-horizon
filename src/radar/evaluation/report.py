@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from radar.classification import bayes
 from radar.classification.gold import GoldLabel
 from radar.domain.enums import TARGET_CATEGORIES
 from radar.domain.models import Correction, Filing
@@ -130,6 +131,11 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
             "unflagged_errors": errors.unflagged,
             "by_flag": errors.by_flag,
         },
+        "second_opinion": bayes.summary(
+            bayes.train(
+                bayes.trusted_examples(filings, {n: g.category for n, g in inputs.labels.items() if g.verified})
+            )
+        ),
         "arbitration": learn(filings, inputs.corrections).table(),
         "field_calibration": _field_calibration(filings, inputs.corrections),
         "integrity": {"quote_not_found": sum(g.code == "quote_not_found" for f in filings for g in f.flags)},
@@ -175,6 +181,8 @@ def metrics(report: dict[str, Any]) -> dict[str, float]:
         out["cases.fixed"] = float(report["cases"]["fixed"])
     if (miss := report["ocr"].get("mean_word_miss_rate")) is not None:
         out["ocr.mean_word_miss_rate"] = miss
+    if (loo := report["second_opinion"].get("loo_accuracy")) is not None:
+        out["second_opinion.loo_accuracy"] = loo
     if (accuracy := report.get("classifier", {}).get("accuracy")) is not None:
         out["classifier.accuracy"] = accuracy
     return out

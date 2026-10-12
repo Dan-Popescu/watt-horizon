@@ -6,6 +6,8 @@ Never screen on titles alone: DREAL titles are truncated (« sur la commune de (
 import re
 from dataclasses import dataclass
 
+from radar.domain.text import fold
+
 STRONG = re.compile(
     r"stockage (?:d.?)?(?:é|e)lectricit|stockage d.?(?:é|e)nergie|infrastructures de stockage \(|batteries?\b|\bBESS\b"
     r"|\bMWh\b|conteneurs? (?:de )?batter|data ?cent|centre de donn|h(?:é|e)bergement (?:de donn|informatique)"
@@ -20,6 +22,10 @@ WEAK = re.compile(
 )
 
 
+def _extra(blob: str, extra: re.Pattern[str] | None) -> set[str]:
+    return {m[0] for m in extra.finditer(fold(blob))} if extra is not None else set()
+
+
 @dataclass(frozen=True)
 class Screening:
     keep: bool
@@ -27,8 +33,9 @@ class Screening:
     clues: tuple[str, ...]
 
 
-def screen(*texts: str | None, max_chars: int = 20_000) -> Screening:
+def screen(*texts: str | None, max_chars: int = 20_000, extra: re.Pattern[str] | None = None) -> Screening:
+    """`extra`: adopted screen terms (classification/terms.py), matched on folded text, counted as strong clues."""
     blob = " ".join(t for t in texts if t)[:max_chars]
-    strong = sorted({m[0].lower() for m in STRONG.finditer(blob)})
+    strong = sorted({m[0].lower() for m in STRONG.finditer(blob)} | _extra(blob, extra))
     weak = sorted({m[0].lower() for m in WEAK.finditer(blob)})
     return Screening(keep=bool(strong or weak), score=3 * len(strong) + len(weak), clues=tuple(strong + weak))

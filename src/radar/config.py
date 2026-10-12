@@ -63,6 +63,11 @@ class Settings:
         return self.gold_dir / "rules.json"
 
     @property
+    def screen_terms_path(self) -> Path:
+        """Adopted screen terms (`radar screen-terms adopt`), added to the layer-1 screen."""
+        return self.gold_dir / "screen_terms.json"
+
+    @property
     def templates_path(self) -> Path:
         """Known document templates (`radar templates export`); unknown ones are flagged at build."""
         return self.gold_dir / "templates.json"

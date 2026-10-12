@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
+from radar.classification.bayes import train, trusted_examples
 from radar.domain.enums import TARGET_CATEGORIES
 from radar.domain.models import Link
 from radar.linking.linker import propose_links
@@ -36,7 +37,7 @@ def process_filings(db: Database, services: Services, only: set[str] | None = No
     """(Re)build every filing that has documents. One failing filing never stops the others.
     Source reliabilities and confidence calibration are re-learned from human reviews first, unless given."""
     report = StepReport()
-    if services.arbiter is None or services.calibration is None:
+    if services.arbiter is None or services.calibration is None or services.opinion is None:
         filings, corrections = db.filings(), db.corrections()
         arbiter = services.arbiter or learn(filings, corrections)
         services = replace(
@@ -44,6 +45,7 @@ def process_filings(db: Database, services: Services, only: set[str] | None = No
             arbiter=arbiter,
             calibration=services.calibration or calibrate(filings, corrections),
             rules=rule_filter(services.rules, arbiter),
+            opinion=services.opinion or train(trusted_examples(filings, services.labels or {})),
         )
     for key in db.filing_keys_with_documents():
         if only is not None and key not in only:

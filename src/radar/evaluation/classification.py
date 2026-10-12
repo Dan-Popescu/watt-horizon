@@ -89,7 +89,7 @@ def evaluate_classifier(
         forms = [c.fields for d, c in zip(documents, contents, strict=True) if d.role is DocumentRole.FORM]
         privacy = PersonScrubber.for_filing(forms, [filing.developer, filing.legal_name])
         texts = [privacy.scrub(c.text) or "" for c in contents]
-        if not screen(filing.title, filing.project_description, *texts).keep:
+        if not screen(filing.title, filing.project_description, *texts, extra=services.screen_terms).keep:
             continue
         item = ClassificationInput(
             filing.key, filing.number, filing.title, classification_text(filing.project_description, texts)

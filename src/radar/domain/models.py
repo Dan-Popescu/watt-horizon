@@ -66,6 +66,14 @@ class Classification(Model):
     quote_verified: bool | None = None  # True if the quote was found verbatim in the document
 
 
+class SecondOpinion(Model):
+    """The local naive-Bayes classifier's view of the category (classification/bayes.py); never decides."""
+
+    category: Category
+    probability: float
+    clues: tuple[str, ...] = ()
+
+
 class DocumentRecord(Model):
     """A downloaded file. `id` is the SHA-256 of its bytes (content-addressed, deduplicated)."""
 
@@ -143,6 +151,9 @@ class Filing(Model):
     field_score: dict[str, float] = Field(default_factory=dict)  # field -> raw evidence score (quality/confidence.py)
     field_confidence: dict[str, float] = Field(default_factory=dict)  # field -> calibrated probability of being right
     auto_accepted: tuple[str, ...] = ()  # fields whose calibrated confidence is proven high enough to skip review
+    # Lowercase words of the scrubbed text (no names by construction): the second-opinion classifier learns from them.
+    vocabulary: tuple[str, ...] = ()
+    second_opinion: SecondOpinion | None = None
 
 
 class Correction(Model):

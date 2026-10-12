@@ -2,6 +2,7 @@
 
 from radar.classification.base import CachedClassifier, ChainClassifier, Classifier
 from radar.classification.gold import GoldClassifier, load_gold
+from radar.classification.terms import ScreenTerms
 from radar.config import Settings
 from radar.extraction.llm import FieldExtractor
 from radar.net.http import PoliteHttp
@@ -58,5 +59,7 @@ def make_services(settings: Settings, http: PoliteHttp | None) -> Services:
         aliases=Aliases.load(settings.aliases_path),
         templates=Registry.load(settings.templates_path),
         rules=Rulebook.load(settings.rules_path).effective(),
+        labels={n: g.category for n, g in load_gold(settings.gold_path).items() if g.verified},
+        screen_terms=ScreenTerms.load(settings.screen_terms_path).pattern(),
         lookups=make_lookups(settings, http),
     )
