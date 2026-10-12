@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -22,6 +23,8 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from radar.api import exports, queries
+from radar.api.review import review_items, submit_review
+from radar.classification.gold import GoldLabel
 from radar.store.db import Database
 
 STATIC = Path(__file__).parent / "static"
@@ -58,10 +61,19 @@ class BearerToken(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+Rebuild = Callable[[Database, str], None]  # re-process one filing (applies corrections) and rebuild projects
+
+
 def build_app(
-    db_path: Path | str, *, token: str | None = None, with_mcp: bool = True, mcp_host: str = "127.0.0.1"
+    db_path: Path | str,
+    *,
+    token: str | None = None,
+    with_mcp: bool = True,
+    mcp_host: str = "127.0.0.1",
+    review: tuple[Rebuild, Callable[[], dict[str, GoldLabel]]] | None = None,
 ) -> Starlette:
-    """`mcp_host`: the host clients use; MCP rejects other Host headers (DNS-rebinding protection)."""
+    """`mcp_host`: the host clients use; MCP rejects other Host headers (DNS-rebinding protection).
+    `review`: enables the internal review endpoints (rebuild function, draft gold labels loader)."""
     db_path = Path(db_path)
 
     def endpoint(fn: Callable[[Database, Request], Any]) -> Callable[[Request], Response]:
@@ -106,6 +118,45 @@ def build_app(
         disposition = {"Content-Disposition": 'attachment; filename="projets.geojson"'}
         return Response(body, media_type="application/geo+json", headers={**NO_STORE, **disposition})
 
+    def review_list(db: Database, _: Request) -> Any:
+        if review is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        return review_items(db, review[1]())
+
+    async def review_submit(request: Request) -> Response:
+        if review is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        try:
+            body = await request.json()
+        except ValueError:
+            return _json({"error": "JSON body expected"}, 400)
+        key = request.path_params["key"]
+
+        def write(db: Database, _: Request) -> Any:
+            submit_review(
+                db,
+                key,
+                author=str(body.get("author", "")),
+                changes=dict(body.get("changes") or {}),
+                note=str(body.get("note", "")),
+                validate=bool(body.get("validate", False)),
+            )
+            review[0](db, key)
+            return next(i for i in review_items(db, review[1]()) if i.key == key)
+
+        return await run_in_threadpool(endpoint(write), request)
+
+    def review_withdraw(db: Database, request: Request) -> Any:
+        if review is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        correction_id = int(request.path_params["correction_id"])
+        key = next((c.filing_key for c in db.corrections() if c.id == correction_id), None)
+        with db.transaction():
+            if key is None or not db.withdraw_correction(correction_id):
+                return _json({"error": "unknown correction"}, 404)
+        review[0](db, key)
+        return {"withdrawn": correction_id}
+
     def index(_: Request) -> Response:
         return FileResponse(STATIC / "index.html", headers=NO_STORE)
 
@@ -121,6 +172,9 @@ def build_app(
         Route("/api/projects/{project_id}", endpoint(project)),
         Route("/api/changes", endpoint(changes)),
         Route("/api/export.{fmt:str}", endpoint(export)),
+        Route("/api/review", endpoint(review_list)),
+        Route("/api/review/{key}/corrections", review_submit, methods=["POST"]),
+        Route("/api/review/corrections/{correction_id:int}", endpoint(review_withdraw), methods=["DELETE"]),
     ]
     lifespan = None
     if with_mcp:

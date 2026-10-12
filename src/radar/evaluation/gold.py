@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from radar.domain.fields import Value, machine_values
 from radar.domain.models import Filing
 
 FIELDS: tuple[str, ...] = (
@@ -26,7 +27,6 @@ FIELDS: tuple[str, ...] = (
     "filed_on",
     "review_decision",
 )
-Value = str | float | None
 
 
 @dataclass(frozen=True)
@@ -39,20 +39,9 @@ class FieldGold:
 
 
 def actual_fields(filing: Filing) -> dict[str, Value]:
-    """The values `FIELDS` names, read from a stored filing (only declared powers count)."""
-    known = filing.power.status.value == "known"
-    return {
-        "developer": filing.developer,
-        "siret": filing.siret,
-        "commune": filing.location.commune,
-        "department": filing.location.department,
-        "power_mw": filing.power.mw if known else None,
-        "power_mw_min": filing.power.mw_min if known else None,
-        "energy_mwh": filing.power.mwh,
-        "substation": filing.substation,
-        "filed_on": filing.filed_on.isoformat() if filing.filed_on else None,
-        "review_decision": filing.review_decision.value,
-    }
+    """Machine values for `FIELDS` (human corrections never count as machine output)."""
+    values = machine_values(filing)
+    return {name: values.get(name) for name in FIELDS}
 
 
 def load_field_gold(path: Path) -> dict[str, FieldGold]:

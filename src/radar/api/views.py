@@ -107,3 +107,32 @@ class ChangeView(View):
     department: str | None
     summary: str = Field(description="one-line French summary for humans")
     fields: list[FieldChangeView]
+
+
+class CorrectionView(View):
+    id: int
+    field: str
+    value: str | float | None
+    note: str
+    author: str
+    created_at: str
+
+
+class ReviewItem(View):
+    """One filing as a reviewer sees it (internal review mode only: includes reviewer names)."""
+
+    key: str
+    number: str
+    title: str
+    category: str
+    machine_category: str
+    machine_method: str
+    draft_label: str | None = Field(description="unverified category label from the gold file, if any")
+    confidence: str
+    reviewed_at: str | None
+    values: dict[str, str | float | None]
+    machine_values: dict[str, str | float | None]
+    evidence: dict[str, EvidenceView]
+    documents: list[DocumentView]
+    checks: list[CheckView]
+    corrections: list[CorrectionView]

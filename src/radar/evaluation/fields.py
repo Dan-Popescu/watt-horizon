@@ -8,9 +8,10 @@ absent   nothing expected, nothing found (also correct)
 from dataclasses import dataclass, field
 from typing import Literal
 
+from radar.domain.fields import Value
 from radar.domain.models import Filing
 from radar.domain.text import fold
-from radar.evaluation.gold import FIELDS, FieldGold, Value, actual_fields
+from radar.evaluation.gold import FIELDS, FieldGold, actual_fields
 
 Outcome = Literal["correct", "wrong", "missed", "spurious", "absent"]
 

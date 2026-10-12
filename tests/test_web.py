@@ -1,12 +1,15 @@
 """Web server: JSON API, exports, token, MCP over streamable HTTP (in-process, no network)."""
 
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
 
 from radar.store.db import Database
-from radar.web.app import build_app
+from radar.web.app import STATIC, build_app
 
 pytestmark = pytest.mark.usefixtures("loaded_db")
 LOCAL = "http://127.0.0.1:8765"  # MCP only accepts localhost Host headers when bound locally
@@ -63,3 +66,15 @@ def test_mcp_over_http(loaded_db: Database) -> None:
         response = client.post("/mcp", json=init, headers=headers)
         assert response.status_code == 200, response.text
         assert "radar-raccordement" in response.text
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_page_script_is_valid_javascript(tmp_path: Path) -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.S)
+    assert scripts, "inline script expected"
+    for i, code in enumerate(scripts):
+        path = tmp_path / f"page-{i}.js"
+        path.write_text(code, encoding="utf-8")
+        result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr

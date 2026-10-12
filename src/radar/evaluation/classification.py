@@ -12,14 +12,19 @@ from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.gold import GoldLabel
 from radar.classification.rules import screen
 from radar.domain.enums import TARGET_CATEGORIES, Category, DocumentRole
-from radar.domain.models import Filing
+from radar.domain.models import Classification, Filing
 from radar.domain.privacy import PersonScrubber
 from radar.pipeline.filings import Services, classification_text, read_documents
 from radar.store.db import Database
 
 
+def machine_classification(filing: Filing) -> Classification:
+    return filing.machine.classification if filing.machine else filing.classification
+
+
 def dropped_by_screen(filing: Filing) -> bool:
-    return filing.classification.method == "rules" and filing.classification.category is Category.OTHER
+    machine = machine_classification(filing)
+    return machine.method == "rules" and machine.category is Category.OTHER
 
 
 @dataclass
@@ -41,7 +46,7 @@ class ScreeningReport:
 
 
 def screening_report(filings: list[Filing], gold: dict[str, GoldLabel]) -> ScreeningReport:
-    report = ScreeningReport(by_method=dict(Counter(f.classification.method for f in filings)))
+    report = ScreeningReport(by_method=dict(Counter(machine_classification(f).method for f in filings)))
     by_number = {f.number: f for f in filings}
     for number, label in gold.items():
         filing = by_number.get(number)

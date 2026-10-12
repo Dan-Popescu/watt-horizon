@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from radar.domain.geo import bbox_around
-from radar.domain.models import DocumentRecord, Filing, Link, Project, ProjectChange, Signal
+from radar.domain.models import Correction, DocumentRecord, Filing, Link, Project, ProjectChange, Signal
 from radar.domain.text import fold
 
 _MIGRATIONS: tuple[str, ...] = (
@@ -49,6 +49,13 @@ _MIGRATIONS: tuple[str, ...] = (
         category TEXT NOT NULL, department TEXT, data TEXT NOT NULL
     );
     CREATE INDEX project_changes_at ON project_changes(at);
+    """,
+    """
+    CREATE TABLE corrections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, filing_key TEXT NOT NULL, field TEXT NOT NULL, value TEXT,
+        note TEXT NOT NULL DEFAULT '', author TEXT NOT NULL, created_at TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX corrections_filing ON corrections(filing_key);
     """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -235,6 +242,35 @@ class Database:
             for r in self.conn.execute(sql + " ORDER BY mw DESC NULLS LAST", args)
         ]
 
+    # Human corrections (append-only; withdrawing one sets active = 0) ---------------------------------
+    def add_correction(self, c: Correction) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO corrections (filing_key, field, value, note, author, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (c.filing_key, c.field, json.dumps(c.value), c.note, c.author, c.created_at.isoformat()),
+        )
+        return int(cur.lastrowid or 0)
+
+    def withdraw_correction(self, correction_id: int) -> bool:
+        cur = self.conn.execute("UPDATE corrections SET active = 0 WHERE id = ? AND active = 1", (correction_id,))
+        return cur.rowcount > 0
+
+    def corrections(self, filing_key: str | None = None) -> list[Correction]:
+        sql, args = "SELECT * FROM corrections WHERE active = 1", cast(tuple[Any, ...], ())
+        if filing_key is not None:
+            sql, args = sql + " AND filing_key = ?", (filing_key,)
+        return [
+            Correction(
+                id=r["id"],
+                filing_key=r["filing_key"],
+                field=r["field"],
+                value=json.loads(r["value"]) if r["value"] is not None else None,
+                note=r["note"],
+                author=r["author"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in self.conn.execute(sql + " ORDER BY id", args)
+        ]
+
     # Change log -------------------------------------------------------------------------------------
     def add_changes(self, changes: Iterable[ProjectChange]) -> None:
         self.conn.executemany(
@@ -288,5 +324,5 @@ class Database:
     def counts(self) -> dict[str, int]:
         return {
             t: int(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
-            for t in ("documents", "filings", "signals", "links", "projects", "project_changes")
+            for t in ("documents", "filings", "signals", "links", "projects", "project_changes", "corrections")
         }

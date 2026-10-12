@@ -32,6 +32,7 @@ from radar.evaluation.report import metrics as eval_metrics
 from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers
+from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.run import link_and_build, process_filings
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
@@ -152,14 +153,17 @@ def cmd_run(args: argparse.Namespace, s: Settings) -> Any:
 
 def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
     """Quality report, stored and compared with the previous one. --strict: exit 2 on any regression."""
-    labels, field_gold = load_gold(s.gold_path), load_field_gold(s.field_gold_path)
     blobs = BlobStore(s.blobs_dir)
     with Database(s.db_path) as db:
         filings = db.filings()
-        if args.draft_fields:
-            drafts = draft_field_gold([f for f in filings if f.number in labels], field_gold, EXTRACTION_VERSION)
-            write_field_gold(s.field_gold_path, [*field_gold.values(), *drafts])
-            field_gold = load_field_gold(s.field_gold_path)
+        file_labels, file_fields = load_gold(s.gold_path), load_field_gold(s.field_gold_path)
+        if args.draft_fields:  # the file keeps hand-written references + unverified drafts; reviews stay in the db
+            drafts = draft_field_gold([f for f in filings if f.number in file_labels], file_fields, EXTRACTION_VERSION)
+            write_field_gold(s.field_gold_path, [*file_fields.values(), *drafts])
+            file_fields = load_field_gold(s.field_gold_path)
+        reviewed_labels, reviewed_fields = reviewed_references(filings, db.corrections())
+        labels = {**file_labels, **reviewed_labels}  # human review wins
+        field_gold = {**file_fields, **reviewed_fields}
         ocr = None
         if TesseractOcr.available():
             ocr = evaluate_ocr(TesseractOcr(), blobs, s.transcripts_dir)
@@ -214,7 +218,16 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
 
     if args.host not in {"127.0.0.1", "localhost", "::1"} and not s.api_token:
         return {"error": "Refusing to listen on a public interface without RADAR_API_TOKEN."}
-    app = build_app(s.db_path, token=s.api_token, mcp_host=args.public_host or args.host)
+    review = None
+    if args.review:
+        services = make_services(s, make_http(s))
+
+        def rebuild(db: Database, key: str) -> None:
+            process_filings(db, services, only={key})
+            link_and_build(db)
+
+        review = (rebuild, lambda: load_gold(s.gold_path))
+    app = build_app(s.db_path, token=s.api_token, mcp_host=args.public_host or args.host, review=review)
     print(f"http://{args.host}:{args.port}  (MCP: /mcp)", file=sys.stderr)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return None
@@ -307,6 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--public-host", help="host name clients use (behind a proxy); default: --host")
+    web.add_argument("--review", action="store_true", help="internal review mode: corrections and validations")
     for name, text in (
         ("link", "propose links, rebuild projects"),
         ("stats", "dataset counts, freshness, caveats"),

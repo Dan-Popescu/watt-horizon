@@ -87,6 +87,14 @@
   .diff { font-size:13px; margin-top:6px; } .diff div { display:flex; gap:6px; } .diff .l { color:var(--muted); min-width:120px; }
   .diff s { color:var(--muted); }
   details summary { cursor:pointer; list-style:none; } details[open] summary { display:none; }
+  .rv label { display:grid; grid-template-columns:130px 1fr; gap:8px; align-items:start; margin:6px 0; font-size:13px; }
+  .rv input, .rv select { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:13px; }
+  .rv .q { margin:-4px 0 6px 138px; font-size:12px; color:var(--muted); font-style:italic; }
+  .rv .machine { color:#9a5b00; font-style:normal; }
+  .rv .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  .btn { border:0; border-radius:9px; padding:6px 12px; cursor:pointer; background:var(--chip); }
+  .btn.primary { background:var(--accent); color:#fff; } .btn:disabled { opacity:.5; cursor:default; }
+  @media (max-width: 860px) { .rv label { grid-template-columns:1fr; } .rv .q { margin-left:0; } }
   pre { background:var(--chip); border-radius:10px; padding:10px; overflow:auto; font-size:12.5px; }
   .big { display:inline-block; margin-top:8px; padding:8px 14px; border-radius:10px; background:var(--accent); color:#fff; text-decoration:none; font-weight:600; }
   .empty { color:var(--muted); padding:16px; text-align:center; }
@@ -116,6 +124,9 @@
     </button>
     <button data-view="exports" title="Exports et connexion des agents" aria-label="Exports">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>
+    </button>
+    <button data-view="review" title="Relecture (mode interne)" aria-label="Relecture" id="review-btn" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     </button>
     <button data-view="about" title="Couverture et limites" aria-label="À propos">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
@@ -164,6 +175,21 @@
       </div>
     </section>
 
+    <section class="view" id="view-review">
+      <div class="page">
+        <div class="head" style="padding:0 0 12px">
+          <div><h1>Relecture</h1><div class="sub" id="review-progress"></div></div>
+          <div class="row" style="margin:0">
+            <select id="review-filter" aria-label="Filtre" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
+              <option value="todo">À relire</option><option value="all">Tous les dossiers</option></select>
+            <button class="chip" id="review-author"></button>
+          </div>
+        </div>
+        <div class="sub" style="margin-bottom:10px">Chaque correction l'emporte sur l'extraction automatique et devient une référence vérifiée pour mesurer la qualité (<code>radar eval</code>).</div>
+        <div class="grid" id="review-list" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))"></div>
+      </div>
+    </section>
+
     <section class="view" id="view-about">
       <div class="page">
         <h1 style="margin-bottom:12px">Couverture et limites</h1>
@@ -200,16 +226,17 @@ const state = { projects: [], cats: new Set(Object.keys(CATEGORIES)), dep: "", m
 
 // --- API (an optional bearer token is asked once and kept in this browser) -------------------------
 function token() { try { return localStorage.getItem("radar-token"); } catch { return null; } }
-async function api(path) {
+async function api(path, method = "GET", body = undefined) {
   const headers = token() ? { Authorization: "Bearer " + token() } : {};
-  const res = await fetch(path, { headers });
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   if (res.status === 401) {
     const t = prompt("Jeton d'accès à l'API :");
-    if (t) { try { localStorage.setItem("radar-token", t); } catch {} return api(path); }
+    if (t) { try { localStorage.setItem("radar-token", t); } catch {} return api(path, method, body); }
   }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || res.statusText);
-  return body;
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || res.statusText);
+  return payload;
 }
 
 function power(p) {
@@ -397,11 +424,105 @@ async function loadChanges() {
 }
 $("since").onchange = loadChanges;
 
+// --- Review (internal mode: radar web --review) ----------------------------------------------------
+const ALL_CATEGORIES = { ...CATEGORIES, renewable_substation: "Poste pour solaire/éolien", public_grid: "Poste public / rénovation",
+  battery_waste: "Batteries usagées (déchets)", other: "Autre" };
+const DECISIONS = { not_subject: "Non soumis à étude d'impact", subject: "Soumis à étude d'impact", pending: "En attente" };
+const REVIEW_FIELDS = [
+  ["developer", "Porteur", "text"], ["siret", "SIRET", "text"], ["commune", "Commune", "text"],
+  ["power_mw", "Puissance (MW)", "number"], ["power_mw_min", "Puissance min (MW)", "number"], ["energy_mwh", "Énergie (MWh)", "number"],
+  ["substation", "Poste", "text"], ["filed_on", "Déposé le", "date"], ["review_decision", "Décision", "select"],
+];
+const EVIDENCE_OF = { power_mw: "power", power_mw_min: "power", energy_mwh: "power" };
+let reviewItems = [];
+const str = (v) => (v === null || v === undefined ? "" : String(v));
+function author() { try { return localStorage.getItem("radar-author") || ""; } catch { return ""; } }
+function askAuthor() {
+  const a = prompt("Votre prénom (enregistré avec vos corrections, usage interne) :", author());
+  if (a) { try { localStorage.setItem("radar-author", a.trim()); } catch {} }
+  $("review-author").textContent = "Relecteur : " + (author() || "?");
+  return author();
+}
+$("review-author").onclick = askAuthor;
+$("review-filter").onchange = renderReview;
+
+async function loadReview() {
+  try { reviewItems = await api("api/review"); }
+  catch (e) { $("review-list").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
+  $("review-author").textContent = "Relecteur : " + (author() || "?");
+  renderReview();
+}
+function options(map, current) {
+  return Object.entries(map).map(([k, label]) => `<option value="${esc(k)}" ${k === current ? "selected" : ""}>${esc(label)}</option>`).join("");
+}
+function reviewCard(it) {
+  const fields = REVIEW_FIELDS.map(([name, label, type]) => {
+    const value = str(it.values[name]), machine = str(it.machine_values[name]);
+    const input = type === "select"
+      ? `<select data-f="${name}">${options(DECISIONS, value)}</select>`
+      : `<input data-f="${name}" type="${type}" ${type === "number" ? 'step="any"' : ""} value="${esc(value)}" placeholder="absent du document">`;
+    const ev = it.evidence[EVIDENCE_OF[name] || name];
+    const hint = [ev ? `« ${esc(ev.quote.slice(0, 160))} »` : "",
+      machine !== value ? `<span class="machine">machine : ${esc(machine || "—")}</span>` : ""].filter(Boolean).join(" · ");
+    return `<label>${label}${input}</label>${hint ? `<div class="q">${hint}</div>` : ""}`;
+  }).join("");
+  const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a> <span class="sub">${esc(d.read_by)}</span>`).join(" · ");
+  const alerts = it.checks.filter((c) => c.status === "alert").map((c) =>
+    `<div class="check"><span class="dot s-alert"></span><b>${esc(CHECKS[c.name] || c.name)}</b><span class="sub">${esc(c.detail)}</span></div>`).join("");
+  const history = it.corrections.map((c) => `<li>${esc(c.field)} = <b>${esc(str(c.value) || "—")}</b> <span class="sub">${esc(c.author)}, ${esc(c.created_at.slice(0, 10))}</span> <button class="btn" data-undo="${c.id}">annuler</button></li>`).join("");
+  return `<div class="tile rv" data-key="${esc(it.key)}">
+    <div class="row" style="margin:0 0 4px"><b>${esc(it.number)}</b><span class="tag ${esc(it.confidence)}">${CONFIDENCE[it.confidence] || esc(it.confidence)}</span>
+      ${it.reviewed_at ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}</div>
+    <div class="sub">${esc(it.title)}</div>
+    <div class="sub" style="margin:4px 0">${docs}</div>
+    <label>Catégorie<select data-f="category">${ALL_CATEGORIES[it.category] ? "" : `<option value="${esc(it.category)}" selected>— à choisir —</option>`}${options(ALL_CATEGORIES, it.category)}</select></label>
+    <div class="q"><span class="machine">machine : ${esc(ALL_CATEGORIES[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · étiquette provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>
+    ${fields}${alerts}
+    <label>Note<input data-note placeholder="ce qui justifie la correction (facultatif)"></label>
+    <div class="actions"><button class="btn primary" data-act="save">Enregistrer et valider</button><button class="btn" data-act="ok">Tout est juste</button><span class="sub" data-msg></span></div>
+    ${history ? `<ul class="plain sub" style="margin-top:8px">${history}</ul>` : ""}
+  </div>`;
+}
+function renderReview() {
+  const todo = $("review-filter").value === "todo";
+  const rows = reviewItems.filter((it) => !todo || !it.reviewed_at);
+  const done = reviewItems.filter((it) => it.reviewed_at).length;
+  $("review-progress").textContent = `${done} / ${reviewItems.length} dossiers relus`;
+  $("review-list").innerHTML = rows.map(reviewCard).join("") || '<div class="empty">Tout est relu.</div>';
+  document.querySelectorAll("#review-list [data-key]").forEach((card) => {
+    card.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => submitReview(card, b.dataset.act === "save"));
+    card.querySelectorAll("[data-undo]").forEach((b) => b.onclick = async () => {
+      try { await api("api/review/corrections/" + b.dataset.undo, "DELETE"); await loadReview(); await reloadProjects(); }
+      catch (e) { card.querySelector("[data-msg]").textContent = e.message; }
+    });
+  });
+}
+async function submitReview(card, withChanges) {
+  const who = author() || askAuthor();
+  if (!who) return;
+  const it = reviewItems.find((x) => x.key === card.dataset.key);
+  const changes = {};
+  if (withChanges) card.querySelectorAll("[data-f]").forEach((el) => {
+    const name = el.dataset.f, value = el.value.trim();
+    if (value !== str(it.values[name])) changes[name] = value === "" ? null : value;
+  });
+  const msg = card.querySelector("[data-msg]");
+  card.querySelectorAll("button").forEach((b) => b.disabled = true);
+  msg.textContent = "Enregistrement…";
+  try {
+    await api("api/review/" + encodeURIComponent(it.key) + "/corrections", "POST",
+      { author: who, changes, note: card.querySelector("[data-note]").value, validate: true });
+    await loadReview(); await reloadProjects();
+  } catch (e) { msg.textContent = e.message; card.querySelectorAll("button").forEach((b) => b.disabled = false); }
+}
+async function reloadProjects() { state.projects = await api("api/projects"); refresh(); }
+
 function show(view) {
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "view-" + view));
   document.querySelectorAll(".rail [data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
   if (view === "map") map.resize();
   if (view === "changes") loadChanges();
+  if (view === "review") loadReview();
 }
 document.querySelectorAll(".rail [data-view]").forEach((b) => b.onclick = () => show(b.dataset.view));
 
@@ -422,6 +543,7 @@ async function init() {
     ["region-fill", "region-line"].forEach((id) => map.getLayer(id) && map.setFilter(id, inRegion));
     $("dep").innerHTML += deps.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if (recent.length) { $("badge").textContent = recent.length; $("badge").hidden = false; }
+    api("api/review").then(() => { $("review-btn").hidden = false; }).catch(() => {});
     refresh();
     const deepLink = new URLSearchParams(location.hash.slice(1)).get("p");  // links from alert e-mails: #p=<id>
     if (deepLink) select(deepLink);

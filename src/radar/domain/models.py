@@ -80,6 +80,11 @@ class DocumentRecord(Model):
     scanned_pages: tuple[int, ...] = ()
 
 
+class MachineOutput(Model):
+    classification: Classification
+    values: dict[str, str | float | None]  # see pipeline.corrections.field_values
+
+
 class Filing(Model):
     """One administrative filing (e.g. a case-by-case request and its decision), possibly several documents."""
 
@@ -104,11 +109,25 @@ class Filing(Model):
     checks: tuple[Check, ...] = ()
     confidence: Confidence = Confidence.REVIEW
     evidence: dict[str, Evidence] = Field(default_factory=dict)
-    unread_scans: tuple[str, ...] = ()
+    unread_scans: tuple[str, ...] = ()  # document ids with scanned pages and no OCR text
     reading: dict[str, str] = Field(default_factory=dict)  # document id -> how it was read (text layer, OCR engine)
-    versions: dict[str, str] = Field(
-        default_factory=dict
-    )  # extraction, classifier, ocr: for regression tracking  # document ids with scanned pages and no OCR text
+    versions: dict[str, str] = Field(default_factory=dict)  # extraction / classification / ocr versions
+    # What the machine produced before human corrections: evaluation always measures this, never the corrections.
+    machine: MachineOutput | None = None
+    reviewed_at: datetime | None = None  # last human validation or correction
+
+
+class Correction(Model):
+    """A human decision on one field of a filing. The latest active correction per field wins at every rebuild.
+    `field` = "validated" means: every current value was checked and is right."""
+
+    id: int | None = None
+    filing_key: str
+    field: str
+    value: str | float | None  # None = absent from the documents
+    note: str = ""
+    author: str  # internal only: never exposed through the API or MCP
+    created_at: datetime
 
 
 class Signal(Model):
