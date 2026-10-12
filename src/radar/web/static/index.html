@@ -87,7 +87,8 @@
   .k-new { background:var(--ok); } .k-changed { background:var(--accent); } .k-removed { background:var(--unknown); }
   .diff { font-size:15px; margin-top:6px; } .diff div { display:flex; gap:6px; } .diff .l { color:var(--muted); min-width:120px; }
   .diff s { color:var(--muted); }
-  details summary { cursor:pointer; list-style:none; } details[open] summary { display:none; }
+  details summary { cursor:pointer; list-style:none; } details summary::-webkit-details-marker { display:none; }
+  details.more[open] summary { display:none; }
   .page.wide { max-width:none; }
   .rv-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(720px,100%),1fr)); gap:14px; }
   .rv-head { display:flex; justify-content:space-between; align-items:center; gap:8px 16px; flex-wrap:wrap; }
@@ -151,6 +152,115 @@
   .lk-side { background:var(--chip); border-radius:11px; padding:9px 12px; font-size:15px; min-width:0; }
   .lk-side b { font-size:16px; } .lk-side div { overflow-wrap:anywhere; }
   @media (max-width:640px) { .lk-pair { grid-template-columns:1fr; } }
+
+  /* --- Calm reading pages: one primary action per screen, details on demand ------------------------ */
+  .btn.ghost { background:transparent; border:1px solid var(--line); }
+  .btn.small { padding:2px 9px; font-size:14px !important; }
+  .seg { display:inline-flex; background:var(--chip); border-radius:11px; padding:3px; gap:2px; }
+  .seg button { border:0; background:transparent; border-radius:9px; padding:5px 14px; cursor:pointer; color:var(--muted); font-size:16px; }
+  .seg button.on { background:var(--panel); color:var(--ink); box-shadow:0 1px 3px rgba(0,0,0,.1); font-weight:600; }
+  .menu { position:relative; }
+  .menu-box { position:absolute; right:0; top:calc(100% + 6px); z-index:20; background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:14px; display:flex; flex-direction:column; gap:12px; min-width:300px; font-size:16px; }
+  .menu-box label { display:flex; gap:8px; align-items:center; justify-content:space-between; }
+  .menu-box select { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:4px 8px; max-width:190px; }
+  .clamp1 { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .clamp3 { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .eyebrow { font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin:22px 0 8px; }
+
+  /* Project detail (map panel) */
+  .split.detail { grid-template-columns:1fr 500px; }
+  .detail h2 { font-size:21px; margin:6px 0 2px; }
+  .status-line { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:12px 0 4px; font-size:15.5px; }
+  .facts.f3 { grid-template-columns:repeat(3,minmax(0,1fr)); margin:14px 0 8px; }
+  button.fact { text-align:left; border:1px solid transparent; font:inherit; color:inherit; cursor:default; min-width:0; }
+  button.fact b { display:block; overflow-wrap:anywhere; }
+  button.fact.has-ev { cursor:pointer; } button.fact.has-ev:hover, button.fact.on { border-color:var(--accent); }
+  .fact i { display:block; font-style:normal; font-size:13px; color:var(--accent); margin-top:2px; }
+  .quote { background:var(--chip); border-radius:11px; padding:10px 12px; font-size:15px; margin:0 0 10px; }
+  .quote q { font-style:italic; quotes:"« " " »"; display:block; }
+  .quote .sub { font-size:14px; margin-top:5px; }
+  .checkline { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:15px; color:var(--muted); }
+  .checkline span { display:inline-flex; align-items:center; gap:5px; }
+  .doclist { list-style:none; padding:0; margin:4px 0; } .doclist li { padding:7px 0; border-bottom:1px solid var(--line); display:flex; gap:10px; justify-content:space-between; align-items:baseline; }
+  .doclist li:last-child { border-bottom:0; }
+  .acc-mini > summary { color:var(--accent); font-size:15px; padding:4px 0; }
+
+  /* Review: queue | dossier | source */
+  .rv-top { display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .rv-tools { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .rv-tools > select { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:5px 9px; }
+  .rv-layout { display:grid; grid-template-columns:250px minmax(0,1fr); gap:16px; align-items:start; }
+  .rv-queue { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:6px; max-height:calc(100vh - 120px); overflow:auto; position:sticky; top:0; }
+  .q-item { display:block; width:100%; text-align:left; border:0; background:transparent; border-radius:10px; padding:8px 10px; cursor:pointer; }
+  .q-item:hover { background:var(--bg); } .q-item.on { background:var(--chip); box-shadow:inset 3px 0 0 var(--accent); }
+  .q-item.done { opacity:.5; }
+  .page .q-item .sub { font-size:14px; }
+  .rv-main { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); gap:16px; align-items:start; }
+  .rv-card { background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); }
+  .rv-card-head { padding:14px 16px 12px; border-bottom:1px solid var(--line); }
+  .rv-reasons { margin:8px 0 0; padding:0 0 0 18px; font-size:15px; color:#9a5b00; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rv-reasons { color:#f3b860; } }
+  .fx { display:grid; grid-template-columns:128px minmax(0,1fr) auto; gap:10px; align-items:center; padding:9px 16px; border-bottom:1px solid var(--line); cursor:pointer; min-height:46px; }
+  .fx:hover { background:var(--bg); } .fx.focus { background:var(--chip); box-shadow:inset 3px 0 0 var(--accent); }
+  .fx-l { color:var(--muted); font-size:15px; }
+  .fx-v { font-weight:600; overflow-wrap:anywhere; } .fx-v .none { color:var(--muted); font-weight:400; font-style:italic; }
+  .fx-v s { color:var(--muted); font-weight:400; margin-left:8px; font-size:15px; }
+  .fx.edited .fx-v { color:var(--accent); }
+  .fx-c { display:flex; gap:8px; align-items:center; }
+  .fx input, .fx select { width:100%; background:var(--bg); border:1px solid var(--accent); border-radius:8px; padding:5px 8px; font-size:16px; font-weight:400; }
+  .cdot { width:10px; height:10px; border-radius:50%; display:inline-block; flex:none; }
+  .c-low { background:var(--alert); } .c-mid { background:#e0a100; } .c-high { background:var(--ok); }
+  details.sure > summary { padding:10px 16px; color:var(--muted); font-size:15px; border-bottom:1px solid var(--line); }
+  details.sure > summary:hover { color:var(--ink); }
+  .rv-why { display:grid; grid-template-columns:1fr 1.4fr; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--bg); }
+  .rv-why label { display:flex; flex-direction:column; gap:3px; font-size:14.5px; color:var(--muted); }
+  .rv-why select, .rv-why input { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:5px 8px; font-size:16px; color:var(--ink); }
+  .rv-foot { padding:12px 16px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .kbd { font-size:13.5px; color:var(--muted); margin-left:auto; }
+  kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:0 5px; font:12.5px/1.4 ui-monospace,monospace; background:var(--panel); }
+  .rv-doc { position:sticky; top:0; max-height:calc(100vh - 120px); overflow:auto; background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); }
+  .rv-doc .bar { position:sticky; top:0; background:var(--panel); padding:8px 12px; border-bottom:1px solid var(--line); font-size:15px; display:flex; gap:10px; align-items:center; z-index:1; }
+  .rv-doc img { display:block; width:100%; }
+  .rv-doc .ph { padding:48px 24px; color:var(--muted); text-align:center; background:var(--panel); }
+  .done-state { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:48px 24px; text-align:center; }
+  .done-state b { display:block; font-size:22px; margin-bottom:6px; }
+  @media (max-width:1180px) { .rv-main { grid-template-columns:minmax(0,1fr); } .rv-doc { position:static; max-height:none; } }
+  @media (max-width:860px) { .rv-layout { grid-template-columns:minmax(0,1fr); } .rv-queue { position:static; max-height:200px; } .split.detail { grid-template-columns:minmax(0,1fr); } .facts.f3 { grid-template-columns:1fr 1fr; } }
+
+  /* Quality: status first, then what to do, details folded */
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 16px; border-top:4px solid var(--line); text-align:left; font:inherit; color:inherit; }
+  button.stat { cursor:pointer; } button.stat:hover { border-color:var(--accent); }
+  .stat.good { border-top-color:var(--ok); } .stat.warn { border-top-color:#e0a100; } .stat.bad { border-top-color:var(--alert); }
+  .stat b { display:block; font-size:28px; line-height:1.2; } .stat span { color:var(--muted); font-size:15.5px; }
+  .todo { background:var(--panel); border:1px solid var(--line); border-radius:14px; list-style:none; margin:0; padding:0; }
+  .todo li { display:flex; gap:12px; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--line); }
+  .todo li:last-child { border-bottom:0; }
+  .todo code { background:var(--chip); border-radius:6px; padding:1px 6px; font-size:15px; }
+  details.acc { background:var(--panel); border:1px solid var(--line); border-radius:14px; margin-bottom:10px; }
+  details.acc > summary { padding:13px 16px; font-weight:600; display:flex; justify-content:space-between; gap:12px; }
+  details.acc > summary .sub { font-weight:400; }
+  details.acc > summary > span:first-child { flex:1; }
+  details.acc > summary::after { content:"▾"; color:var(--muted); } details.acc[open] > summary::after { content:"▴"; }
+  details.acc > div { padding:0 16px 14px; overflow:auto; }
+  table.t { border-collapse:collapse; width:100%; font-size:16px; }
+  table.t th, table.t td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table.t th { color:var(--muted); font-weight:500; font-size:14.5px; }
+  table.t tr:last-child td { border-bottom:0; }
+
+  /* Changes: a feed, newest first */
+  .feed { background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+  .feed-day { padding:12px 16px 6px; color:var(--muted); font-size:14px; text-transform:uppercase; letter-spacing:.05em; background:var(--bg); border-bottom:1px solid var(--line); }
+  .feed-row { display:grid; grid-template-columns:90px minmax(0,1fr) auto; gap:14px; align-items:baseline; padding:12px 16px; border-bottom:1px solid var(--line); }
+  .feed-row .kind { justify-self:start; }
+  .feed-row.clk { cursor:pointer; } .feed-row.clk:hover { background:var(--bg); }
+  .feed-row .diff { margin-top:2px; font-size:15.5px; color:var(--muted); }
+  .feed-row .diff b { color:var(--ink); font-weight:600; }
+
+  /* Exports */
+  .ex { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+  .ex .tile { display:flex; flex-direction:column; gap:8px; }
+  .ex .tile .big { align-self:flex-start; margin-top:auto; }
 </style>
 </head>
 <body>
@@ -190,7 +300,7 @@
         <input id="minmw" type="number" min="0" step="10" placeholder="MW min" aria-label="Puissance minimale" style="width:96px">
         <input id="q" type="search" placeholder="Commune, porteur, poste…" aria-label="Recherche">
       </div>
-      <div class="split">
+      <div class="split" id="split">
         <div class="mapbox">
           <div id="map"></div>
           <div class="legend">Taille = puissance · plein = GPS du dossier · pâle = centre de la commune</div>
@@ -201,62 +311,64 @@
 
     <section class="view" id="view-changes">
       <div class="page">
-        <div class="head" style="padding:0 0 12px">
-          <div><h1>Nouveautés</h1><div class="sub">Projets nouveaux, modifiés ou retirés à chaque mise à jour des données.</div></div>
-          <label class="sub">Depuis le <input id="since" type="date" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 8px"></label>
+        <div class="rv-top">
+          <div><h1>Nouveautés</h1><div class="sub" id="changes-sub">Projets nouveaux, modifiés ou retirés.</div></div>
+          <div class="seg" id="since-seg"><button data-days="7">7 jours</button><button data-days="30" class="on">30 jours</button><button data-days="90">3 mois</button><button data-days="365">1 an</button></div>
         </div>
-        <div class="grid" id="changes"></div>
+        <div id="changes"></div>
       </div>
     </section>
 
     <section class="view" id="view-exports">
       <div class="page">
-        <h1 style="margin-bottom:12px">Exports et agents</h1>
-        <div class="grid">
-          <div class="tile"><h2>Tableur (CSV)</h2><div class="sub">Séparateur « ; », virgule décimale : s'ouvre directement dans Excel. Suit les filtres de la carte.</div><a class="big" id="csv" href="api/export.csv">Télécharger le CSV</a></div>
-          <div class="tile"><h2>Cartographie (GeoJSON)</h2><div class="sub">Pour QGIS, ArcGIS ou une autre carte. Suit les filtres de la carte.</div><a class="big" id="geojson" href="api/export.geojson">Télécharger le GeoJSON</a></div>
-          <div class="tile"><h2>Agents IA (MCP)</h2><div class="sub">Un agent (Claude, etc.) interroge directement la base avec ces outils : <code>search_projects</code>, <code>get_project</code>, <code>zone_pressure</code>, <code>projects_near_substation</code>, <code>what_changed</code>.</div><pre id="mcp"></pre></div>
+        <h1 style="margin-bottom:4px">Exports</h1>
+        <div class="sub" style="margin-bottom:16px">Les fichiers suivent les filtres de la carte (type, département).</div>
+        <div class="ex">
+          <div class="tile"><h2>Tableur</h2><div class="sub">CSV pour Excel (« ; », virgule décimale).</div><a class="big" id="csv" href="api/export.csv">Télécharger le CSV</a></div>
+          <div class="tile"><h2>Cartographie</h2><div class="sub">GeoJSON pour QGIS, ArcGIS ou une autre carte.</div><a class="big" id="geojson" href="api/export.geojson">Télécharger le GeoJSON</a></div>
+          <div class="tile"><h2>Agent IA</h2><div class="sub">Claude ou un autre agent interroge la base directement (MCP).</div>
+            <details class="acc-mini"><summary>Voir la configuration et les outils</summary><pre id="mcp"></pre>
+              <div class="sub">Outils : <code>search_projects</code>, <code>get_project</code>, <code>zone_pressure</code>, <code>projects_near_substation</code>, <code>what_changed</code>.</div></details>
+            <button class="big" id="mcp-copy" style="border:0;cursor:pointer">Copier la configuration</button></div>
         </div>
       </div>
     </section>
 
     <section class="view" id="view-review">
       <div class="page wide">
-        <div class="head" style="padding:0 0 12px">
+        <div class="rv-top">
           <div><h1>Relecture</h1><div class="sub" id="review-progress"></div></div>
-          <div class="row" style="margin:0">
-            <select id="review-mode" aria-label="Mode" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
-              <option value="filing">Par dossier</option><option value="field">Par champ (lot, clavier)</option><option value="links">Liens entre dossiers</option></select>
-            <select id="review-field" aria-label="Champ" hidden style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px"></select>
-            <select id="review-filter" aria-label="Filtre" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
-              <option value="todo">File de relecture</option><option value="all">Tous les dossiers</option></select>
-            <select id="review-flag" aria-label="Signalement" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px"><option value="">Tous les signalements</option></select>
-            <label class="chip" title="Masquer les champs dont la confiance calibrée est élevée"><input type="checkbox" id="review-uncertain"> Champs incertains seulement</label>
-            <label class="chip" title="Saisir sans voir les valeurs de la machine : mesure non biaisée"><input type="checkbox" id="review-blind"> À l'aveugle</label>
-            <button class="chip" id="review-author"></button>
+          <div class="rv-tools">
+            <div class="seg" id="review-mode" role="tablist"><button data-mode="filing" class="on">Dossiers</button><button data-mode="field">Par champ</button><button data-mode="links">Liens</button></div>
+            <select id="review-field" aria-label="Champ" hidden></select>
+            <details class="menu" id="review-menu"><summary class="btn ghost">Options</summary>
+              <div class="menu-box">
+                <label>Afficher <select id="review-filter"><option value="todo">la file à relire</option><option value="all">tous les dossiers</option></select></label>
+                <label>Signalement <select id="review-flag"><option value="">tous</option></select></label>
+                <label title="Saisir sans voir les valeurs de la machine : mesure non biaisée de la justesse"><span>Saisie à l'aveugle</span><input type="checkbox" id="review-blind"></label>
+                <label>Relecteur <button class="btn small ghost" id="review-author"></button></label>
+              </div>
+            </details>
           </div>
         </div>
-        <div class="sub" style="margin-bottom:10px">Chaque correction l'emporte sur l'extraction automatique et devient une référence vérifiée pour mesurer la qualité (<code>radar eval</code>).</div>
         <div id="review-suggestions"></div>
-        <div class="rv-grid" id="review-list"></div>
+        <div class="rv-layout" id="review-list"></div>
         <div id="review-batch" hidden></div>
         <div class="rv-grid" id="review-links" hidden></div>
       </div>
     </section>
 
     <section class="view" id="view-quality">
-      <div class="page wide">
-        <div class="head" style="padding:0 0 12px">
-          <div><h1>Qualité</h1><div class="sub" id="quality-when">Mesures de la dernière évaluation (<code>radar eval</code>), relecture et erreurs apprises.</div></div>
-        </div>
-        <div class="grid" id="quality"></div>
+      <div class="page">
+        <div class="rv-top"><div><h1>Qualité</h1><div class="sub" id="quality-when"></div></div></div>
+        <div id="quality"></div>
       </div>
     </section>
 
     <section class="view" id="view-about">
       <div class="page">
         <h1 style="margin-bottom:12px">Couverture et limites</h1>
-        <div class="grid" id="about"></div>
+        <div id="about"></div>
       </div>
     </section>
   </main>
@@ -368,40 +480,63 @@ function renderList(rows) {
 }
 
 // --- Detail ----------------------------------------------------------------------------------
+const LOCATORS = { field: "champ du formulaire", clause: "visas de la décision", article: "article de la décision",
+  text: "texte du document", title: "intitulé", page: "page", rule: "règle adoptée", correction: "vérifié par un relecteur", "llm-extract": "lecture assistée" };
+const locatorLabel = (l) => LOCATORS[(l || "").split(":")[0]] || l;
+const frDate = (d) => (d ? new Date(d + "T00:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : "n.c.");
+function setDetailWidth(on) { $("split").classList.toggle("detail", on); setTimeout(() => map.resize(), 50); }
 async function select(id, fly = true) {
   state.selected = id;
+  setDetailWidth(true);
   $("panel").innerHTML = '<div class="empty">Chargement…</div>';
   let d;
   try { d = await api("api/projects/" + encodeURIComponent(id)); }
   catch (e) { $("panel").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
   const s = d.summary;
   if (fly && s.lat != null) map.flyTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 9.5), speed: 1.4 });
-  const evidence = d.evidence.map((e) => `<div class="ev"><div class="f">${esc(FIELDS[e.field] || e.field)}</div>
-      <q>${esc(e.quote)}</q>${e.document_url ? `<a href="${safeUrl(e.document_url)}" target="_blank" rel="noopener">document</a> · ` : ""}<span class="sub">${esc(e.locator)}</span></div>`).join("");
-  const checks = d.checks.map((c) => `<div class="check"><span class="dot s-${esc(c.status)}"></span><b>${esc(CHECKS[c.name] || c.name)}</b><span class="sub">${esc(c.detail)}</span></div>`).join("");
-  const docs = d.documents.map((x) => `<li><a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title || x.url)}</a> <span class="tag">${esc(x.role)}</span></li>`).join("");
-  const related = d.related.map((r) => `<li>${r.url ? `<a href="${safeUrl(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)} <span class="tag">${esc(r.kind)}</span><div class="sub">${esc(r.reasons.join(" ; "))}</div></li>`).join("");
+  const ev = Object.fromEntries(d.evidence.map((e) => [e.field, e]));
+  const mw = s.power_mw != null ? (s.power_status === "estimated" ? "≈ " : "") + num(s.power_mw) + " MW" : "n.c.";
+  const fact = (label, value, field) => `<button class="fact ${ev[field] ? "has-ev" : ""}" ${ev[field] ? `data-ev="${field}"` : "disabled"}>
+      <span>${label}</span><b>${esc(value)}</b>${ev[field] ? "<i>voir la source</i>" : ""}</button>`;
+  const alerts = d.checks.filter((c) => c.status === "alert");
+  const ok = d.checks.filter((c) => c.status === "ok").length;
+  const checks = `<div class="checkline"><span><span class="dot s-ok"></span>${ok} contrôle${ok > 1 ? "s" : ""} conforme${ok > 1 ? "s" : ""}</span>
+      ${alerts.map((c) => `<span><span class="dot s-alert"></span>${esc(CHECKS[c.name] || c.name)} : ${esc(c.detail)}</span>`).join("")}</div>`;
+  const docs = d.documents.map((x) => `<li><a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title || x.url)}</a><span class="tag">${esc(x.role)}</span></li>`).join("");
+  const related = d.related.map((r) => `<li><span>${r.url ? `<a href="${safeUrl(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}<div class="sub">${esc(r.reasons.join(" ; "))}</div></span><span class="tag">${esc(r.kind)}</span></li>`).join("");
+  const others = d.evidence.filter((e) => !["power", "substation", "filed_on", "commune", "lat", "developer"].includes(e.field));
   $("panel").innerHTML = `<div class="panel-head"><button class="back" id="back">← Liste</button><span class="tag" style="background:${COLORS[s.category]};color:#fff">${esc(CATEGORIES[s.category])}</span></div>
     <div class="detail">
       <h2>${esc(s.name)}</h2>
-      <div class="m">${esc(s.developer || "porteur inconnu")}${d.siret ? " · SIRET " + esc(d.siret) : ""}</div>
-      <div class="facts">
-        <div class="fact"><span>Puissance</span><b>${s.power_mw != null ? (s.power_status === "estimated" ? "≈ " : "") + num(s.power_mw) + " MW" : "n.c."}</b></div>
-        <div class="fact"><span>Énergie</span><b>${s.energy_mwh != null ? num(s.energy_mwh) + " MWh" : "n.c."}</b></div>
-        <div class="fact"><span>Poste</span><b>${esc(s.substation || "n.c.")}</b></div>
-        <div class="fact"><span>Déposé le</span><b>${esc(s.first_seen || "n.c.")}</b></div>
+      <div class="sub">${esc(s.developer || "porteur inconnu")}${d.siret ? " · SIRET " + esc(d.siret) : ""}</div>
+      <div class="status-line"><b>${esc(s.status)}</b><span class="tag ${esc(s.confidence)}">${CONFIDENCE[s.confidence] || esc(s.confidence)}</span></div>
+      <div class="facts f3">
+        ${fact("Puissance", mw, "power")}
+        ${fact("Énergie", s.energy_mwh != null ? num(s.energy_mwh) + " MWh" : "n.c.", "power")}
+        ${fact("Poste visé", s.substation || "n.c.", "substation")}
+        ${fact("Déposé le", frDate(s.first_seen), "filed_on")}
+        ${fact("Commune", `${s.commune || "n.c."}${s.department ? " (" + s.department + ")" : ""}`, "commune")}
+        ${fact("Position", s.location_precision === "exact" ? "GPS du dossier" : "centre de la commune", "lat")}
       </div>
-      <div class="sub">${esc(s.status)} · ${esc(s.commune || "")} (${esc(s.department || "?")}) · position : ${s.location_precision === "exact" ? "GPS du dossier" : "centre de la commune"} · confiance : ${CONFIDENCE[s.confidence] || esc(s.confidence)}</div>
-      ${d.power_basis && s.power_status === "estimated" ? `<div class="sub">Estimation : ${esc(d.power_basis)}</div>` : ""}
-      ${d.description ? `<div class="section"><h2>Description</h2>${d.description.length > 280
-        ? `<details><summary>${esc(d.description.slice(0, 280))}… <a>Lire la suite</a></summary>${esc(d.description)}</details>`
-        : `<div>${esc(d.description)}</div>`}</div>` : ""}
-      <div class="section"><h2>Preuves (citations exactes)</h2>${evidence || '<div class="sub">Aucune</div>'}</div>
-      <div class="section"><h2>Contrôles automatiques</h2>${checks}</div>
-      <div class="section"><h2>Documents</h2><ul class="plain">${docs}</ul></div>
-      ${related ? `<div class="section"><h2>Signaux liés (à confirmer)</h2><ul class="plain">${related}</ul></div>` : ""}
+      <div class="quote" id="fact-quote" hidden></div>
+      ${d.power_basis && s.power_status === "estimated" ? `<div class="sub">Puissance estimée : ${esc(d.power_basis)}</div>` : ""}
+      ${d.description ? `<div class="eyebrow">Projet</div><div class="clamp3" id="desc">${esc(d.description)}</div>${d.description.length > 240 ? '<button class="see" id="desc-more">lire la suite</button>' : ""}` : ""}
+      <div class="eyebrow">Contrôles automatiques</div>${checks}
+      <div class="eyebrow">Documents</div><ul class="doclist">${docs}</ul>
+      ${related ? `<div class="eyebrow">Signaux liés, à confirmer</div><ul class="doclist">${related}</ul>` : ""}
+      ${others.length ? `<details class="acc-mini" style="margin-top:14px"><summary>Autres citations (${others.length})</summary>${others.map((e) =>
+        `<div class="quote"><div class="sub" style="margin:0 0 4px">${esc(FIELDS[e.field] || e.field)}</div><q>${esc(e.quote)}</q><div class="sub">${esc(locatorLabel(e.locator))}${e.document_url ? ` · <a href="${safeUrl(e.document_url)}" target="_blank" rel="noopener">document</a>` : ""}</div></div>`).join("")}</details>` : ""}
     </div>`;
-  $("back").onclick = () => { state.selected = null; renderList(filtered()); };
+  $("back").onclick = () => { state.selected = null; setDetailWidth(false); renderList(filtered()); };
+  $("desc-more")?.addEventListener("click", (e) => { $("desc").classList.remove("clamp3"); e.target.remove(); });
+  $("panel").querySelectorAll("[data-ev]").forEach((b) => b.onclick = () => {
+    const box = $("fact-quote"), e = ev[b.dataset.ev], again = b.classList.contains("on");
+    $("panel").querySelectorAll("[data-ev]").forEach((x) => x.classList.remove("on"));
+    if (again) { box.hidden = true; return; }
+    b.classList.add("on");
+    box.innerHTML = `<q>${esc(e.quote)}</q><div class="sub">${esc(locatorLabel(e.locator))}${e.document_url ? ` · <a href="${safeUrl(e.document_url)}" target="_blank" rel="noopener">ouvrir le document</a>` : ""}</div>`;
+    box.hidden = false;
+  });
 }
 
 // --- Map -------------------------------------------------------------------------------------
@@ -474,22 +609,34 @@ function refresh(refit = false) {
 }
 
 // --- Changes, exports, about -------------------------------------------------------------------
+let sinceDays = 30;
 async function loadChanges() {
-  const since = $("since").value || isoDaysAgo(30);
+  const since = isoDaysAgo(sinceDays);
   let rows;
   try { rows = await api("api/changes?since=" + encodeURIComponent(since)); }
   catch (e) { $("changes").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
-  $("changes").innerHTML = rows.map((c) => `<div class="tile ${c.kind === "removed" ? "" : "clk"}" data-id="${esc(c.project_id)}" data-kind="${esc(c.kind)}" style="cursor:${c.kind === "removed" ? "default" : "pointer"}">
-      <div class="row" style="margin:0 0 6px"><span class="kind k-${esc(c.kind)}">${CHANGE_KINDS[c.kind] || esc(c.kind)}</span><span class="sub">${esc(c.at.slice(0, 16).replace("T", " "))} UTC</span></div>
-      <b>${esc(c.name)}</b> <span class="sub">${esc(c.department || "")}</span>
-      ${c.fields.length ? `<div class="diff">${c.fields.map((f) => `<div><span class="l">${esc(f.label)}</span><span><s>${esc(f.before ?? "—")}</s> → <b>${esc(f.after ?? "—")}</b></span></div>`).join("")}</div>` : ""}
-    </div>`).join("") || '<div class="empty">Aucun changement sur la période. Le journal démarre à la première mise à jour suivie.</div>';
-  document.querySelectorAll("#changes [data-id]").forEach((el) => el.onclick = () => {
-    if (el.dataset.kind === "removed") return;
-    show("map"); select(el.dataset.id);
-  });
+  const counts = { new: 0, changed: 0, removed: 0 };
+  rows.forEach((c) => { counts[c.kind] = (counts[c.kind] || 0) + 1; });
+  $("changes-sub").textContent = rows.length
+    ? `${counts.new} nouveau${counts.new > 1 ? "x" : ""} · ${counts.changed} modifié${counts.changed > 1 ? "s" : ""} · ${counts.removed} retiré${counts.removed > 1 ? "s" : ""}`
+    : "Projets nouveaux, modifiés ou retirés.";
+  const value = (f, v) => (v == null ? "—" : f.field === "confidence" ? CONFIDENCE[v] || v : v);
+  const byDay = {};
+  rows.forEach((c) => { (byDay[c.at.slice(0, 10)] ||= []).push(c); });
+  $("changes").innerHTML = rows.length ? `<div class="feed">${Object.entries(byDay).map(([day, list]) => `<div class="feed-day">${esc(frDate(day))}</div>${list.map((c) => `
+      <div class="feed-row ${c.kind === "removed" ? "" : "clk"}" data-id="${esc(c.project_id)}" data-kind="${esc(c.kind)}">
+        <span class="kind k-${esc(c.kind)}">${CHANGE_KINDS[c.kind] || esc(c.kind)}</span>
+        <div><b>${esc(c.name)}</b>${c.fields.length ? `<div class="diff">${c.fields.map((f) => `${esc(f.label)} : ${esc(value(f, f.before))} → <b>${esc(value(f, f.after))}</b>`).join(" · ")}</div>` : ""}</div>
+        <span class="sub">${c.department ? "dép. " + esc(c.department) : ""}</span>
+      </div>`).join("")}`).join("")}</div>`
+    : '<div class="done-state"><b>Rien de nouveau sur la période</b><div class="sub">Le journal démarre à la première mise à jour suivie.</div></div>';
+  document.querySelectorAll("#changes .feed-row.clk").forEach((el) => el.onclick = () => { show("map"); select(el.dataset.id); });
 }
-$("since").onchange = loadChanges;
+document.querySelectorAll("#since-seg [data-days]").forEach((b) => b.onclick = () => {
+  sinceDays = +b.dataset.days;
+  document.querySelectorAll("#since-seg button").forEach((x) => x.classList.toggle("on", x === b));
+  loadChanges();
+});
 
 // --- Review (internal mode: radar web --review) ----------------------------------------------------
 const ALL_CATEGORIES = { ...CATEGORIES, renewable_substation: "Poste pour solaire/éolien", public_grid: "Poste public / rénovation",
@@ -508,14 +655,14 @@ function author() { try { return localStorage.getItem("radar-author") || ""; } c
 function askAuthor() {
   const a = prompt("Votre prénom (enregistré avec vos corrections, usage interne) :", author());
   if (a) { try { localStorage.setItem("radar-author", a.trim()); } catch {} }
-  $("review-author").textContent = "Relecteur : " + (author() || "?");
+  $("review-author").textContent = author() || "à définir";
   return author();
 }
 $("review-author").onclick = askAuthor;
 $("review-filter").onchange = renderReview;
 $("review-flag").onchange = renderReview;
 $("review-blind").onchange = renderReview;
-$("review-uncertain").onchange = renderReview;
+document.addEventListener("click", (e) => { const m = $("review-menu"); if (m.open && !m.contains(e.target)) m.open = false; });
 const CONF_OF = { power_mw_min: "power_mw" };  // fields sharing one confidence
 function confBadge(it, name) {
   const key = CONF_OF[name] || name, c = it.field_confidence[key];
@@ -539,17 +686,18 @@ let reviewSuggestions = [];
 async function loadReview() {
   try { [reviewItems, reviewSuggestions] = await Promise.all([api("api/review"), api("api/review/suggestions")]); }
   catch (e) { $("review-list").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
-  $("review-author").textContent = "Relecteur : " + (author() || "?");
+  $("review-author").textContent = author() || "à définir";
   renderSuggestions();
   renderReview();
 }
 
 // Propagation: the same wrong machine value on other unreviewed filings, fixed in one click.
 function renderSuggestions() {
-  $("review-suggestions").innerHTML = reviewSuggestions.map((s, i) => `<div class="sugg">
-      <div><b>${esc(s.field)}</b> : « ${esc(str(s.wrong))} » → « <b>${esc(str(s.right))}</b> » <span class="sub">(corrigé sur ${esc(s.learned_from)})</span>
-      <div class="sub">même valeur de la machine sur ${esc(s.numbers.length)} autre(s) dossier(s) : ${esc(s.numbers.join(", "))}</div></div>
-      <button class="btn primary" data-sugg="${i}">Appliquer à ${esc(s.numbers.length)} dossier(s)</button></div>`).join("");
+  const n = reviewSuggestions.length;
+  $("review-suggestions").innerHTML = n ? `<details class="acc"><summary><span>${n} correction${n > 1 ? "s" : ""} à reporter sur d'autres dossiers qui ont la même erreur</span></summary><div>${reviewSuggestions.map((s, i) => `<div class="sugg">
+      <div style="flex:1"><b>${esc(s.field)}</b> : « ${esc(str(s.wrong))} » → « <b>${esc(str(s.right))}</b> » <span class="sub">(corrigé sur ${esc(s.learned_from)})</span>
+      <div class="sub">dossiers : ${esc(s.numbers.join(", "))}</div></div>
+      <button class="btn primary" data-sugg="${i}">Appliquer à ${esc(s.numbers.length)}</button></div>`).join("")}</div></details>` : "";
   document.querySelectorAll("[data-sugg]").forEach((b) => b.onclick = async () => {
     const who = author() || askAuthor();
     if (!who) return;
@@ -565,7 +713,13 @@ function renderSuggestions() {
 // Batch mode: one field, many filings, lowest confidence first; keyboard: ↑/↓ or j/k, Enter = confirm or save.
 const BATCH_FIELDS = [["category", "Catégorie"], ...REVIEW_FIELDS.map(([n, l]) => [n, l])];
 $("review-field").innerHTML = BATCH_FIELDS.map(([n, l]) => `<option value="${n}">${esc(l)}</option>`).join("");
-$("review-mode").onchange = () => { $("review-field").hidden = $("review-mode").value !== "field"; renderReview(); };
+let reviewMode = "filing";
+document.querySelectorAll("#review-mode [data-mode]").forEach((b) => b.onclick = () => {
+  reviewMode = b.dataset.mode;
+  document.querySelectorAll("#review-mode [data-mode]").forEach((x) => x.classList.toggle("on", x === b));
+  $("review-field").hidden = reviewMode !== "field";
+  renderReview();
+});
 $("review-field").onchange = renderReview;
 let batchFocus = 0;
 function batchRows(rows) {
@@ -651,74 +805,233 @@ document.addEventListener("click", (e) => {
 function options(map, current) {
   return Object.entries(map).map(([k, label]) => `<option value="${esc(k)}" ${k === current ? "selected" : ""}>${esc(label)}</option>`).join("");
 }
-function reviewCard(it) {
-  const blind = blindFor(it);  // blind: empty inputs, no machine value, no quote (unbiased measurement)
-  const onlyUncertain = !blind && $("review-uncertain").checked;
-  const fields = REVIEW_FIELDS.filter(([name]) => !onlyUncertain || !isSure(it, name)).map(([name, label, type]) => {
-    const value = blind ? "" : str(it.values[name]), machine = str(it.machine_values[name]);
-    const input = type === "select"
-      ? `<select data-f="${name}">${blind ? '<option value="" selected>— à lire dans le document —</option>' : ""}${options(DECISIONS, value)}</select>`
-      : `<input data-f="${name}" type="${type}" ${type === "number" ? 'step="any"' : ""} value="${esc(value)}" placeholder="absent du document">`;
-    const ev = it.evidence[EVIDENCE_OF[name] || name];
-    const hint = blind ? "" : [ev ? `« ${esc(ev.quote.slice(0, 160))} » ${seeButton(it, EVIDENCE_OF[name] || name, label)}` : "",
-      machine !== value ? `<span class="machine">machine : ${esc(machine || "—")}</span>` : ""].filter(Boolean).join(" · ");
-    return `<label class="fld"><span>${label} ${blind ? "" : confBadge(it, name)}</span>${input}${hint ? `<div class="q" title="${esc(ev ? ev.quote : "")}">${hint}</div>` : ""}</label>`;
-  }).join("");
-  const reasons = blind ? "" : it.reasons.map((r) => `<span class="tag review" title="${esc(r)}">${esc(r.length > 70 ? r.slice(0, 70) + "…" : r)}</span>`).join(" ");
-  const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a> <span class="sub">${esc(d.read_by)}</span>`).join(" · ");
-  const alerts = it.checks.filter((c) => c.status === "alert").map((c) =>
-    `<div class="check"><span class="dot s-alert"></span><b>${esc(CHECKS[c.name] || c.name)}</b><span class="sub">${esc(c.detail)}</span></div>`).join("");
-  const history = it.corrections.filter((c) => c.field !== "validated").map((c) => `<li>${esc(c.field)} = <b>${esc(str(c.value) || "—")}</b> <span class="sub">${esc(c.author)}, ${esc(c.created_at.slice(0, 10))}${c.cause ? ", " + esc(CAUSES[c.cause] || c.cause) : ""}${c.blind ? ", à l'aveugle" : ""}</span> <button class="btn" data-undo="${c.id}">annuler</button></li>`).join("");
-  const category = blind || !ALL_CATEGORIES[it.category] ? `<option value="" selected>— à choisir —</option>` : "";
-  const machineCategory = blind ? "" : `<div class="q"><span class="machine">machine : ${esc(CATEGORY_LABELS[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>`;
-  return `<div class="tile rv" data-key="${esc(it.key)}">
-    <div class="rv-head">
-      <div class="rv-id"><b>${esc(it.number)}</b><span class="tag ${esc(it.confidence)}">${CONFIDENCE[it.confidence] || esc(it.confidence)}</span>
-        ${it.reviewed_at && !it.second_review ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}
-        ${it.second_review ? (it.corrections.some((c) => c.author === author())
-          ? `<span class="tag review">2e relecture : à faire par un autre relecteur</span>`
-          : `<span class="tag review">2e relecture, à l'aveugle</span>`) : ""}
-        ${it.priority > 0 ? `<span class="tag" title="priorité de relecture">priorité ${esc(it.priority.toFixed(1))}</span>` : ""}</div>
-      <div class="sub rv-docs">${docs}</div>
+// Filing review, one at a time: queue | the filing's fields (uncertain first) | the source page of the focused field.
+const RV_FIELDS = [["category", "Catégorie", "category"], ...REVIEW_FIELDS];
+const UNITS = { power_mw: " MW", power_mw_min: " MW", energy_mwh: " MWh" };
+let rvKey = null, rvPos = 0, rvField = 0, rvDraft = {}, rvEditing = null, rvOrder = [], rvRows = [], rvSureOpen = false;
+const rvItem = () => rvRows.find((x) => x.key === rvKey);
+function shortCat(c) { return (CATEGORY_LABELS[c] || c).replace(" (pages illisibles)", ""); }
+function fmt(name, v) {
+  if (v === "" || v == null) return '<span class="none">absent du document</span>';
+  if (name === "category") return esc(CATEGORY_LABELS[v] || v);
+  if (name === "review_decision") return esc(DECISIONS[v] || v);
+  if (name === "filed_on") return esc(frDate(v));
+  return esc(UNITS[name] ? num(v) + UNITS[name] : v);
+}
+function rvFields(it) {
+  return RV_FIELDS.map(([name, label, type]) => {
+    const current = name === "category" ? it.category : str(it.values[name]);
+    const c = it.field_confidence[CONF_OF[name] || name];
+    return { name, label, type, current, value: name in rvDraft ? rvDraft[name] : current, c,
+      machine: name === "category" ? it.machine_category : str(it.machine_values[name]),
+      ev: it.evidence[EVIDENCE_OF[name] || name], sure: name !== "category" && isSure(it, name) && !(name in rvDraft) };
+  });
+}
+function rvInput(f, blind) {
+  if (f.type === "category" || f.type === "select") {
+    const map = f.type === "category" ? ALL_CATEGORIES : DECISIONS;
+    return `<select data-in>${blind || !map[f.value] ? '<option value="" selected>— à choisir —</option>' : ""}${options(map, blind ? "" : f.value)}</select>`;
+  }
+  return `<input data-in type="${f.type}" ${f.type === "number" ? 'step="any"' : ""} value="${blind ? "" : esc(f.value)}" placeholder="absent du document">`;
+}
+function rvRow(f, idx, blind) {
+  const editing = blind || rvEditing === f.name, focus = idx === rvField;
+  const was = f.name in rvDraft ? ` <s>${fmt(f.name, f.current)}</s>`
+    : !blind && f.machine !== f.current ? ` <s title="valeur proposée par la machine">${fmt(f.name, f.machine)}</s>` : "";
+  const conf = blind || f.c === undefined ? "" : `<span class="cdot c-${f.c >= 0.9 ? "high" : f.c >= 0.6 ? "mid" : "low"}" title="confiance ${pct(f.c)}"></span>`;
+  const edit = focus && !editing && !blind ? '<button class="btn small ghost" data-edit>modifier</button>' : "";
+  return `<div class="fx ${focus ? "focus" : ""} ${f.name in rvDraft ? "edited" : ""}" data-fx="${idx}" data-name="${f.name}">
+    <span class="fx-l">${esc(f.label)}</span><span class="fx-v">${editing ? rvInput(f, blind) : fmt(f.name, f.value) + was}</span><span class="fx-c">${edit}${conf}</span></div>`;
+}
+function rvCard(it) {
+  const blind = blindFor(it), fs = rvFields(it);
+  const main = blind ? fs : fs.filter((f) => !f.sure), sure = blind ? [] : fs.filter((f) => f.sure);
+  const order = [...main, ...sure];
+  rvOrder = order.map((f) => f.name);
+  rvField = Math.max(0, Math.min(rvField, order.length - 1));
+  if (rvField >= main.length) rvSureOpen = true;
+  const rows = (list) => list.map((f) => rvRow(f, order.indexOf(f), blind)).join("");
+  const drafted = Object.keys(rvDraft).length;
+  const tags = [
+    it.second_review ? `<span class="tag review">${it.corrections.some((c) => c.author === author()) ? "2e relecture : pour un autre relecteur" : "2e relecture, à l'aveugle"}</span>` : "",
+    it.reviewed_at && !it.second_review ? `<span class="tag high">relu le ${esc(frDate(it.reviewed_at.slice(0, 10)))}</span>` : "",
+  ].join("");
+  const reasons = blind ? [] : it.reasons;
+  const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener" title="${esc(d.read_by)}">${esc(d.role)}</a>`).join(" · ");
+  const history = it.corrections.filter((c) => c.field !== "validated");
+  return `<div class="rv-card" id="rv-card">
+    <div class="rv-card-head">
+      <div class="row" style="margin:0;justify-content:space-between"><div class="row" style="margin:0"><b style="font-size:20px">${esc(it.number)}</b>${tags}</div><span class="sub">${docs}</span></div>
+      <div class="sub clamp1" title="${esc(it.title)}">${esc(it.title)}</div>
+      ${reasons.length ? `<ul class="rv-reasons">${reasons.slice(0, 3).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>${reasons.length > 3 ? `<div class="sub">+ ${reasons.length - 3} autre(s) raison(s)</div>` : ""}` : ""}
+      ${blind ? '<div class="sub" style="margin-top:8px">Saisie à l\'aveugle : lisez le document et remplissez chaque champ.</div>' : ""}
     </div>
-    ${reasons ? `<div class="row" style="margin:6px 0 2px">${reasons}</div>` : ""}
-    <div class="sub rv-title" title="${esc(it.title)}">${esc(it.title)}</div>
-    ${blind ? "" : alerts}
-    <div class="fields">
-      <label class="fld"><span>Catégorie</span><select data-f="category">${category}${options(ALL_CATEGORIES, blind ? "" : it.category)}</select>${machineCategory}</label>
-      ${fields}
-      <label class="fld"><span>Cause (si une valeur était fausse)</span><select data-cause><option value="">—</option>${options(CAUSES, "")}</select></label>
-      <label class="fld fld-2"><span>Note</span><input data-note placeholder="ce qui justifie la correction (facultatif)"></label>
+    ${rows(main)}
+    ${sure.length ? `<details class="sure" id="rv-sure" ${rvSureOpen ? "open" : ""}><summary>${sure.length} champ${sure.length > 1 ? "s" : ""} sûr${sure.length > 1 ? "s" : ""} (confiance ≥ 90 %) : ${esc(sure.map((f) => f.label).join(", "))}</summary>${rows(sure)}</details>` : ""}
+    ${drafted && !blind ? `<div class="rv-why"><label>Pourquoi la machine s'est trompée<select data-cause><option value="">—</option>${options(CAUSES, rvWhy.cause)}</select></label><label>Note (facultatif)<input data-note value="${esc(rvWhy.note)}"></label></div>` : ""}
+    <div class="rv-foot">
+      <button class="btn primary" data-act="save">${drafted || blind ? "Enregistrer et valider" : "Tout est juste"}</button>
+      <button class="btn ghost" data-act="next">Passer</button>
+      ${drafted ? '<button class="btn ghost" data-act="reset">Annuler mes modifications</button>' : ""}
+      <span class="sub" data-msg></span>
+      <span class="kbd"><kbd>↑</kbd> <kbd>↓</kbd> champ · <kbd>Entrée</kbd> modifier · <kbd>V</kbd> valider · <kbd>N</kbd> suivant</span>
     </div>
-    <div class="actions"><button class="btn primary" data-act="save">Enregistrer et valider</button><button class="btn" data-act="ok">Tout est juste</button><span class="sub" data-msg></span></div>
-    ${history ? `<ul class="plain sub" style="margin-top:8px">${history}</ul>` : ""}
+    ${history.length ? `<details class="sure" style="border-top:1px solid var(--line)"><summary>Historique (${history.length})</summary><ul class="plain" style="padding:0 16px 10px">${history.map((c) =>
+      `<li>${esc(c.field)} = <b>${esc(str(c.value) || "—")}</b> <span class="sub">${esc(c.author)}, ${esc(c.created_at.slice(0, 10))}${c.cause ? ", " + esc(CAUSES[c.cause] || c.cause) : ""}${c.blind ? ", à l'aveugle" : ""}</span> <button class="btn small ghost" data-undo="${c.id}">annuler</button></li>`).join("")}</ul></details>` : ""}
   </div>`;
 }
+let rvWhy = { cause: "", note: "" };
+function rvStartField(it) {
+  if (blindFor(it)) return 0;
+  const shown = rvFields(it).filter((f) => !f.sure);
+  let best = 0;
+  shown.forEach((f, idx) => { if (f.name !== "category" && f.c !== undefined && (shown[best].name === "category" || f.c < (shown[best].c ?? 1))) best = idx; });
+  return best;
+}
+function rvResetItem() { rvField = -1; rvDraft = {}; rvEditing = null; rvSureOpen = false; rvWhy = { cause: "", note: "" }; }
+function renderFocus(rows) {
+  rvRows = rows;
+  if (!rows.length) {
+    $("review-list").innerHTML = '<div class="done-state" style="grid-column:1/-1"><b>Tout est relu</b><div class="sub">Rien à faire pour l\'instant. Les nouveaux dossiers douteux apparaîtront ici.</div></div>';
+    return;
+  }
+  let i = rows.findIndex((x) => x.key === rvKey);
+  if (i < 0) { i = Math.min(rvPos, rows.length - 1); rvKey = rows[i].key; rvResetItem(); }
+  if (rvField === -1) rvField = rvStartField(rows[i]);
+  rvPos = i;
+  const it = rows[i];
+  $("review-list").innerHTML = `<nav class="rv-queue" aria-label="File de relecture">${rows.map((x) => `<button class="q-item ${x.key === rvKey ? "on" : ""} ${inQueue(x) ? "" : "done"}" data-q="${esc(x.key)}">
+      <div class="row" style="margin:0;justify-content:space-between;flex-wrap:nowrap"><b style="white-space:nowrap">${esc(x.number)}</b><span class="tag clamp1" style="max-width:120px">${esc(shortCat(x.category))}</span></div>
+      <div class="sub clamp1">${esc(x.reasons[0] || (x.reviewed_at ? "relu" : "à confirmer"))}</div></button>`).join("")}</nav>
+    <div class="rv-main">${rvCard(it)}<div class="rv-doc" id="rv-doc"><div class="ph">Choisissez un champ : la page du document où il a été lu s'affiche ici.</div></div></div>`;
+  $("review-list").querySelectorAll("[data-q]").forEach((b) => b.onclick = () => { rvKey = b.dataset.q; rvResetItem(); renderFocus(rvRows); });
+  wireCard();
+  rvShowSource();
+  $("review-list").querySelector(".q-item.on")?.scrollIntoView({ block: "nearest" });
+}
+function refreshCard() { $("rv-card").outerHTML = rvCard(rvItem()); wireCard(); }
+function wireCard() {
+  const card = $("rv-card"), it = rvItem(), blind = blindFor(it);
+  card.querySelectorAll(".fx").forEach((row) => row.onclick = (e) => {
+    if (e.target.closest("[data-in]")) return;
+    const idx = +row.dataset.fx;
+    if (!blind && (idx === rvField || e.target.closest("[data-edit]"))) { rvField = idx; rvEditing = row.dataset.name; refreshCard(); return; }
+    rvField = idx; rvEditing = null; refreshCard(); rvShowSource();
+  });
+  $("rv-sure")?.addEventListener("toggle", (e) => { rvSureOpen = e.target.open; });
+  if (!blind && rvEditing) {
+    const el = card.querySelector(".fx.focus [data-in]");
+    if (el) {
+      el.focus(); if (el.select) el.select();
+      const commit = () => {
+        const f = rvFields(it).find((x) => x.name === rvEditing);
+        const v = el.value.trim();
+        if (f && v !== f.current && !(f.type === "category" && v === "")) rvDraft[f.name] = v; else if (f) delete rvDraft[f.name];
+        rvEditing = null; refreshCard();
+      };
+      el.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } else if (e.key === "Escape") { e.preventDefault(); rvEditing = null; refreshCard(); } };
+      if (el.tagName === "SELECT") el.onchange = commit; else el.onblur = () => { if (rvEditing) commit(); };
+    }
+  }
+  card.querySelector("[data-cause]")?.addEventListener("change", (e) => { rvWhy.cause = e.target.value; });
+  card.querySelector("[data-note]")?.addEventListener("input", (e) => { rvWhy.note = e.target.value; });
+  card.querySelector('[data-act="save"]').onclick = rvSave;
+  card.querySelector('[data-act="next"]').onclick = () => rvMove(1);
+  card.querySelector('[data-act="reset"]')?.addEventListener("click", () => { rvDraft = {}; rvEditing = null; refreshCard(); });
+  card.querySelectorAll("[data-undo]").forEach((b) => b.onclick = async () => {
+    try { await api("api/review/corrections/" + b.dataset.undo, "DELETE"); await loadReview(); await reloadProjects(); }
+    catch (e) { card.querySelector("[data-msg]").textContent = e.message; }
+  });
+}
+function rvMove(step) {
+  const i = rvRows.findIndex((x) => x.key === rvKey), next = rvRows[i + step];
+  if (!next) return;
+  rvKey = next.key; rvPos = i + step; rvResetItem(); renderFocus(rvRows);
+}
+let rvSourceToken = 0;
+const sourceCache = new Map();
+async function rvShowSource() {
+  const it = rvItem(), box = $("rv-doc");
+  if (!it || !box) return;
+  const name = rvOrder[rvField], label = (RV_FIELDS.find((f) => f[0] === name) || [])[1] || name;
+  const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a>`).join(" · ");
+  if (blindFor(it)) { box.innerHTML = `<div class="ph">Saisie à l'aveugle : ouvrez le document (${docs}).</div>`; return; }
+  const field = EVIDENCE_OF[name] || name;
+  if (name === "category") { box.innerHTML = `<div class="ph"><b>Catégorie</b> : elle se juge sur l'ensemble du dossier.<br>Documents : ${docs}${it.machine_method ? `<br><span class="sub">proposée par : ${esc(it.machine_method)}</span>` : ""}</div>`; return; }
+  if (!it.evidence[field]) { box.innerHTML = `<div class="ph"><b>${esc(label)}</b> : aucune citation, la valeur n'a pas été trouvée dans les documents.<br>Documents : ${docs}</div>`; return; }
+  const ticket = ++rvSourceToken, key = it.key + "|" + field;
+  if (!sourceCache.has(key)) {
+    box.innerHTML = `<div class="ph">Chargement de la page…</div>`;
+    const headers = token() ? { Authorization: "Bearer " + token() } : {};
+    const res = await fetch(`api/review/${encodeURIComponent(it.key)}/evidence/${encodeURIComponent(field)}.png`, { headers });
+    if (!res.ok) { if (ticket === rvSourceToken) box.innerHTML = `<div class="ph">Page indisponible. Documents : ${docs}</div>`; return; }
+    sourceCache.set(key, { url: URL.createObjectURL(await res.blob()), page: res.headers.get("X-Radar-Page"), pages: res.headers.get("X-Radar-Pages"),
+      found: res.headers.get("X-Radar-Found") === "1", top: +res.headers.get("X-Radar-Top") || 0 });
+  }
+  if (ticket !== rvSourceToken) return;
+  const src = sourceCache.get(key);
+  box.innerHTML = `<div class="bar"><b>${esc(label)}</b><span class="sub">page ${esc(src.page)} / ${esc(src.pages)}${src.found ? "" : " · passage non repéré (page scannée)"}</span>
+    <span style="flex:1"></span><button class="btn small ghost" data-see="${esc(field)}" data-key="${esc(it.key)}" data-label="${esc(label)}">agrandir</button></div><img alt="page du document" src="${src.url}">`;
+  const img = box.querySelector("img");
+  img.onload = () => { box.scrollTop = Math.max(0, src.top * img.clientHeight - box.clientHeight / 3); };
+}
+async function rvSave() {
+  const it = rvItem(), blind = blindFor(it), card = $("rv-card"), msg = card.querySelector("[data-msg]");
+  const who = author() || askAuthor();
+  if (!who) return;
+  let changes = {};
+  if (blind) {
+    card.querySelectorAll(".fx").forEach((row) => {
+      const name = row.dataset.name, v = row.querySelector("[data-in]").value.trim();
+      if (!(v === "" && (name === "category" || name === "review_decision"))) changes[name] = v === "" ? null : v;
+    });
+    if (!changes.category) { msg.textContent = "Choisir la catégorie."; return; }
+  } else {
+    changes = Object.fromEntries(Object.entries(rvDraft).map(([k, v]) => [k, v === "" ? null : v]));
+  }
+  card.querySelectorAll("button").forEach((b) => b.disabled = true);
+  msg.textContent = "Enregistrement…";
+  try {
+    await api("api/review/" + encodeURIComponent(it.key) + "/corrections", "POST",
+      { author: who, changes, note: rvWhy.note, validate: true, blind, cause: Object.keys(changes).length && !blind ? rvWhy.cause || null : null });
+    const i = rvRows.findIndex((x) => x.key === rvKey);
+    const next = $("review-filter").value === "todo" ? null : rvRows[i + 1];
+    rvKey = next ? next.key : null; rvPos = i; rvResetItem();
+    await loadReview(); reloadProjects();
+  } catch (e) { msg.textContent = e.message; card.querySelectorAll("button").forEach((b) => b.disabled = false); }
+}
+document.addEventListener("keydown", (e) => {
+  if (!$("view-review").classList.contains("on") || reviewMode !== "filing" || !$("pdf-view").hidden) return;
+  if (e.target.closest && e.target.closest("input, select, textarea") || e.ctrlKey || e.metaKey || e.altKey || !rvItem()) return;
+  const k = e.key.toLowerCase(), n = rvOrder.length;
+  if (k === "arrowdown" || k === "j") { rvField = Math.min(rvField + 1, n - 1); rvEditing = null; refreshCard(); rvShowSource(); }
+  else if (k === "arrowup" || k === "k") { rvField = Math.max(rvField - 1, 0); rvEditing = null; refreshCard(); rvShowSource(); }
+  else if ((k === "enter" || k === "e") && !blindFor(rvItem())) { rvEditing = rvOrder[rvField]; refreshCard(); }
+  else if (k === "v") rvSave();
+  else if (k === "n" || k === "arrowright") rvMove(1);
+  else if (k === "p" || k === "arrowleft") rvMove(-1);
+  else return;
+  e.preventDefault();
+  $("rv-card")?.querySelector(".fx.focus")?.scrollIntoView({ block: "nearest" });
+});
 function renderReview() {
   const todo = $("review-filter").value === "todo", code = $("review-flag").value;
   const labels = {};
   reviewItems.forEach((it) => it.flags.forEach((f) => { labels[f.code] = f.label; }));
-  const selected = code;
-  $("review-flag").innerHTML = '<option value="">Tous les signalements</option>' +
+  $("review-flag").innerHTML = '<option value="">tous</option>' +
     Object.entries(labels).sort((a, b) => a[1].localeCompare(b[1])).map(([k, l]) =>
-      `<option value="${esc(k)}" ${k === selected ? "selected" : ""}>${esc(l)} (${reviewItems.filter((it) => it.flags.some((f) => f.code === k)).length})</option>`).join("");
+      `<option value="${esc(k)}" ${k === code ? "selected" : ""}>${esc(l)} (${reviewItems.filter((it) => it.flags.some((f) => f.code === k)).length})</option>`).join("");
   const rows = reviewItems.filter((it) => (!todo || inQueue(it)) && (!code || it.flags.some((f) => f.code === code)));
-  const done = reviewItems.filter((it) => !inQueue(it)).length;
-  $("review-progress").textContent = `${done} / ${reviewItems.length} dossiers relus · ${reviewItems.length - done} dans la file, par priorité`;
-  const batch = $("review-mode").value === "field", linksMode = $("review-mode").value === "links";
+  const left = reviewItems.filter(inQueue).length;
+  $("review-progress").textContent = left ? `${left} dossier${left > 1 ? "s" : ""} à relire, les plus douteux d'abord · ${reviewItems.length - left} relu${reviewItems.length - left > 1 ? "s" : ""}` : "File vide";
+  const batch = reviewMode === "field", linksMode = reviewMode === "links";
   $("review-batch").hidden = !batch;
   $("review-links").hidden = !linksMode;
   $("review-list").hidden = batch || linksMode;
+  $("review-suggestions").hidden = linksMode;
   if (linksMode) { renderLinks(); return; }
   if (batch) { renderBatch(rows); return; }
-  $("review-list").innerHTML = rows.map(reviewCard).join("") || '<div class="empty">Tout est relu.</div>';
-  document.querySelectorAll("#review-list [data-key]").forEach((card) => {
-    card.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => submitReview(card, b.dataset.act === "save"));
-    card.querySelectorAll("[data-undo]").forEach((b) => b.onclick = async () => {
-      try { await api("api/review/corrections/" + b.dataset.undo, "DELETE"); await loadReview(); await reloadProjects(); }
-      catch (e) { card.querySelector("[data-msg]").textContent = e.message; }
-    });
-  });
+  renderFocus(rows);
 }
 // Links: is it the same physical project? The verdict overrides the automatic grouping at once.
 const LINK_VERDICTS = { same_project: "Même projet", related: "Liés, projets distincts", unrelated: "Sans rapport" };
@@ -766,29 +1079,6 @@ async function renderLinks() {
   });
 }
 
-async function submitReview(card, withChanges) {
-  const who = author() || askAuthor();
-  if (!who) return;
-  const it = reviewItems.find((x) => x.key === card.dataset.key);
-  const blind = blindFor(it), changes = {};
-  // Blind: everything typed is a measurement, stored even when equal to the machine value.
-  if (withChanges || blind) card.querySelectorAll("[data-f]").forEach((el) => {
-    const name = el.dataset.f, value = el.value.trim();
-    if (blind ? !(value === "" && (name === "category" || name === "review_decision")) : value !== str(it.values[name])) {
-      changes[name] = value === "" ? null : value;
-    }
-  });
-  const msg = card.querySelector("[data-msg]");
-  if (blind && !changes.category) { msg.textContent = "Choisir la catégorie."; return; }
-  card.querySelectorAll("button").forEach((b) => b.disabled = true);
-  msg.textContent = "Enregistrement…";
-  try {
-    await api("api/review/" + encodeURIComponent(it.key) + "/corrections", "POST",
-      { author: who, changes, note: card.querySelector("[data-note]").value, validate: true, blind,
-        cause: Object.keys(changes).length && !blind ? card.querySelector("[data-cause]").value || null : null });
-    await loadReview(); await reloadProjects();
-  } catch (e) { msg.textContent = e.message; card.querySelectorAll("button").forEach((b) => b.disabled = false); }
-}
 async function reloadProjects() { state.projects = await api("api/projects"); refresh(); }
 
 // --- Quality dashboard (internal mode) ----------------------------------------------------------------
@@ -804,52 +1094,69 @@ function rateRows(map, label = (k) => k) {
 async function loadQuality() {
   let q;
   try { q = await api("api/quality"); } catch (e) { $("quality").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
-  const r = q.last_eval;
-  $("quality-when").textContent = r ? `Dernière évaluation : ${r.generated_at.slice(0, 16).replace("T", " ")} UTC` : "Aucune évaluation : lancer « radar eval ».";
-  const tiles = [];
-  if (r) tiles.push(tile("Références", `<ul class="plain">
-      <li>Étiquettes vérifiées : <b>${esc(r.gold.labels_verified)}</b> / ${esc(r.gold.labels)}</li>
-      <li>Fiches par champ vérifiées : <b>${esc(r.gold.fields_verified)}</b> / ${esc(r.gold.fields)}</li>
-      <li>Dossiers relus : <b>${esc(r.gold.reviewed_filings)}</b></li></ul>`));
-  tiles.push(tile("File de relecture", `<div><b>${esc(q.queue.size)}</b> dossiers à relire</div><ul class="plain">${q.queue.by_flag.map((f) =>
-    `<li><span class="dot s-${f.severity === "error" ? "alert" : f.severity === "warning" ? "unknown" : "ok"}" style="display:inline-block"></span> ${esc(f.label)} : <b>${esc(f.count)}</b></li>`).join("")}</ul>`));
-  if (r) {
-    const label = (k) => k.replace("_", " ");
-    tiles.push(tile("Justesse par champ (dev)", rateRows(r.fields_verified.dev, label)));
-    tiles.push(tile("Justesse par champ (test, scores seuls)", rateRows(r.fields_verified.test, label)));
-    tiles.push(tile("Mesure à l'aveugle", rateRows(r.blind, label)));
-    const fc = r.field_calibration || { diagram: [] };
-    tiles.push(tile("Confiance par champ (calibration)", `<ul class="plain">${fc.diagram.filter((b) => b.seen).map((b) =>
-      `<li>score ${esc(b.bin)} : juste <b>${pct(b.accuracy)}</b>${ci(b.ci95)} <span class="sub">n=${esc(b.seen)}</span></li>`).join("") ||
-      '<li class="sub">Pas encore de valeurs relues.</li>'}</ul>
-      <div class="sub">Erreur de calibration : ${fc.ece === null || fc.ece === undefined ? "—" : pct(fc.ece)} · champs acceptés automatiquement : ${pct(fc.auto_accept_share)}</div>`));
-    tiles.push(tile("Calibration de la confiance", rateRows(r.calibration, (k) => `confiance « ${CONFIDENCE[k] || k} » : part avec erreur`)));
-    const est = r.screening.recall_estimate;
-    tiles.push(tile("Tri : rappel estimé", est.recall === null ? `<div class="sub">${esc(est.why)}</div>`
-      : `<div><b>${pct(est.recall)}</b>${ci(est.recall_ci95)}</div><div class="sub">${esc(est.targets_found)} cible(s) dans ${esc(est.random_audited_reviewed)} audits aléatoires relus, ${esc(est.rejected_items)} éléments rejetés</div>`));
-    tiles.push(tile("Intégrité", `<ul class="plain"><li>Citations introuvables : <b>${esc(r.integrity.quote_not_found)}</b></li>
-      <li>Fuites de données personnelles : <b>${esc(r.privacy.leaks.length)}</b></li>
-      <li>Dossiers sans catégorie : <b>${pct(r.undecided.share)}</b></li>
-      <li>OCR, mots manquants : <b>${r.ocr.mean_word_miss_rate !== undefined ? pct(r.ocr.mean_word_miss_rate) : "—"}</b></li></ul>`));
-  }
-  const e = q.errors;
-  tiles.push(tile("Erreurs fréquentes", e.clusters.length ? `<ul class="plain">${e.clusters.map((c) =>
-    `<li><b>${esc(c.count)}</b> × ${esc(c.field)} ${esc(OUTCOMES[c.outcome] || c.outcome)} · cause : ${esc(CAUSES[c.cause] || c.cause)} · ${esc(c.form_layout)} / ${esc(c.read)} <span class="sub">${esc(c.examples.join(", "))}</span></li>`).join("")}</ul>`
-    : '<div class="sub">Aucune erreur relevée pour l\'instant.</div>') +
-    (e.test_errors ? `<div class="sub">${esc(e.test_errors)} erreur(s) sur le jeu de test (non détaillées).</div>` : ""));
-  tiles.push(tile("Détecteurs", `<ul class="plain"><li>Précision (signalé = vraie erreur) : <b>${pct(e.flag_precision)}</b></li>
-    <li>Rappel (erreurs signalées à l'avance) : <b>${pct(e.flag_recall)}</b></li></ul>
-    ${e.unflagged.length ? `<div class="sub">Erreurs qu'aucun détecteur n'a vues (à couvrir) : ${esc(e.unflagged.join(", "))}</div>` : ""}`));
+  const r = q.last_eval, e = q.errors;
+  $("quality-when").textContent = r ? `Dernière évaluation le ${frDate(r.generated_at.slice(0, 10))} à ${r.generated_at.slice(11, 16)} UTC (radar eval)` : "Aucune évaluation : lancer « radar eval ».";
+  const acc = (v) => v.rate ?? v.accuracy;
+  const dev = r ? Object.entries(r.fields_verified.dev || {}).filter(([, v]) => acc(v) != null) : [];
+  const mean = dev.length ? dev.reduce((t, [, v]) => t + acc(v), 0) / dev.length : null;
+  const reviewed = r ? r.gold.reviewed_filings : 0;
+  const integrity = r ? r.privacy.leaks.length + r.integrity.quote_not_found : null;
   const regressed = r && r.cases.regressed_cases ? r.cases.regressed_cases : [];
-  tiles.push(tile("Cas de non-régression", `<ul class="plain"><li>Corrigés (doivent rester justes) : <b>${esc(q.cases.fixed)}</b></li>
-    <li>Ouverts (erreurs connues) : <b>${esc(q.cases.open)}</b></li>
-    <li>Régressions : <b class="${regressed.length ? "error" : ""}">${esc(regressed.length)}</b> ${esc(regressed.join(", "))}</li></ul>`));
-  if (q.trend.length) {
-    const keys = Object.keys(q.trend[0]).filter((k) => k !== "at");
-    tiles.push(tile("Évolution", `<div style="overflow:auto"><table style="font-size:15.5px;border-collapse:collapse"><tr><th style="text-align:left">date</th>${keys.map((k) => `<th style="text-align:left;padding:0 6px">${esc(k)}</th>`).join("")}</tr>${q.trend.map((t) =>
-      `<tr><td>${esc((t.at || "").slice(5, 16).replace("T", " "))}</td>${keys.map((k) => `<td style="padding:0 6px">${esc(t[k] ?? "—")}</td>`).join("")}</tr>`).join("")}</table></div>`));
-  }
-  $("quality").innerHTML = tiles.join("");
+  const est = r ? r.screening.recall_estimate : null;
+  const stat = (value, label, cls, view) => `<${view ? `button data-go="${view}"` : "div"} class="stat ${cls}"><b>${value}</b><span>${label}</span></${view ? "button" : "div"}>`;
+  const level = (x, good, warn) => (x == null ? "" : x >= good ? "good" : x >= warn ? "warn" : "bad");
+  const stats = [
+    stat(q.queue.size, "dossiers à relire", q.queue.size ? "warn" : "good", "review"),
+    stat(mean == null ? "—" : pct(mean), mean == null ? "justesse : pas encore mesurée" : `justesse moyenne des champs (${reviewed} relus)`, level(mean, 0.95, 0.85)),
+    stat(est && est.recall != null ? pct(est.recall) : "—", "projets retrouvés par le tri (estimation)", level(est && est.recall, 0.98, 0.9)),
+    stat(integrity == null ? "—" : integrity === 0 ? "OK" : integrity, "données personnelles et citations", integrity == null ? "" : integrity ? "bad" : "good"),
+    stat(regressed.length, regressed.length > 1 ? "régressions" : "régression", regressed.length ? "bad" : "good"),
+  ];
+  const todo = [];
+  if (q.queue.size) todo.push([`Relire les ${q.queue.size} dossiers de la file, les plus douteux d'abord.`, '<button class="btn primary" data-go="review">Relire</button>']);
+  if (r && reviewed < 30) todo.push([`Relire ${30 - reviewed} dossier${30 - reviewed > 1 ? "s" : ""} de plus : en dessous de 30, les mesures restent trop imprécises.`, ""]);
+  if (regressed.length) todo.push([`Des cas déjà corrigés sont de nouveau faux : ${esc(regressed.join(", "))}.`, "<code>radar cases check</code>"]);
+  dev.filter(([, v]) => acc(v) < 0.9 && v.n >= 5).forEach(([k, v]) => todo.push([`Le champ « ${esc(k)} » n'est juste qu'à ${pct(acc(v))}.`, `<code>radar improve --field ${esc(k)}</code>`]));
+  if (e.unflagged.length) todo.push([`${e.unflagged.length} erreur(s) qu'aucun signalement n'avait vue(s) : ${esc(e.unflagged.slice(0, 5).join(", "))}.`, "<code>radar errors</code>"]);
+  if (e.clusters.length) { const c = e.clusters[0]; todo.push([`Erreur la plus fréquente : ${esc(c.field)} ${esc(OUTCOMES[c.outcome] || c.outcome)} (${esc(c.count)} fois, cause : ${esc(CAUSES[c.cause] || c.cause)}).`, "<code>radar improve</code>"]); }
+  const fields = r ? [...new Set([...Object.keys(r.fields_verified.dev || {}), ...Object.keys(r.fields_verified.test || {}), ...Object.keys(r.blind || {})])] : [];
+  const cell = (v) => (v && acc(v) != null ? `<b>${pct(acc(v))}</b>${ci(v.ci95)} <span class="sub">n=${esc(v.n)}</span>` : '<span class="sub">—</span>');
+  const acc_ = (title, sub, body) => `<details class="acc"><summary><span>${title}</span><span class="sub">${sub}</span></summary><div>${body}</div></details>`;
+  const fc = r ? r.field_calibration || { diagram: [] } : { diagram: [] };
+  const details = r ? [
+    acc_("Justesse par champ", fields.length ? `${fields.length} champs` : "pas encore de relecture",
+      fields.length ? `<table class="t"><tr><th>Champ</th><th>Réglage (dev)</th><th>Test (scores seuls)</th><th>À l'aveugle</th></tr>${fields.map((k) =>
+        `<tr><td>${esc(k.replace("_", " "))}</td><td>${cell((r.fields_verified.dev || {})[k])}</td><td>${cell((r.fields_verified.test || {})[k])}</td><td>${cell((r.blind || {})[k])}</td></tr>`).join("")}</table>`
+        : '<div class="sub">Les scores apparaissent dès les premiers dossiers relus.</div>'),
+    acc_("Confiance affichée", fc.ece == null ? "pas encore mesurée" : `écart moyen ${pct(fc.ece)}`,
+      `<table class="t"><tr><th>Score de confiance</th><th>Réellement juste</th></tr>${fc.diagram.filter((b) => b.seen).map((b) =>
+        `<tr><td>${esc(b.bin)}</td><td><b>${pct(b.accuracy)}</b>${ci(b.ci95)} <span class="sub">n=${esc(b.seen)}</span></td></tr>`).join("") || '<tr><td colspan="2" class="sub">Pas encore de valeurs relues.</td></tr>'}</table>
+       <div class="sub" style="margin-top:8px">Champs acceptés sans relecture : ${pct(fc.auto_accept_share)}</div>`),
+    acc_("Erreurs et signalements", `${e.clusters.length} groupe(s) d'erreurs`,
+      (e.clusters.length ? `<table class="t"><tr><th>Nombre</th><th>Champ</th><th>Cause</th><th>Type de document</th><th>Exemples</th></tr>${e.clusters.map((c) =>
+        `<tr><td><b>${esc(c.count)}</b></td><td>${esc(c.field)} ${esc(OUTCOMES[c.outcome] || c.outcome)}</td><td>${esc(CAUSES[c.cause] || c.cause)}</td><td>${esc(c.form_layout)} / ${esc(c.read)}</td><td class="sub">${esc(c.examples.join(", "))}</td></tr>`).join("")}</table>`
+        : '<div class="sub">Aucune erreur relevée pour l\'instant.</div>') +
+      `<div class="sub" style="margin-top:8px">Signalements justes : ${pct(e.flag_precision)} · erreurs signalées à l'avance : ${pct(e.flag_recall)}${e.test_errors ? ` · ${esc(e.test_errors)} erreur(s) sur le jeu de test (non détaillées)` : ""}</div>`),
+    acc_("Tri, intégrité, robustesse", "", `<table class="t">
+      <tr><td>Projets retrouvés par le tri</td><td>${est && est.recall != null ? `<b>${pct(est.recall)}</b>${ci(est.recall_ci95)}` : `<span class="sub">${esc(est ? est.why : "—")}</span>`}</td></tr>
+      <tr><td>Citations introuvables</td><td><b>${esc(r.integrity.quote_not_found)}</b></td></tr>
+      <tr><td>Fuites de données personnelles</td><td><b>${esc(r.privacy.leaks.length)}</b></td></tr>
+      <tr><td>Dossiers sans catégorie</td><td><b>${pct(r.undecided.share)}</b></td></tr>
+      <tr><td>Valeurs stables si le texte varie</td><td><b>${r.robustness ? pct(r.robustness.stable_share) : "—"}</b></td></tr>
+      <tr><td>OCR, mots manqués</td><td><b>${r.ocr.mean_word_miss_rate !== undefined ? pct(r.ocr.mean_word_miss_rate) : "—"}</b></td></tr></table>`),
+    acc_("Liens, second avis, accord entre relecteurs", "", `<table class="t">
+      <tr><td>Regroupements : justes / complets</td><td>${r.linking && r.linking.grouping.pairs ? `<b>${pct(r.linking.grouping.precision)}</b> / <b>${pct(r.linking.grouping.recall)}</b> <span class="sub">${esc(r.linking.grouping.pairs)} paires décidées</span>` : '<span class="sub">aucune décision sur les liens</span>'}</td></tr>
+      <tr><td>Classifieur local (second avis)</td><td>${r.second_opinion && r.second_opinion.active ? `<b>actif</b>, juste à ${pct(r.second_opinion.loo_accuracy)}` : `<span class="sub">inactif : il faut ${esc(30)} étiquettes vérifiées</span>`}</td></tr>
+      <tr><td>Accord entre relecteurs</td><td>${r.agreement && r.agreement.filings ? `${esc(r.agreement.filings)} dossiers doublés · kappa catégorie ${r.agreement.category_kappa ?? "—"}` : '<span class="sub">pas encore de double relecture</span>'}</td></tr></table>`),
+    acc_("Cas de non-régression", `${q.cases.fixed} corrigé(s) · ${q.cases.open} ouvert(s)`, `<div>Corrigés, doivent rester justes : <b>${esc(q.cases.fixed)}</b> · erreurs connues encore ouvertes : <b>${esc(q.cases.open)}</b></div>`),
+    q.trend.length ? acc_("Évolution", `${q.trend.length} évaluations`, `<table class="t"><tr><th>Date</th>${Object.keys(q.trend[0]).filter((k) => k !== "at").map((k) => `<th>${esc(k)}</th>`).join("")}</tr>${q.trend.map((t) =>
+      `<tr><td>${esc((t.at || "").slice(5, 16).replace("T", " "))}</td>${Object.keys(t).filter((k) => k !== "at").map((k) => `<td>${esc(t[k] ?? "—")}</td>`).join("")}</tr>`).join("")}</table>`) : "",
+  ] : [];
+  $("quality").innerHTML = `<div class="stats">${stats.join("")}</div>
+    <div class="eyebrow">À faire</div>
+    <ul class="todo">${todo.map(([text, action]) => `<li><span>${text}</span>${action}</li>`).join("") || '<li><span>Rien d\'urgent. Tout est sous contrôle.</span></li>'}</ul>
+    ${details.length ? `<div class="eyebrow">Détails</div>${details.join("")}` : ""}`;
+  $("quality").querySelectorAll("[data-go]").forEach((b) => b.onclick = () => show(b.dataset.go));
 }
 
 function show(view) {
@@ -863,16 +1170,24 @@ function show(view) {
 document.querySelectorAll(".rail [data-view]").forEach((b) => b.onclick = () => show(b.dataset.view));
 
 async function init() {
-  $("since").value = isoDaysAgo(30);
   $("mcp").textContent = JSON.stringify({ mcpServers: { radar: { type: "http", url: location.origin + "/mcp" } } }, null, 2);
+  $("mcp-copy").onclick = async (e) => {
+    try { await navigator.clipboard.writeText($("mcp").textContent); e.target.textContent = "Copié"; }
+    catch { e.target.textContent = "Copie impossible : voir ci-dessous"; }
+    setTimeout(() => { e.target.textContent = "Copier la configuration"; }, 2000);
+  };
   try {
     const [info, projects, recent] = await Promise.all([api("api/info"), api("api/projects"), api("api/changes?since=" + isoDaysAgo(7))]);
     state.projects = projects;
     $("coverage").textContent = info.coverage;
-    $("about").innerHTML = [`<div class="tile"><h2>Couverture</h2><div>${esc(info.coverage)}</div></div>`,
-      `<div class="tile"><h2>Contenu</h2><ul class="plain">${Object.entries(info.counts).map(([k, v]) => `<li>${esc(k)} : <b>${num(v)}</b></li>`).join("")}</ul></div>`,
-      `<div class="tile"><h2>Dernières mises à jour</h2><ul class="plain">${Object.entries(info.last_runs).map(([k, v]) => `<li>${esc(k)} : ${esc((v || "").slice(0, 16).replace("T", " "))} UTC</li>`).join("")}</ul></div>`,
-      `<div class="tile"><h2>À savoir</h2><ul>${info.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`].join("");
+    const COUNT_LABELS = { projects: "projets", filings: "dossiers", documents: "documents", signals: "signaux", links: "rapprochements", project_changes: "changements suivis", corrections: "corrections" };
+    const RUN_LABELS = { collect: "collecte", process: "lecture des dossiers", link: "rapprochements", eval: "évaluation" };
+    const counts = ["projects", "filings", "documents", "signals"].filter((k) => k in info.counts);
+    $("about").innerHTML = `<div class="stats">${counts.map((k) => `<div class="stat"><b>${num(info.counts[k])}</b><span>${COUNT_LABELS[k]}</span></div>`).join("")}</div>
+      <div class="eyebrow">Couverture</div><div class="tile">${esc(info.coverage)}</div>
+      <div class="eyebrow">À savoir</div><ul class="todo">${info.caveats.map((c) => `<li><span>${esc(c)}</span></li>`).join("")}</ul>
+      <div class="eyebrow">Dernières mises à jour</div><ul class="todo">${Object.entries(info.last_runs).map(([k, v]) =>
+        `<li><span>${esc(RUN_LABELS[k.split(":")[0]] || k)}${k.includes(":") ? " · " + esc(k.split(":")[1]) : ""}</span><span class="sub">${esc(frDate((v || "").slice(0, 10)))} à ${esc((v || "").slice(11, 16))} UTC</span></li>`).join("")}</ul>`;
     const deps = [...new Set(projects.map((p) => p.department).filter(Boolean))].sort();
     regionDeps = deps;
     const inRegion = ["in", ["get", "code"], ["literal", regionDeps]];
