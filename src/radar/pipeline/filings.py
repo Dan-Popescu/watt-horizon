@@ -34,6 +34,7 @@ from radar.quality.arbiter import Arbiter, comparable
 from radar.quality.confidence import Calibration, raw_scores
 from radar.quality.flags import QualityInput, ReadDocument, detect
 from radar.quality.propagate import ALIAS_FIELDS, Aliases
+from radar.quality.templates import Registry, fingerprint
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
 from radar.store.blobs import BlobStore
@@ -54,6 +55,7 @@ class Services:
     arbiter: Arbiter | None = None  # learned source reliabilities (None: priors = hand-written precedence)
     calibration: Calibration | None = None  # raw field score -> observed accuracy (None: raw scores, no auto-accept)
     aliases: Aliases | None = None  # learned spellings of names (gold/aliases.json), applied to every build
+    templates: Registry | None = None  # known document templates (gold/templates.json); None: nothing flagged as new
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -192,6 +194,9 @@ def build_filing(
                 value = getattr(facts, ARBITRATED_ATTRS[name][0])
                 extraction.candidates.setdefault(name, []).append(Candidate(source="llm", value=comparable(value)))
     validation = validate(facts, services.lookups)
+    templates = {
+        doc.id: fingerprint(doc.role, c.field_names, c.text) for doc, c in zip(documents, contents, strict=True)
+    }
     flags = detect(
         QualityInput(
             documents=[
@@ -204,6 +209,8 @@ def build_filing(
                     ocr_texts=content.ocr_texts,
                     ocr_engines=content.ocr_engines,
                     audit=doc.audit,
+                    template=templates[doc.id],
+                    new_template=services.templates is not None and templates[doc.id] not in services.templates,
                 )
                 for doc, content, text in zip(documents, contents, texts, strict=True)
             ],
@@ -250,7 +257,8 @@ def build_filing(
         reading=reading,
         flags=flags,
         candidates=extraction.candidates,
-        strata=_strata(source.value, documents, contents, unread, facts.department),
+        strata=_strata(source.value, documents, contents, unread, facts.department)
+        | {"template": "+".join(sorted(set(templates.values())))},
         versions={
             "extraction": EXTRACTION_VERSION,
             "classification": classification.method,

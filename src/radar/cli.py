@@ -12,6 +12,7 @@ radar eval | stats | mcp
 import argparse
 import json
 import sys
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -39,6 +40,8 @@ from radar.pipeline.filings import read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
 from radar.quality import cases, errors, improve, propagate, shadow
+from radar.quality.drift import drift
+from radar.quality.templates import Registry
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
@@ -139,7 +142,9 @@ def cmd_update(args: argparse.Namespace, s: Settings) -> Any:
     result = {"collect": collected, **cmd_run(args, s)}
     with Database(s.db_path) as db:
         health = collector_health(db.runs("collect:"), now=datetime.now(UTC))
-    return {**result, "health_alerts": [h.source for h in health if h.status == "alert"]}
+        drifting = drift(db.filings(), _first_fetched(db), datetime.now(UTC))
+    alerts = [h.source for h in health if h.status == "alert"] + [f"drift:{d.value}:{d.metric}" for d in drifting]
+    return {**result, "health_alerts": alerts}
 
 
 def cmd_process(args: argparse.Namespace, s: Settings) -> Any:
@@ -291,11 +296,40 @@ def cmd_health(args: argparse.Namespace, s: Settings) -> Any:
     """Collector health from the run history. --strict: exit 2 on any alert (for the scheduler)."""
     with Database(s.db_path) as db:
         report = collector_health(db.runs("collect:"), now=datetime.now(UTC))
+        drifting = drift(db.filings(), _first_fetched(db), datetime.now(UTC))
     alerts = [h.source for h in report if h.status == "alert"]
-    result: dict[str, Any] = {"sources": report, "alerts": alerts}
+    alerts += [f"drift:{d.group}:{d.value}:{d.metric}" for d in drifting]
+    result: dict[str, Any] = {"sources": report, "drift": drifting, "alerts": alerts}
     if args.strict and alerts:
-        result["error"] = "collector alerts: " + ", ".join(alerts)
+        result["error"] = "collector or drift alerts: " + ", ".join(alerts)
     return result
+
+
+def _first_fetched(db: Database) -> dict[str, datetime]:
+    first: dict[str, datetime] = {}
+    for d in db.documents():
+        if d.filing_key not in first or d.fetched_at < first[d.filing_key]:
+            first[d.filing_key] = d.fetched_at
+    return first
+
+
+def cmd_templates(args: argparse.Namespace, s: Settings) -> Any:
+    """Document templates seen (per filing strata), known or not; `export` accepts them into gold/templates.json."""
+    with Database(s.db_path) as db:
+        filings = db.filings()
+    counts = Counter(t for f in filings for t in f.strata.get("template", "").split("+") if t)
+    registry = Registry.load(s.templates_path)
+    if args.action == "export":
+        registry = registry or Registry()
+        registry.accept(counts, date.today())
+        registry.save(s.templates_path)
+        return {"path": str(s.templates_path), "templates": len(registry.known), "next": "radar run"}
+    return {
+        "registry": str(s.templates_path) if registry else None,
+        "templates": [
+            {"template": t, "filings": n, "known": bool(registry and t in registry)} for t, n in counts.most_common()
+        ],
+    }
 
 
 def cmd_triage(args: argparse.Namespace, s: Settings) -> Any:
@@ -461,6 +495,8 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--strict", action="store_true", help="check: exit 2 on any regression")
     imp = sub.add_parser("improve", help="agent-ready tickets per failing field, with validated rule candidates")
     imp.add_argument("--field", help="only this field")
+    tp = sub.add_parser("templates", help="document templates seen; export = accept them (gold/templates.json)")
+    tp.add_argument("action", nargs="?", choices=["list", "export"], default="list")
     sh = sub.add_parser("shadow", help="dry run on the whole corpus: changed values, fixes / breaks vs verified")
     sh.add_argument("--only", nargs="*", help="filing keys")
     sh.add_argument("--strict", action="store_true", help="exit 2 if a verified value would break")
@@ -509,6 +545,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "improve": cmd_improve,
     "aliases": cmd_aliases,
     "shadow": cmd_shadow,
+    "templates": cmd_templates,
 }
 
 

@@ -13,7 +13,7 @@ from radar.evaluation.gold import FieldGold, actual_fields
 from radar.evaluation.stats import wilson
 from radar.pipeline.corrections import VALIDATED, latest
 
-STRATA = ("form_layout", "read", "source")
+STRATA = ("form_layout", "read", "source", "template")
 
 
 def _rate(k: int, n: int) -> dict[str, Any]:

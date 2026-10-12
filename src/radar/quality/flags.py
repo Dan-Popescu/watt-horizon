@@ -34,6 +34,11 @@ FLAGS: dict[str, FlagInfo] = {
         "mise en page de formulaire inconnue",
         "map the new field names in extraction/cerfa.FIELD_ALIASES",
     ),
+    "new_template": FlagInfo(
+        Severity.WARNING,
+        "modèle de document inconnu",
+        "untested layout: check its extraction, add rules or field aliases, then radar templates export",
+    ),
     "form_flattened": FlagInfo(
         Severity.INFO, "formulaire aplati (lu par le texte)", "text fallback in extraction/cerfa.py"
     ),
@@ -84,6 +89,8 @@ class ReadDocument:
     ocr_texts: dict[int, str] = field(default_factory=dict)
     ocr_engines: dict[int, str] = field(default_factory=dict)
     audit: str | None = None
+    template: str = ""
+    new_template: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,6 +122,8 @@ def _reading(q: QualityInput) -> list[Flag]:
         machine = " ".join(t for p, t in doc.ocr_texts.items() if doc.ocr_engines.get(p, "") != "transcript")
         if machine and (noise := ocr_noise(machine)) > OCR_NOISE_THRESHOLD:
             out.append(flag("ocr_noisy", detail=f"{noise:.0%} de jetons douteux ({doc.id[:12]})"))
+        if doc.new_template:
+            out.append(flag("new_template", detail=doc.template))
         if doc.layout == "unknown":
             out.append(flag("form_layout_unknown", detail=", ".join(sorted(doc.fields)[:8])))
         elif doc.layout == "flattened" and q.target:

@@ -1,0 +1,37 @@
+{
+ "decision:fields-6d6a3b4a": {
+  "documents": 13,
+  "first_seen": "2026-10-12",
+  "label": ""
+ },
+ "decision:text-b1a65867": {
+  "documents": 4,
+  "first_seen": "2026-10-12",
+  "label": ""
+ },
+ "form:fields-252bd8ab": {
+  "documents": 1,
+  "first_seen": "2026-10-12",
+  "label": ""
+ },
+ "form:fields-7f322cd3": {
+  "documents": 1,
+  "first_seen": "2026-10-12",
+  "label": ""
+ },
+ "form:fields-97eb1ee9": {
+  "documents": 9,
+  "first_seen": "2026-10-12",
+  "label": ""
+ },
+ "form:text-0f58d5a5": {
+  "documents": 2,
+  "first_seen": "2026-10-12",
+  "label": ""
+ },
+ "form:text-b892f015": {
+  "documents": 5,
+  "first_seen": "2026-10-12",
+  "label": ""
+ }
+}

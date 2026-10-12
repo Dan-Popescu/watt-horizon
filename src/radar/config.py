@@ -58,6 +58,11 @@ class Settings:
         return self.gold_dir / "cases"
 
     @property
+    def templates_path(self) -> Path:
+        """Known document templates (`radar templates export`); unknown ones are flagged at build."""
+        return self.gold_dir / "templates.json"
+
+    @property
     def aliases_path(self) -> Path:
         """Verified spellings of names learned from corrections (`radar aliases export`)."""
         return self.gold_dir / "aliases.json"

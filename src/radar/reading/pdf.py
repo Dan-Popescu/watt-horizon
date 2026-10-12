@@ -17,6 +17,7 @@ class PdfContent:
     scanned_pages: tuple[int, ...]  # 1-based page numbers without a usable text layer
     ocr_texts: dict[int, str] = field(default_factory=dict)  # 1-based page -> OCR text, filled by an OcrEngine
     ocr_engines: dict[int, str] = field(default_factory=dict)  # 1-based page -> engine label (provenance)
+    field_names: tuple[str, ...] = ()  # every AcroForm field, filled or not (template fingerprint)
 
     @property
     def text(self) -> str:
@@ -59,15 +60,24 @@ def _ranges(pages: list[int]) -> str:
 def read_pdf(data: bytes) -> PdfContent:
     with pymupdf.open(stream=data, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
         fields: dict[str, str] = {}
+        names: set[str] = set()
         texts: list[str] = []
         scanned: list[int] = []
         for page in doc:
             for widget in page.widgets() or []:
                 name, value = (widget.field_name or "").strip(), widget.field_value
+                if name:
+                    names.add(name)
                 if name and value not in (None, "", "Off") and name not in fields:
                     fields[name] = str(value).replace("\r", "\n").strip()
             text = page.get_text()
             texts.append(text)
             if len(text.strip()) < MIN_TEXT_CHARS_PER_PAGE:
                 scanned.append(page.number + 1)
-        return PdfContent(pages=doc.page_count, fields=fields, page_texts=tuple(texts), scanned_pages=tuple(scanned))
+        return PdfContent(
+            pages=doc.page_count,
+            fields=fields,
+            page_texts=tuple(texts),
+            scanned_pages=tuple(scanned),
+            field_names=tuple(sorted(names)),
+        )
