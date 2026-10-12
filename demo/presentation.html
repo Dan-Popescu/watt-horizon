@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar Raccordement</title>
+<style>
+  :root { --ink:#18202c; --muted:#5d6778; --line:#e2e7ef; --chip:#eef2f8; --accent:#2457d6; --red:#e5484d; --violet:#8b5cf6; --bg:#f4f6f9; --panel:#fff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink:#e7ecf3; --muted:#9aa5b5; --line:#283140; --chip:#212b3a; --accent:#78a2ff; --bg:#0f141b; --panel:#171e28; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .page { max-width:980px; margin:0 auto; padding:28px 16px 40px; }
+  header { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; align-items:flex-end; margin-bottom:18px; }
+  h1 { margin:0; font-size:30px; letter-spacing:-.01em; }
+  .tagline { font-size:18px; color:var(--muted); margin:4px 0 0; }
+  .meta { color:var(--muted); font-size:13px; text-align:right; }
+  @media (max-width:640px) { .meta { text-align:left; } .kpis { grid-template-columns:repeat(2,1fr); } }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); margin:0 0 8px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
+  .card p { margin:6px 0 0; } .card ul { margin:6px 0 0; padding-left:18px; } .card li { margin:3px 0; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:16px 0; }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px 14px; }
+  .kpi b { display:block; font-size:28px; line-height:1.1; } .kpi span { color:var(--muted); font-size:13px; }
+  .kpi.hl b { color:var(--red); }
+  section { margin-top:18px; }
+  .case { border-left:4px solid var(--red); }
+  .who b { display:block; }
+  .tag { display:inline-block; font-size:11.5px; padding:1px 8px; border-radius:999px; background:var(--chip); color:var(--muted); margin-left:4px; vertical-align:2px; }
+  .hyp { background:#fff4e0; color:#8a5300; } .fact { background:#e6f6ec; color:#17773f; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .hyp { background:#3a2a12; color:#f3b860; } :root:not([data-theme="light"]) .fact { background:#13321f; color:#6fd39a; } }
+  .steps { counter-reset:s; list-style:none; padding:0; margin:6px 0 0; }
+  .steps li { counter-increment:s; position:relative; padding-left:30px; margin:6px 0; }
+  .steps li::before { content:counter(s); position:absolute; left:0; top:1px; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff; font-size:12px; text-align:center; line-height:20px; }
+  .note { font-size:12.5px; color:var(--muted); margin-top:18px; }
+  @media print {
+    @page { size:A4; margin:12mm; }
+    :root { --bg:#fff; --panel:#fff; --ink:#18202c; --muted:#5d6778; --line:#dde3ec; --chip:#eef2f8; --accent:#2457d6; }
+    body { font-size:12.5px; } .page { padding:0; max-width:none; } h1 { font-size:24px; } .kpi b { font-size:22px; }
+    .card, .kpi { break-inside:avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div>
+      <h1>Radar Raccordement</h1>
+      <p class="tagline">Voir les projets de batteries géantes et de data centers <b>avant</b> tout le monde.</p>
+    </div>
+    <div class="meta">Document de travail · 12/10/2026<br>Prototype Hauts-de-France · usage interne</div>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi"><b>10</b><span>projets repérés dans les Hauts-de-France</span></div>
+    <div class="kpi"><b>457 MW</b><span>de puissance déclarée dans les dossiers</span></div>
+    <div class="kpi hl"><b>0</b><span>présent dans le registre officiel des installations</span></div>
+    <div class="kpi"><b>100 %</b><span>des informations reliées à leur document source</span></div>
+  </div>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Le problème</h2>
+      <p>Batteries et data centers ont besoin d'un gros branchement au réseau. Les postes électriques sont limités et très demandés.</p>
+      <ul>
+        <li>File d'attente : environ 15 GW de batteries et 18 GW de data centers <span class="tag hyp">à sourcer avant diffusion</span></li>
+        <li>L'information est éparpillée dans des centaines de PDF publics, parfois scannés.</li>
+        <li>Le registre officiel a environ un an de retard : il s'arrête au 31/12/2025 <span class="tag fact">vérifié</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Ce qu'on fait</h2>
+      <p>Chaque jour, le radar lit les dépôts publics (DREAL, autorité environnementale, créations de sociétés, presse) et en extrait :</p>
+      <ul>
+        <li><b>qui</b> porte le projet, <b>où</b>, <b>combien</b> de MW et de MWh, sur <b>quel poste</b>, à quel stade ;</li>
+        <li>la <b>citation exacte</b> du document pour chaque information ;</li>
+        <li>des contrôles automatiques : SIRET, commune, GPS, cohérence de la puissance.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="card case">
+      <h2>Exemple réel</h2>
+      <p><b>Le même développeur se place sur deux postes de l'Aisne et de l'Oise.</b> APAL MW a déposé un projet de batteries de <b>100 MW / 200 MWh</b> à Aubenton, près du poste « Les Hoquins » (dossier du 05/01/2026). Il en a déposé un autre de <b>47 MW / 94 MWh</b> à Bonneuil-les-Eaux, près du poste RTE « Margot », qui est « en cours de construction » selon le dossier (11/02/2026). Aucun de ces deux projets n'est encore visible dans le registre officiel.</p>
+      <p>Le radar a aussi relevé une incohérence : le GPS déclaré dans le dossier de Bonneuil tombe dans une autre commune (Vers-sur-Selle). Le projet est donc signalé « à vérifier ».</p>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card who">
+      <h2>Pour qui</h2>
+      <ul>
+        <li><b>Développeurs de batteries et de data centers</b> : savoir qui vise le même poste, et trouver les zones encore libres.</li>
+        <li><b>Fonds et banques</b> : repérer les projets à financer ou à racheter, et vérifier la concurrence locale.</li>
+        <li><b>Fournisseurs et constructeurs</b> (batteries, transformateurs, génie civil) : contacter les porteurs avant l'appel d'offres.</li>
+        <li><b>Bureaux d'études réseau</b> : suivre la pression sur chaque poste.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Comment on l'utilise</h2>
+      <ul>
+        <li><b>Une carte</b>, avec des filtres et une fiche par projet : citations, documents, contrôles.</li>
+        <li><b>Une alerte par e-mail</b> chaque semaine : nouveaux dossiers, puissance modifiée, décision rendue.</li>
+        <li><b>Des exports</b> : Excel (CSV) et logiciels de cartographie (GeoJSON).</li>
+        <li><b>Un accès direct pour les agents IA</b> (MCP) : « quels projets autour de ce poste ? »</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Offre envisagée <span class="tag hyp">hypothèse à tester</span></h2>
+      <ul>
+        <li>Un abonnement annuel par entreprise, entre 6 000 et 24 000 € selon les régions suivies.</li>
+        <li>Un pilote gratuit d'un mois pour 3 à 5 premiers clients, en échange de leurs retours.</li>
+        <li>Plus tard : un paiement à la requête pour les agents IA.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Où on en est</h2>
+      <ul>
+        <li><b>Prêt</b> : collecte, lecture des PDF, extraction avec preuves, carte, alertes, accès des agents IA, image Docker.</li>
+        <li><b>À faire</b> : la couverture nationale, l'activation et la mesure du tri par IA, les sites des préfectures, l'hébergement.</li>
+        <li><b>Coût de fonctionnement</b> : de l'ordre de quelques dizaines d'euros par mois (serveur, OCR, IA) <span class="tag hyp">estimation</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>Prochaines étapes proposées</h2>
+      <ol class="steps">
+        <li>Présenter la démo à 5 à 10 clients potentiels et noter ce qu'ils paieraient, pour quoi et combien.</li>
+        <li>Lancer une première mise à jour réelle, pour montrer des alertes sur de vraies nouveautés.</li>
+        <li>Si l'intérêt se confirme : choisir l'hébergement, ouvrir un pilote, puis étendre à l'Île-de-France et à toute la France.</li>
+      </ol>
+    </div>
+  </section>
+
+  <p class="note">Sources : DREAL Hauts-de-France (décisions et formulaires d'examen au cas par cas) ; registre national des installations ODRÉ (Licence Ouverte, état au 31/12/2025). Données du prototype au 12/10/2026, sur un échantillon (35 documents, 22 dossiers). Étiquettes : <span class="tag fact">vérifié</span> = contrôlé dans une source publique ; <span class="tag hyp">hypothèse</span> = à confirmer avant toute diffusion externe.</p>
+</div>
+</body>
+</html>
