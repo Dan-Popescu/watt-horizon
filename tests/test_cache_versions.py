@@ -68,5 +68,5 @@ def test_ocr_cache_and_transcripts_win(tmp_path: Path) -> None:
 def test_filing_records_versions_and_reading(loaded_db: Database) -> None:
     filing = loaded_db.filing("dreal_case_by_case:hauts-de-france:2025-4009")
     assert filing is not None
-    assert set(filing.versions) == {"extraction", "classification", "ocr"}
+    assert {"extraction", "classification", "ocr", "code"} <= set(filing.versions)  # + git in a checkout
     assert list(filing.reading.values()) == ["transcript (p1)"]  # scanned decision read from its transcript
