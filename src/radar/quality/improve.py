@@ -6,12 +6,14 @@ Written to `<data>/improve/<field>.md` by `radar improve`; English, for coding a
 """
 
 import dataclasses
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from radar.domain.fields import Value
 from radar.quality.cases import Case, check, replay
 from radar.quality.locate import locate
+from radar.quality.rulebook import LearnedRule
 from radar.quality.suggest import Suggestion, suggest
 
 WHERE: dict[str, list[str]] = {
@@ -45,11 +47,11 @@ class Ticket:
     suggestions: list[Suggestion] = dataclasses.field(default_factory=list)
 
 
-def tickets(cases: list[Case]) -> list[Ticket]:
+def tickets(cases: list[Case], rules: Sequence[LearnedRule] = ()) -> list[Ticket]:
     out: dict[str, Ticket] = {}
     for case in cases:
-        got = replay(case)
-        for name, ok in check(case).items():
+        got = replay(case, rules)
+        for name, ok in check(case, rules).items():
             if ok:
                 continue
             texts = {d.id: d.text for d in case.documents}
@@ -65,7 +67,7 @@ def tickets(cases: list[Case]) -> list[Ticket]:
                 Failure(case.number, case.expected[name], got[name], context)
             )
     for ticket in out.values():
-        ticket.suggestions = suggest(cases, ticket.field)
+        ticket.suggestions = suggest(cases, ticket.field, rules=rules)
     return sorted(out.values(), key=lambda t: -len(t.failures))
 
 

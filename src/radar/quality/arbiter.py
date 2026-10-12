@@ -27,11 +27,12 @@ BASE_PRIOR: dict[str, float] = {
     "decision:title": 0.6,
     "llm": 0.65,
 }
+RULE_PRIOR = 0.7  # adopted rules (gold/rules.json): fill gaps; their real reliability is learned like any source
 WEAK_VALUE_FACTOR = 0.5  # e.g. a substation given only as a voltage (« 400kV »)
 
 
 def prior(field_name: str, source: str) -> float:
-    base = BASE_PRIOR.get(source, 0.6)
+    base = RULE_PRIOR if source.startswith("rule:") else BASE_PRIOR.get(source, 0.6)
     if field_name in DECISION_FIRST:
         return min(0.95, base + 0.15) if source.startswith("decision") else base - 0.05
     return base

@@ -7,6 +7,7 @@ from radar.extraction.llm import FieldExtractor
 from radar.net.http import PoliteHttp
 from radar.pipeline.filings import Services
 from radar.quality.propagate import Aliases
+from radar.quality.rulebook import Rulebook
 from radar.quality.templates import Registry
 from radar.reading.ocr import make_ocr
 from radar.store.blobs import BlobStore
@@ -56,5 +57,6 @@ def make_services(settings: Settings, http: PoliteHttp | None) -> Services:
         extractor=make_extractor(settings, cache),
         aliases=Aliases.load(settings.aliases_path),
         templates=Registry.load(settings.templates_path),
+        rules=Rulebook.load(settings.rules_path).effective(),
         lookups=make_lookups(settings, http),
     )

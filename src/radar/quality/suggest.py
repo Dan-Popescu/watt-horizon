@@ -11,11 +11,14 @@ turn into a rule (with a test), never applied automatically.
 import dataclasses
 import re
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from radar.evaluation.fields import compare
 from radar.quality.cases import Case, check
 from radar.quality.locate import MONTHS_FR, fold_keep, locate
+from radar.quality.rulebook import LearnedRule
+from radar.quality.values import parse
 
 NUMBER = r"(\d[\d ]*(?:[.,]\d+)?)"
 SHAPES: dict[str, str] = {
@@ -54,24 +57,6 @@ def _folded(case: Case) -> str:
     return " ".join(fold_keep(d.text) for d in case.documents)
 
 
-def _parse(field_name: str, raw: str) -> str | float | None:
-    raw = raw.strip(" -'")
-    if field_name in {"power_mw", "power_mw_min", "energy_mwh"}:
-        try:
-            return float(raw.replace(" ", "").replace(",", "."))
-        except ValueError:
-            return None
-    if field_name == "siret":
-        return raw.replace(" ", "")
-    if field_name == "filed_on":
-        m = re.match(r"(\d{1,2})(?:er)? (\w+) (\d{4})", raw)
-        if m and m[2] in MONTHS_FR:
-            return f"{m[3]}-{MONTHS_FR.index(m[2]) + 1:02d}-{int(m[1]):02d}"
-        d = re.split(r"[ /.-]", raw)
-        return f"{d[2]}-{d[1]}-{d[0]}" if len(d) == 3 else None
-    return raw
-
-
 def _candidates(field_name: str, failing: list[Case]) -> Counter[str]:
     shape = SHAPES[field_name]
     found: Counter[str] = Counter()
@@ -93,12 +78,12 @@ def _candidates(field_name: str, failing: list[Case]) -> Counter[str]:
     return found
 
 
-def suggest(cases: list[Case], field_name: str, limit: int = 5) -> list[Suggestion]:
+def suggest(cases: list[Case], field_name: str, limit: int = 5, rules: Sequence[LearnedRule] = ()) -> list[Suggestion]:
     """Validated candidates for one field, from cases whose replay fails on it."""
     if field_name not in SHAPES:
         return []
     relevant = [c for c in cases if field_name in c.expected]
-    failing = [c for c in relevant if not check(c)[field_name] and c.expected[field_name] is not None]
+    failing = [c for c in relevant if not check(c, rules)[field_name] and c.expected[field_name] is not None]
     results = []
     for regex in _candidates(field_name, failing):
         compiled = re.compile(regex)
@@ -107,7 +92,7 @@ def suggest(cases: list[Case], field_name: str, limit: int = 5) -> list[Suggesti
             m = compiled.search(_folded(case))
             if not m:
                 continue
-            outcome = compare(case.expected[field_name], _parse(field_name, m[1]))
+            outcome = compare(case.expected[field_name], parse(field_name, m[1]))
             if outcome == "correct":
                 s.correct += 1
                 if case in failing:

@@ -10,6 +10,7 @@ radar eval | stats | mcp
 """
 
 import argparse
+import dataclasses
 import json
 import sys
 from collections import Counter
@@ -39,8 +40,10 @@ from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
-from radar.quality import cases, errors, improve, propagate, shadow
+from radar.quality import cases, errors, improve, propagate, rulebook, shadow
+from radar.quality.arbiter import learn
 from radar.quality.drift import drift
+from radar.quality.suggest import suggest
 from radar.quality.templates import Registry
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
@@ -198,7 +201,9 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
                 corrections=db.corrections(),
                 privacy_leaks=audit_privacy(db, blobs),
                 listing=db.listing_counts(),
-                cases=cases.refresh(s.cases_dir) if s.cases_dir.exists() else None,
+                cases=cases.refresh(s.cases_dir, rulebook.Rulebook.load(s.rules_path).effective())
+                if s.cases_dir.exists()
+                else None,
                 ocr=ocr,
                 classifier=classifier,
             )
@@ -348,7 +353,7 @@ def cmd_errors(_: argparse.Namespace, s: Settings) -> Any:
 def cmd_cases(args: argparse.Namespace, s: Settings) -> Any:
     """export: human-verified filings -> gold/cases (replayable tests). check: replay all, update statuses."""
     if args.action == "check":
-        result = cases.refresh(s.cases_dir)
+        result = cases.refresh(s.cases_dir, rulebook.Rulebook.load(s.rules_path).effective())
         summary: dict[str, Any] = {k: len(v) for k, v in result.items()} | {"regressed": result["regressed"]}
         if args.strict and result["regressed"]:
             summary["error"] = "regression: a case that passed fails again"
@@ -376,7 +381,7 @@ def cmd_cases(args: argparse.Namespace, s: Settings) -> Any:
 
 def cmd_improve(args: argparse.Namespace, s: Settings) -> Any:
     """Agent-ready tickets from failing regression cases, with validated rule candidates."""
-    found = improve.tickets(cases.load_all(s.cases_dir))
+    found = improve.tickets(cases.load_all(s.cases_dir), rulebook.Rulebook.load(s.rules_path).effective())
     if args.field:
         found = [t for t in found if t.field == args.field]
     paths = improve.write(found, s.data_dir / "improve")
@@ -415,6 +420,40 @@ def cmd_shadow(args: argparse.Namespace, s: Settings) -> Any:
     if args.strict and breaks:
         result["error"] = "the current code breaks verified values: " + ", ".join(breaks)
     return result
+
+
+def cmd_rules(args: argparse.Namespace, s: Settings) -> Any:
+    """Adopted rules (gold/rules.json): list with learned reliability, adopt a suggestion, disable."""
+    book = rulebook.Rulebook.load(s.rules_path)
+    if args.action == "adopt":
+        if not args.field:
+            return {"error": "--field is required"}
+        regex = args.regex
+        origin = "manual"
+        if not regex:
+            adopted = rulebook.Rulebook.load(s.rules_path).effective()
+            found = suggest(cases.load_all(s.cases_dir), args.field, rules=adopted)
+            if len(found) < args.rank:
+                return {"error": f"no validated suggestion #{args.rank} for {args.field}: run radar improve"}
+            chosen = found[args.rank - 1]
+            regex, origin = chosen.regex, f"suggestion: fixes {', '.join(chosen.fixes)} ({chosen.precision:.0%})"
+        rule = book.adopt(args.field, regex, origin=origin)
+        book.save(s.rules_path)
+        return {"adopted": rule, "next": "radar shadow --strict, then radar run"}
+    if args.action == "disable":
+        book.disable(args.id or "")
+        book.save(s.rules_path)
+        return {"disabled": args.id}
+    with Database(s.db_path) as db:
+        learned = learn(db.filings(), db.corrections())
+    rows = []
+    for r in book.rules:
+        correct, seen = next(
+            (v for (f, src), v in learned.stats.items() if src == f"rule:{r.id}" and f == r.field), (0, 0)
+        )
+        effective = r in book.effective({r.id: (correct, seen)})
+        rows.append({**dataclasses.asdict(r), "reviewed": seen, "correct": correct, "in_use": effective})
+    return {"path": str(s.rules_path), "rules": rows}
 
 
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
@@ -495,6 +534,12 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--strict", action="store_true", help="check: exit 2 on any regression")
     imp = sub.add_parser("improve", help="agent-ready tickets per failing field, with validated rule candidates")
     imp.add_argument("--field", help="only this field")
+    ru = sub.add_parser("rules", help="adopted extraction rules (gold/rules.json): list, adopt, disable")
+    ru.add_argument("action", nargs="?", choices=["list", "adopt", "disable"], default="list")
+    ru.add_argument("--field", help="adopt: field (developer, siret, commune, power_mw, energy_mwh, ...)")
+    ru.add_argument("--regex", help="adopt: explicit regex on fold_keep text (group 1 = value)")
+    ru.add_argument("--rank", type=int, default=1, help="adopt: n-th validated suggestion (radar improve)")
+    ru.add_argument("--id", help="disable: rule id")
     tp = sub.add_parser("templates", help="document templates seen; export = accept them (gold/templates.json)")
     tp.add_argument("action", nargs="?", choices=["list", "export"], default="list")
     sh = sub.add_parser("shadow", help="dry run on the whole corpus: changed values, fixes / breaks vs verified")
@@ -546,6 +591,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "aliases": cmd_aliases,
     "shadow": cmd_shadow,
     "templates": cmd_templates,
+    "rules": cmd_rules,
 }
 
 

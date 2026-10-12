@@ -34,6 +34,7 @@ from radar.quality.arbiter import Arbiter, comparable
 from radar.quality.confidence import Calibration, raw_scores
 from radar.quality.flags import QualityInput, ReadDocument, detect
 from radar.quality.propagate import ALIAS_FIELDS, Aliases
+from radar.quality.rulebook import LearnedRule, RuleHit, apply_rules
 from radar.quality.templates import Registry, fingerprint
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
@@ -56,6 +57,7 @@ class Services:
     calibration: Calibration | None = None  # raw field score -> observed accuracy (None: raw scores, no auto-accept)
     aliases: Aliases | None = None  # learned spellings of names (gold/aliases.json), applied to every build
     templates: Registry | None = None  # known document templates (gold/templates.json); None: nothing flagged as new
+    rules: tuple[LearnedRule, ...] = ()  # adopted rules (gold/rules.json) still trusted by the reviews
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -120,11 +122,26 @@ def _take(facts: Facts, winner: Facts, other: Facts, name: str) -> None:
         facts.evidence[key] = winner.evidence[key]
 
 
+def _take_rule(facts: Facts, name: str, hit: RuleHit) -> None:
+    attr, key = ARBITRATED_ATTRS[name]
+    if name == "power_mw" and isinstance(hit.value, float):
+        facts.mw_min = facts.mw_max = hit.value
+    elif name == "filed_on":
+        facts.filed_on = date.fromisoformat(str(hit.value))
+    else:
+        setattr(facts, attr, hit.value)
+    facts.evidence[key] = hit.evidence
+
+
 def extract_facts(
-    documents: list[tuple[str, DocumentRole, str]], contents: list[PdfContent], arbiter: Arbiter | None = None
+    documents: list[tuple[str, DocumentRole, str]],
+    contents: list[PdfContent],
+    arbiter: Arbiter | None = None,
+    rules: Sequence[LearnedRule] = (),
 ) -> Extraction:
-    """Rule extraction for one filing, then arbitration between form and decision values (quality/arbiter.py).
-    Pure: also used to replay regression cases from stored texts. `documents` = (id, role, title) per content."""
+    """Rule extraction for one filing, then arbitration between form, decision and adopted-rule values
+    (quality/arbiter.py, quality/rulebook.py). Pure: also replays regression cases from stored texts.
+    `documents` = (id, role, title) per content."""
     form, decision = Facts(), Facts()
     for (doc_id, role, title), content in zip(documents, contents, strict=True):
         if role is DocumentRole.FORM:
@@ -135,20 +152,31 @@ def extract_facts(
     facts.fill_from(form)
     facts.fill_from(decision, override=DECISION_WINS)
     by_role = {"form": _candidates("form", form), "decision": _candidates("decision", decision)}
+    texts = {d[0]: c.text for d, c in zip(documents, contents, strict=True)}
+    hits = apply_rules(rules, texts) if rules else {}
     source_facts = {"form": form, "decision": decision}
     arbiter = arbiter or Arbiter()
     candidates: dict[str, list[Candidate]] = {}
     support: dict[str, tuple[float, int, int]] = {}
     for name in ARBITRATED_ATTRS:
         options = [by_role[r][name] for r in ("form", "decision") if name in by_role[r]]
+        options += [h.candidate for h in hits.get(name, [])]
         if not options:
             continue
         candidates[name] = options
         if chosen := arbiter.choose(name, options):
             lead, score, agreeing = chosen
             winner = lead.source.split(":")[0]
-            _take(facts, source_facts[winner], source_facts["decision" if winner == "form" else "form"], name)
+            if winner == "rule":
+                _take_rule(facts, name, next(h for h in hits[name] if h.candidate.source == lead.source))
+            else:
+                _take(facts, source_facts[winner], source_facts["decision" if winner == "form" else "form"], name)
             support[name] = (score, agreeing, len(options))
+    for hit in hits.get("energy_mwh", []):  # not arbitrated: fills a gap only
+        candidates.setdefault("energy_mwh", []).append(hit.candidate)
+        if facts.mwh is None and isinstance(hit.value, float):
+            facts.mwh = hit.value
+            facts.evidence.setdefault("power", hit.evidence)
     titles = [title for _, _, title in documents]
     facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(titles)
     return Extraction(form, decision, facts, candidates, support)
@@ -169,7 +197,7 @@ def build_filing(
         doc.id for doc, c in zip(documents, contents, strict=True) if c.unread_scanned_pages and c.is_mostly_scanned
     ]
 
-    extraction = extract_facts([(d.id, d.role, d.title) for d in documents], contents, services.arbiter)
+    extraction = extract_facts([(d.id, d.role, d.title) for d in documents], contents, services.arbiter, services.rules)
     form, decision, facts = extraction.form, extraction.decision, extraction.facts
     if services.aliases is not None:  # « la SAS X » -> « X »: verified spellings learned from corrections
         for name in ALIAS_FIELDS:

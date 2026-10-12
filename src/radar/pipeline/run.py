@@ -11,8 +11,9 @@ from radar.linking.registry import commissioned
 from radar.pipeline.changes import track_changes
 from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.projects import build_projects
-from radar.quality.arbiter import learn
+from radar.quality.arbiter import Arbiter, learn
 from radar.quality.confidence import calibrate
+from radar.quality.rulebook import LearnedRule, Rulebook
 from radar.quality.shadow import diff_machine
 from radar.store.db import Database, utcnow
 
@@ -25,16 +26,24 @@ class StepReport:
     to_review: list[str] = field(default_factory=list)
 
 
+def rule_filter(rules: tuple[LearnedRule, ...], arbiter: Arbiter) -> tuple[LearnedRule, ...]:
+    """Drop adopted rules that reviews proved unreliable (see quality/rulebook.Rulebook.effective)."""
+    seen = {s.removeprefix("rule:"): stats for (_, s), stats in arbiter.stats.items() if s.startswith("rule:")}
+    return Rulebook(list(rules)).effective(seen)
+
+
 def process_filings(db: Database, services: Services, only: set[str] | None = None) -> StepReport:
     """(Re)build every filing that has documents. One failing filing never stops the others.
     Source reliabilities and confidence calibration are re-learned from human reviews first, unless given."""
     report = StepReport()
     if services.arbiter is None or services.calibration is None:
         filings, corrections = db.filings(), db.corrections()
+        arbiter = services.arbiter or learn(filings, corrections)
         services = replace(
             services,
-            arbiter=services.arbiter or learn(filings, corrections),
+            arbiter=arbiter,
             calibration=services.calibration or calibrate(filings, corrections),
+            rules=rule_filter(services.rules, arbiter),
         )
     for key in db.filing_keys_with_documents():
         if only is not None and key not in only:

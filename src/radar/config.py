@@ -58,6 +58,11 @@ class Settings:
         return self.gold_dir / "cases"
 
     @property
+    def rules_path(self) -> Path:
+        """Adopted extraction rules (`radar rules adopt`), applied at every build as arbiter candidates."""
+        return self.gold_dir / "rules.json"
+
+    @property
     def templates_path(self) -> Path:
         """Known document templates (`radar templates export`); unknown ones are flagged at build."""
         return self.gold_dir / "templates.json"

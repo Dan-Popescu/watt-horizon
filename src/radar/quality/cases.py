@@ -8,6 +8,7 @@ Files: `gold/cases/<number>.json`, versioned. Tests: `tests/test_gold_cases.py`.
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -19,6 +20,7 @@ from radar.domain.models import DocumentRecord, Filing
 from radar.domain.privacy import PersonScrubber, is_person_field
 from radar.evaluation.fields import compare
 from radar.pipeline.filings import extract_facts
+from radar.quality.rulebook import LearnedRule
 from radar.reading.pdf import PdfContent
 
 REPLAYABLE: dict[str, str] = {  # field -> Facts attribute (category needs a classifier: not replayed here)
@@ -71,9 +73,9 @@ def make_case(
     return case
 
 
-def replay(case: Case) -> dict[str, Value]:
+def replay(case: Case, rules: Sequence[LearnedRule] = ()) -> dict[str, Value]:
     contents = [PdfContent(pages=1, fields=d.fields, page_texts=(d.text,), scanned_pages=()) for d in case.documents]
-    facts = extract_facts([(d.id, DocumentRole(d.role), d.title) for d in case.documents], contents).facts
+    facts = extract_facts([(d.id, DocumentRole(d.role), d.title) for d in case.documents], contents, rules=rules).facts
     out: dict[str, Value] = {}
     for name, attr in REPLAYABLE.items():
         value = getattr(facts, attr)
@@ -81,8 +83,8 @@ def replay(case: Case) -> dict[str, Value]:
     return out
 
 
-def check(case: Case) -> dict[str, bool]:
-    got = replay(case)
+def check(case: Case, rules: Sequence[LearnedRule] = ()) -> dict[str, bool]:
+    got = replay(case, rules)
     return {name: compare(expected, got[name]) in {"correct", "absent"} for name, expected in case.expected.items()}
 
 
@@ -103,12 +105,12 @@ def load_all(directory: Path) -> list[Case]:
     return [load(p) for p in sorted(directory.glob("*.json"))] if directory.exists() else []
 
 
-def refresh(directory: Path) -> dict[str, list[str]]:
+def refresh(directory: Path, rules: Sequence[LearnedRule] = ()) -> dict[str, list[str]]:
     """Replay every case; open fields that now pass become fixed; fixed fields that fail are regressions."""
     result: dict[str, list[str]] = {"open": [], "fixed": [], "newly_fixed": [], "regressed": []}
     for case in load_all(directory):
         changed = False
-        for name, ok in check(case).items():
+        for name, ok in check(case, rules).items():
             label = f"{case.number}:{name}"
             if ok and case.status.get(name) != "fixed":
                 case.status[name], changed = "fixed", True
