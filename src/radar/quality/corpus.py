@@ -38,12 +38,14 @@ CIVILITY_OR_CONTACT = re.compile(
     r"(?:\b(?:M\.|Mme|Mlle|Monsieur|Madame)\s+(?:[A-ZÉÈ][\w'’-]+\s?){1,3})|[\w.+-]+@[\w-]+\.[\w.-]+|(?:\+33\s?|0)[1-9](?:[ .-]?\d{2}){4}"
 )
 IMAGE_REMOVE: int = getattr(pymupdf, "PDF_REDACT_IMAGE_REMOVE", 1)  # not in PyMuPDF's type stubs
+IMAGE_KEEP: int = getattr(pymupdf, "PDF_REDACT_IMAGE_NONE", 0)
 TEXT_KEEP: int = getattr(pymupdf, "PDF_REDACT_TEXT_NONE", 1)
 SIGNATURE_FIELD: int = getattr(pymupdf, "PDF_WIDGET_TYPE_SIGNATURE", 6)
 SIGNATURE_LINES = 3  # the signature title line and the lines after it (name, function)
 
 
-def _redact_page(page: Any, names: set[str]) -> None:
+def redact_page_text(page: Any, names: set[str]) -> None:
+    """Black out person data in the page's text layer (images untouched)."""
     lines = page.get_text("text").splitlines()
     targets: set[str] = set()
     for i, line in enumerate(lines):
@@ -54,7 +56,11 @@ def _redact_page(page: Any, names: set[str]) -> None:
     for target in targets:
         for rect in page.search_for(target):
             page.add_redact_annot(rect, fill=(0, 0, 0))
-    page.apply_redactions()
+    page.apply_redactions(images=IMAGE_KEEP)
+
+
+def _redact_page(page: Any, names: set[str]) -> None:
+    redact_page_text(page, names)
     for xref, *_ in page.get_images(full=True):  # signatures, stamps, logos: none is needed for extraction
         for rect in page.get_image_rects(xref):
             page.add_redact_annot(rect)

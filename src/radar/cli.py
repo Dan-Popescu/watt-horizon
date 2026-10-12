@@ -269,6 +269,7 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
         mcp_host=args.public_host or args.host,
         review=review_mode,
         quality=(lambda db: quality_overview(db, s.cases_dir)) if args.review else None,
+        document=BlobStore(s.blobs_dir).get if args.review else None,
     )
     print(f"http://{args.host}:{args.port}  (MCP: /mcp)", file=sys.stderr)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

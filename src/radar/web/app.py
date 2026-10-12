@@ -25,7 +25,7 @@ from starlette.staticfiles import StaticFiles
 from radar.api import exports, queries
 from radar.api.review import review_items, submit_review
 from radar.classification.gold import GoldLabel
-from radar.quality import propagate
+from radar.quality import pageview, propagate
 from radar.store.db import Database
 
 STATIC = Path(__file__).parent / "static"
@@ -73,10 +73,12 @@ def build_app(
     mcp_host: str = "127.0.0.1",
     review: tuple[Rebuild, Callable[[], dict[str, GoldLabel]]] | None = None,
     quality: Callable[[Database], dict[str, Any]] | None = None,
+    document: Callable[[str], bytes] | None = None,
 ) -> Starlette:
     """`mcp_host`: the host clients use; MCP rejects other Host headers (DNS-rebinding protection).
     `review`: enables the internal review endpoints (rebuild function, draft gold labels loader).
-    `quality`: enables the internal quality dashboard endpoint (/api/quality)."""
+    `quality`: enables the internal quality dashboard endpoint (/api/quality).
+    `document`: PDF bytes by document id; with `review`, enables the highlighted evidence page (review only)."""
     db_path = Path(db_path)
 
     def endpoint(fn: Callable[[Database, Request], Any]) -> Callable[[Request], Response]:
@@ -194,6 +196,28 @@ def build_app(
         review[0](db, key)
         return {"withdrawn": correction_id}
 
+    def evidence_page(db: Database, request: Request) -> Any:
+        """The PDF page a value was read from, passage highlighted, person names blacked out (never stored)."""
+        if review is None or document is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        filing = db.filing(request.path_params["key"])
+        ev = filing.evidence.get(request.path_params["field"]) if filing else None
+        if ev is None or ev.document_id == "human":
+            return _json({"error": "no document evidence for this field"}, 404)
+        try:
+            data = document(ev.document_id)
+        except FileNotFoundError:
+            return _json({"error": "document file missing (blobs)"}, 404)
+        view = pageview.render(data, ev.quote, ev.locator)
+        headers = {
+            **NO_STORE,
+            "X-Radar-Page": str(view.page),
+            "X-Radar-Pages": str(view.pages),
+            "X-Radar-Found": "1" if view.found else "0",
+            "X-Radar-Top": f"{view.top:.3f}",
+        }
+        return Response(view.png, media_type="image/png", headers=headers)
+
     def quality_view(db: Database, _: Request) -> Any:
         if quality is None:
             return _json({"error": "quality dashboard is off (radar web --review)"}, 404)
@@ -219,6 +243,7 @@ def build_app(
         Route("/api/review/{key}/corrections", review_submit, methods=["POST"]),
         Route("/api/review/suggestions", endpoint(review_suggestions)),
         Route("/api/review/suggestions/apply", review_propagate, methods=["POST"]),
+        Route("/api/review/{key}/evidence/{field}.png", endpoint(evidence_page)),
         Route("/api/review/corrections/{correction_id:int}", endpoint(review_withdraw), methods=["DELETE"]),
     ]
     lifespan = None

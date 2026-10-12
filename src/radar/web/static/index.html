@@ -139,6 +139,14 @@
   .rv input, .rv select { font-size:16.5px; padding:6px 9px; }
   .rv .q { font-size:14.5px; }
   .page .grid { grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); }
+  .see { border:0; background:none; color:var(--accent); cursor:pointer; padding:0 2px; font:inherit; font-style:normal; text-decoration:underline; }
+  #pdf-view { position:fixed; inset:0; z-index:50; background:rgba(10,14,20,.55); display:flex; justify-content:center; padding:24px 16px; }
+  #pdf-view[hidden] { display:none; }
+  #pdf-view .box { background:var(--panel); border-radius:14px; box-shadow:var(--shadow); width:min(980px,100%); display:flex; flex-direction:column; overflow:hidden; }
+  #pdf-view .bar { display:flex; gap:12px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); font-size:15.5px; flex-wrap:wrap; }
+  #pdf-view .bar .sp { flex:1; }
+  #pdf-view .scroll { overflow:auto; flex:1; background:#fff; }
+  #pdf-view img { display:block; width:100%; height:auto; }
 </style>
 </head>
 <body>
@@ -250,6 +258,10 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.9.0/maplibre-gl.min.js"></script>
+<div id="pdf-view" hidden><div class="box">
+  <div class="bar"><b id="pdf-title"></b><span class="sub" id="pdf-info"></span><span class="sp"></span><button class="btn" id="pdf-close">Fermer (Échap)</button></div>
+  <div class="scroll" id="pdf-scroll"><img id="pdf-img" alt="page du document"></div>
+</div></div>
 <script>
 "use strict";
 const CATEGORIES = {
@@ -568,7 +580,7 @@ function renderBatch(rows) {
         <td style="width:150px"><b>${esc(it.number)}</b><div class="sub" style="font-size:13.5px">${esc(ALL_CATEGORIES[it.category] || it.category)}</div></td>
         <td style="width:300px">${input(it)}</td>
         <td style="width:150px">${confBadge(it, name)}</td>
-        <td class="qt">${ev ? "« " + esc(ev.quote.slice(0, 180)) + " »" : ""}</td>
+        <td class="qt">${ev ? "« " + esc(ev.quote.slice(0, 180)) + " » " + seeButton(it, EVIDENCE_OF[name] || name, name) : ""}</td>
         <td style="width:90px">${it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a>`).join(" ")}</td>
       </tr>`;
     }).join("")}</table>`;
@@ -596,6 +608,38 @@ async function saveBatchRow(it, value, name) {
     renderReview();
   } catch (e) { alert(e.message); }
 }
+// Evidence in the PDF: the page the value was read from, passage highlighted (review mode only).
+function seeButton(it, evidenceField, label) {
+  return `<button type="button" class="see" data-see="${esc(evidenceField)}" data-key="${esc(it.key)}" data-label="${esc(label)}" title="Voir le passage dans le PDF">voir dans le PDF</button>`;
+}
+let pdfUrl = null;
+async function showEvidence(key, field, label) {
+  const headers = token() ? { Authorization: "Bearer " + token() } : {};
+  const res = await fetch(`api/review/${encodeURIComponent(key)}/evidence/${encodeURIComponent(field)}.png`, { headers });
+  if (!res.ok) { alert((await res.json().catch(() => ({}))).error || res.statusText); return; }
+  if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+  pdfUrl = URL.createObjectURL(await res.blob());
+  const found = res.headers.get("X-Radar-Found") === "1", top = +res.headers.get("X-Radar-Top") || 0;
+  $("pdf-title").textContent = label;
+  $("pdf-info").textContent = `page ${res.headers.get("X-Radar-Page")} / ${res.headers.get("X-Radar-Pages")}`
+    + (found ? "" : " · passage non repéré sur la page (page scannée ou citation recomposée) : lire le document");
+  const img = $("pdf-img");
+  img.onload = () => { const sc = $("pdf-scroll"); sc.scrollTop = Math.max(0, top * img.clientHeight - sc.clientHeight / 3); };
+  img.src = pdfUrl;
+  $("pdf-view").hidden = false;
+  $("pdf-close").focus();
+}
+function closeEvidence() { $("pdf-view").hidden = true; }
+$("pdf-close").onclick = closeEvidence;
+$("pdf-view").onclick = (e) => { if (e.target.id === "pdf-view") closeEvidence(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("pdf-view").hidden) { closeEvidence(); e.stopPropagation(); } }, true);
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-see]");
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  showEvidence(b.dataset.key, b.dataset.see, b.dataset.label);
+});
+
 function options(map, current) {
   return Object.entries(map).map(([k, label]) => `<option value="${esc(k)}" ${k === current ? "selected" : ""}>${esc(label)}</option>`).join("");
 }
@@ -608,7 +652,7 @@ function reviewCard(it) {
       ? `<select data-f="${name}">${blind ? '<option value="" selected>— à lire dans le document —</option>' : ""}${options(DECISIONS, value)}</select>`
       : `<input data-f="${name}" type="${type}" ${type === "number" ? 'step="any"' : ""} value="${esc(value)}" placeholder="absent du document">`;
     const ev = it.evidence[EVIDENCE_OF[name] || name];
-    const hint = blind ? "" : [ev ? `« ${esc(ev.quote.slice(0, 160))} »` : "",
+    const hint = blind ? "" : [ev ? `« ${esc(ev.quote.slice(0, 160))} » ${seeButton(it, EVIDENCE_OF[name] || name, label)}` : "",
       machine !== value ? `<span class="machine">machine : ${esc(machine || "—")}</span>` : ""].filter(Boolean).join(" · ");
     return `<label class="fld"><span>${label} ${blind ? "" : confBadge(it, name)}</span>${input}${hint ? `<div class="q" title="${esc(ev ? ev.quote : "")}">${hint}</div>` : ""}</label>`;
   }).join("");
