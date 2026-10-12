@@ -33,6 +33,7 @@ from radar.pipeline.corrections import apply_corrections, with_machine
 from radar.quality.arbiter import Arbiter, comparable
 from radar.quality.confidence import Calibration, raw_scores
 from radar.quality.flags import QualityInput, ReadDocument, detect
+from radar.quality.propagate import ALIAS_FIELDS, Aliases
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
 from radar.store.blobs import BlobStore
@@ -52,6 +53,7 @@ class Services:
     extractor: FieldExtractor | None = None  # LLM fallback for fields the rules missed (target filings only)
     arbiter: Arbiter | None = None  # learned source reliabilities (None: priors = hand-written precedence)
     calibration: Calibration | None = None  # raw field score -> observed accuracy (None: raw scores, no auto-accept)
+    aliases: Aliases | None = None  # learned spellings of names (gold/aliases.json), applied to every build
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -167,6 +169,9 @@ def build_filing(
 
     extraction = extract_facts([(d.id, d.role, d.title) for d in documents], contents, services.arbiter)
     form, decision, facts = extraction.form, extraction.decision, extraction.facts
+    if services.aliases is not None:  # « la SAS X » -> « X »: verified spellings learned from corrections
+        for name in ALIAS_FIELDS:
+            setattr(facts, name, services.aliases.apply(name, getattr(facts, name)))
     # GDPR: from here on, nothing derived from the documents may carry a natural person's name.
     privacy = PersonScrubber.for_filing(form_fields, [facts.developer, facts.legal_name])
     texts = [privacy.scrub(t) or "" for t in texts]

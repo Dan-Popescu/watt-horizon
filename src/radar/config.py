@@ -58,6 +58,11 @@ class Settings:
         return self.gold_dir / "cases"
 
     @property
+    def aliases_path(self) -> Path:
+        """Verified spellings of names learned from corrections (`radar aliases export`)."""
+        return self.gold_dir / "aliases.json"
+
+    @property
     def corrections_path(self) -> Path:
         """Export of human corrections (`radar review export`), so reviews survive a lost database."""
         return self.gold_dir / "corrections.jsonl"

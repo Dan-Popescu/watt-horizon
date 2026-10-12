@@ -25,6 +25,7 @@ from starlette.staticfiles import StaticFiles
 from radar.api import exports, queries
 from radar.api.review import review_items, submit_review
 from radar.classification.gold import GoldLabel
+from radar.quality import propagate
 from radar.store.db import Database
 
 STATIC = Path(__file__).parent / "static"
@@ -150,6 +151,38 @@ def build_app(
 
         return await run_in_threadpool(endpoint(write), request)
 
+    def review_suggestions(db: Database, _: Request) -> Any:
+        if review is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        return [propagate.as_dict(x) for x in propagate.suggestions(db.filings(), db.corrections())]
+
+    async def review_propagate(request: Request) -> Response:
+        """Apply one suggestion (field = value) to the listed filings, each recorded as its own correction."""
+        if review is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        try:
+            body = await request.json()
+        except ValueError:
+            return _json({"error": "JSON body expected"}, 400)
+
+        def write(db: Database, _: Request) -> Any:
+            keys = [str(k) for k in body.get("keys") or []]
+            note = f"propagée depuis {body.get('learned_from', '?')}"
+            for key in keys:
+                submit_review(
+                    db,
+                    key,
+                    author=str(body.get("author", "")),
+                    changes={str(body["field"]): body.get("value")},
+                    note=note,
+                    cause=body.get("cause") or None,
+                )
+            for key in keys:
+                review[0](db, key)
+            return {"applied": len(keys)}
+
+        return await run_in_threadpool(endpoint(write), request)
+
     def review_withdraw(db: Database, request: Request) -> Any:
         if review is None:
             return _json({"error": "review mode is off (radar web --review)"}, 404)
@@ -184,6 +217,8 @@ def build_app(
         Route("/api/quality", endpoint(quality_view)),
         Route("/api/review", endpoint(review_list)),
         Route("/api/review/{key}/corrections", review_submit, methods=["POST"]),
+        Route("/api/review/suggestions", endpoint(review_suggestions)),
+        Route("/api/review/suggestions/apply", review_propagate, methods=["POST"]),
         Route("/api/review/corrections/{correction_id:int}", endpoint(review_withdraw), methods=["DELETE"]),
     ]
     lifespan = None

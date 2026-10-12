@@ -17,6 +17,7 @@
     --shadow:0 6px 24px rgba(0,0,0,.35);
   } }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }  /* author display rules (grid, flex) must not override `hidden` */
   html, body { margin:0; height:100%; }
   body { font:16.5px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
   button, input, select { font:inherit; color:inherit; }
@@ -95,6 +96,14 @@
   .rv .fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px 16px; margin-top:12px; }
   .rv .fld { display:flex; flex-direction:column; gap:3px; min-width:0; font-size:15px; }
   .rv .fld > span { font-size:13.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .sugg { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:12px; padding:10px 14px; margin-bottom:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .batch { width:100%; border-collapse:separate; border-spacing:0 6px; }
+  .batch td { background:var(--panel); padding:8px 10px; vertical-align:middle; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .batch td:first-child { border-left:1px solid var(--line); border-radius:10px 0 0 10px; } .batch td:last-child { border-right:1px solid var(--line); border-radius:0 10px 10px 0; }
+  .batch tr.focus td { background:var(--chip); border-color:var(--accent); }
+  .batch tr.done td { opacity:.55; }
+  .batch input, .batch select { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 9px; font-size:16px; }
+  .batch .qt { color:var(--muted); font-style:italic; font-size:14.5px; max-width:520px; }
   .rv .fld > span .tag { text-transform:none; letter-spacing:0; margin-left:4px; vertical-align:1px; }
   .rv .fld-2 { grid-column:span 2; }
   .rv input, .rv select { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:5px 8px; font-size:15px; }
@@ -204,6 +213,9 @@
         <div class="head" style="padding:0 0 12px">
           <div><h1>Relecture</h1><div class="sub" id="review-progress"></div></div>
           <div class="row" style="margin:0">
+            <select id="review-mode" aria-label="Mode" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
+              <option value="filing">Par dossier</option><option value="field">Par champ (lot, clavier)</option></select>
+            <select id="review-field" aria-label="Champ" hidden style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px"></select>
             <select id="review-filter" aria-label="Filtre" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
               <option value="todo">File de relecture</option><option value="all">Tous les dossiers</option></select>
             <select id="review-flag" aria-label="Signalement" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px"><option value="">Tous les signalements</option></select>
@@ -213,7 +225,9 @@
           </div>
         </div>
         <div class="sub" style="margin-bottom:10px">Chaque correction l'emporte sur l'extraction automatique et devient une référence vérifiée pour mesurer la qualité (<code>radar eval</code>).</div>
+        <div id="review-suggestions"></div>
         <div class="rv-grid" id="review-list"></div>
+        <div id="review-batch" hidden></div>
       </div>
     </section>
 
@@ -501,11 +515,86 @@ const CAUSES = { ocr: "lecture / OCR", layout: "mise en page du document", rule:
 const blindMode = () => $("review-blind").checked;
 const inQueue = (it) => it.priority > 0;
 
+let reviewSuggestions = [];
 async function loadReview() {
-  try { reviewItems = await api("api/review"); }
+  try { [reviewItems, reviewSuggestions] = await Promise.all([api("api/review"), api("api/review/suggestions")]); }
   catch (e) { $("review-list").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
   $("review-author").textContent = "Relecteur : " + (author() || "?");
+  renderSuggestions();
   renderReview();
+}
+
+// Propagation: the same wrong machine value on other unreviewed filings, fixed in one click.
+function renderSuggestions() {
+  $("review-suggestions").innerHTML = reviewSuggestions.map((s, i) => `<div class="sugg">
+      <div><b>${esc(s.field)}</b> : « ${esc(str(s.wrong))} » → « <b>${esc(str(s.right))}</b> » <span class="sub">(corrigé sur ${esc(s.learned_from)})</span>
+      <div class="sub">même valeur de la machine sur ${esc(s.numbers.length)} autre(s) dossier(s) : ${esc(s.numbers.join(", "))}</div></div>
+      <button class="btn primary" data-sugg="${i}">Appliquer à ${esc(s.numbers.length)} dossier(s)</button></div>`).join("");
+  document.querySelectorAll("[data-sugg]").forEach((b) => b.onclick = async () => {
+    const who = author() || askAuthor();
+    if (!who) return;
+    const s = reviewSuggestions[+b.dataset.sugg];
+    b.disabled = true; b.textContent = "Application…";
+    try {
+      await api("api/review/suggestions/apply", "POST", { field: s.field, value: s.right, keys: s.keys, author: who, cause: s.cause, learned_from: s.learned_from });
+      await loadReview(); await reloadProjects();
+    } catch (e) { b.textContent = e.message; }
+  });
+}
+
+// Batch mode: one field, many filings, lowest confidence first; keyboard: ↑/↓ or j/k, Enter = confirm or save.
+const BATCH_FIELDS = [["category", "Catégorie"], ...REVIEW_FIELDS.map(([n, l]) => [n, l])];
+$("review-field").innerHTML = BATCH_FIELDS.map(([n, l]) => `<option value="${n}">${esc(l)}</option>`).join("");
+$("review-mode").onchange = () => { $("review-field").hidden = $("review-mode").value !== "field"; renderReview(); };
+$("review-field").onchange = renderReview;
+let batchFocus = 0;
+function batchRows(rows) {
+  const name = $("review-field").value, key = CONF_OF[name] || name;
+  return [...rows].sort((a, b) => (a.field_confidence[key] ?? 1) - (b.field_confidence[key] ?? 1));
+}
+function renderBatch(rows) {
+  const name = $("review-field").value;
+  const ordered = batchRows(rows);
+  batchFocus = Math.min(batchFocus, Math.max(0, ordered.length - 1));
+  const input = (it) => name === "category"
+    ? `<select data-b>${options(ALL_CATEGORIES, it.category)}</select>`
+    : name === "review_decision" ? `<select data-b>${options(DECISIONS, str(it.values[name]))}</select>`
+    : `<input data-b value="${esc(str(it.values[name]))}" placeholder="absent du document">`;
+  $("review-batch").innerHTML = `<div class="sub" style="margin-bottom:6px">↑/↓ ou j/k : se déplacer · Entrée : valider la ligne (ou enregistrer la correction tapée) · la confiance la plus basse d'abord</div>
+    <table class="batch">${ordered.map((it, i) => {
+      const ev = it.evidence[EVIDENCE_OF[name] || name];
+      const verified = it.corrections.some((c) => c.field === name);
+      return `<tr data-row="${i}" data-key="${esc(it.key)}" class="${i === batchFocus ? "focus" : ""} ${verified ? "done" : ""}" tabindex="0">
+        <td style="width:150px"><b>${esc(it.number)}</b><div class="sub" style="font-size:13.5px">${esc(ALL_CATEGORIES[it.category] || it.category)}</div></td>
+        <td style="width:300px">${input(it)}</td>
+        <td style="width:150px">${confBadge(it, name)}</td>
+        <td class="qt">${ev ? "« " + esc(ev.quote.slice(0, 180)) + " »" : ""}</td>
+        <td style="width:90px">${it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a>`).join(" ")}</td>
+      </tr>`;
+    }).join("")}</table>`;
+  const focusRow = () => { const tr = $("review-batch").querySelector(`[data-row="${batchFocus}"]`); if (tr) { tr.focus(); tr.scrollIntoView({ block: "nearest" }); } };
+  $("review-batch").querySelectorAll("tr[data-row]").forEach((tr) => {
+    tr.onclick = () => { batchFocus = +tr.dataset.row; $("review-batch").querySelectorAll("tr").forEach((r) => r.classList.toggle("focus", r === tr)); };
+    tr.onkeydown = async (e) => {
+      if ((e.key === "ArrowDown" || (e.key === "j" && e.target.tagName === "TR")) && batchFocus < ordered.length - 1) { batchFocus++; renderBatchFocus(); e.preventDefault(); }
+      else if ((e.key === "ArrowUp" || (e.key === "k" && e.target.tagName === "TR")) && batchFocus > 0) { batchFocus--; renderBatchFocus(); e.preventDefault(); }
+      else if (e.key === "Enter") { e.preventDefault(); await saveBatchRow(ordered[+tr.dataset.row], tr.querySelector("[data-b]").value.trim(), name); }
+    };
+  });
+  function renderBatchFocus() { $("review-batch").querySelectorAll("tr[data-row]").forEach((r) => r.classList.toggle("focus", +r.dataset.row === batchFocus)); focusRow(); }
+  focusRow();
+}
+async function saveBatchRow(it, value, name) {
+  const who = author() || askAuthor();
+  if (!who) return;
+  if (name === "category" && !ALL_CATEGORIES[value]) return;
+  try {
+    const updated = await api("api/review/" + encodeURIComponent(it.key) + "/corrections", "POST",
+      { author: who, changes: { [name]: value === "" ? null : value }, validate: false });
+    reviewItems = reviewItems.map((x) => (x.key === updated.key ? updated : x));
+    batchFocus++;
+    renderReview();
+  } catch (e) { alert(e.message); }
 }
 function options(map, current) {
   return Object.entries(map).map(([k, label]) => `<option value="${esc(k)}" ${k === current ? "selected" : ""}>${esc(label)}</option>`).join("");
@@ -561,6 +650,10 @@ function renderReview() {
   const rows = reviewItems.filter((it) => (!todo || inQueue(it)) && (!code || it.flags.some((f) => f.code === code)));
   const done = reviewItems.filter((it) => !inQueue(it)).length;
   $("review-progress").textContent = `${done} / ${reviewItems.length} dossiers relus · ${reviewItems.length - done} dans la file, par priorité`;
+  const batch = $("review-mode").value === "field";
+  $("review-batch").hidden = !batch;
+  $("review-list").hidden = batch;
+  if (batch) { renderBatch(rows); return; }
   $("review-list").innerHTML = rows.map(reviewCard).join("") || '<div class="empty">Tout est relu.</div>';
   document.querySelectorAll("#review-list [data-key]").forEach((card) => {
     card.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => submitReview(card, b.dataset.act === "save"));

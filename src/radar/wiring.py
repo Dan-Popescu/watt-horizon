@@ -6,6 +6,7 @@ from radar.config import Settings
 from radar.extraction.llm import FieldExtractor
 from radar.net.http import PoliteHttp
 from radar.pipeline.filings import Services
+from radar.quality.propagate import Aliases
 from radar.reading.ocr import make_ocr
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
@@ -52,5 +53,6 @@ def make_services(settings: Settings, http: PoliteHttp | None) -> Services:
         ocr=make_ocr(settings.transcripts_dir, use_tesseract=settings.use_tesseract, cache=cache),
         classifier=make_classifier(settings, cache),
         extractor=make_extractor(settings, cache),
+        aliases=Aliases.load(settings.aliases_path),
         lookups=make_lookups(settings, http),
     )

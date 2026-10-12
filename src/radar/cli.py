@@ -38,7 +38,7 @@ from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
-from radar.quality import cases, errors, improve
+from radar.quality import cases, errors, improve, propagate
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
@@ -355,6 +355,15 @@ def cmd_improve(args: argparse.Namespace, s: Settings) -> Any:
     }
 
 
+def cmd_aliases(_: argparse.Namespace, s: Settings) -> Any:
+    """Learn name spellings from corrections into gold/aliases.json (applied at every build). Then: radar run."""
+    with Database(s.db_path) as db:
+        learned = propagate.learn_aliases(db.filings(), db.corrections())
+    merged = propagate.merge(propagate.Aliases.load(s.aliases_path), learned)
+    merged.save(s.aliases_path)
+    return {"path": str(s.aliases_path), "aliases": {k: len(v) for k, v in merged.table.items()}, "next": "radar run"}
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -433,6 +442,8 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--strict", action="store_true", help="check: exit 2 on any regression")
     imp = sub.add_parser("improve", help="agent-ready tickets per failing field, with validated rule candidates")
     imp.add_argument("--field", help="only this field")
+    al = sub.add_parser("aliases", help="learn verified name spellings from corrections (gold/aliases.json)")
+    al.add_argument("action", choices=["export"])
     tri = sub.add_parser("triage", help="review queue: what a human should check first, and why")
     tri.add_argument("--limit", type=int, default=20)
     hl = sub.add_parser("health", help="collector health (blocked / empty / stale / crashed sources)")
@@ -474,6 +485,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "errors": cmd_errors,
     "cases": cmd_cases,
     "improve": cmd_improve,
+    "aliases": cmd_aliases,
 }
 
 
