@@ -128,6 +128,8 @@ class Filing(Model):
     machine: MachineOutput | None = None
     reviewed_at: datetime | None = None  # last human validation or correction
     flags: tuple[Flag, ...] = ()  # computed at every build: what a reviewer should look at first
+    # Slices for metrics and error analysis: source, form_layout, read (text|ocr|transcript|unread), department.
+    strata: dict[str, str] = Field(default_factory=dict)
 
 
 class Correction(Model):

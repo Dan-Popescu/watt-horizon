@@ -53,6 +53,11 @@ class Settings:
         return self.gold_dir / "fields.jsonl"
 
     @property
+    def cases_dir(self) -> Path:
+        """Regression cases built from human-verified filings (`radar cases export`)."""
+        return self.gold_dir / "cases"
+
+    @property
     def corrections_path(self) -> Path:
         """Export of human corrections (`radar review export`), so reviews survive a lost database."""
         return self.gold_dir / "corrections.jsonl"

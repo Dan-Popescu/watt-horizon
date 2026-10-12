@@ -52,11 +52,32 @@ def classification_text(description: str | None, texts: list[str]) -> str:
     return squash(" ".join([description or "", *texts]))
 
 
+def extract_facts(
+    documents: list[tuple[str, DocumentRole, str]], contents: list[PdfContent]
+) -> tuple[Facts, Facts, Facts]:
+    """Rule extraction for one filing: (form facts, decision facts, merged facts). Pure: also used to replay
+    regression cases from stored texts (quality/cases.py). `documents` = (id, role, title) per content."""
+    form, decision = Facts(), Facts()
+    for (doc_id, role, title), content in zip(documents, contents, strict=True):
+        if role is DocumentRole.FORM:
+            form.fill_from(extract_cerfa(doc_id, content))
+        elif role is DocumentRole.DECISION:
+            decision.fill_from(extract_decision(doc_id, content.text, title))
+    facts = Facts()
+    facts.fill_from(form)
+    facts.fill_from(decision, override=DECISION_WINS)
+    if is_voltage_only(facts.substation) and decision.substation and not is_voltage_only(decision.substation):
+        facts.evidence.pop("substation", None)
+        facts.set("substation", decision.substation, decision.evidence.get("substation"))
+    titles = [title for _, _, title in documents]
+    facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(titles)
+    return form, decision, facts
+
+
 def build_filing(key: str, documents: list[DocumentRecord], services: Services) -> Filing:
     if not documents:
         raise ValueError(f"filing {key} has no documents")
     source, region, number = documents[0].source, *key.split(":", 2)[1:]
-    form, decision = Facts(), Facts()
     contents = read_documents(documents, services)
     texts = [c.text for c in contents]
     form_fields = [c.fields for c in contents]
@@ -65,19 +86,7 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
         doc.id for doc, c in zip(documents, contents, strict=True) if c.unread_scanned_pages and c.is_mostly_scanned
     ]
 
-    for doc, content in zip(documents, contents, strict=True):
-        if doc.role is DocumentRole.FORM:
-            form.fill_from(extract_cerfa(doc.id, content))
-        elif doc.role is DocumentRole.DECISION:
-            decision.fill_from(extract_decision(doc.id, content.text, doc.title))
-
-    facts = Facts()
-    facts.fill_from(form)
-    facts.fill_from(decision, override=DECISION_WINS)
-    if is_voltage_only(facts.substation) and decision.substation and not is_voltage_only(decision.substation):
-        facts.evidence.pop("substation", None)
-        facts.set("substation", decision.substation, decision.evidence.get("substation"))
-    facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(documents)
+    form, decision, facts = extract_facts([(d.id, d.role, d.title) for d in documents], contents)
     # GDPR: from here on, nothing derived from the documents may carry a natural person's name.
     privacy = PersonScrubber.for_filing(form_fields, [facts.developer, facts.legal_name])
     texts = [privacy.scrub(t) or "" for t in texts]
@@ -150,6 +159,7 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
         unread_scans=tuple(unread),
         reading=reading,
         flags=flags,
+        strata=_strata(source.value, documents, contents, unread, facts.department),
         versions={
             "extraction": EXTRACTION_VERSION,
             "classification": classification.method,
@@ -157,6 +167,30 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
             **({"extraction_llm": extractor_used} if extractor_used else {}),
         },
     )
+
+
+def _strata(
+    source: str, documents: list[DocumentRecord], contents: list[PdfContent], unread: list[str], department: str | None
+) -> dict[str, str]:
+    """Slices used to break metrics and errors down (a global score hides a weak document type)."""
+    layouts = sorted(
+        {form_layout(c.fields) for d, c in zip(documents, contents, strict=True) if d.role is DocumentRole.FORM}
+    )
+    engines = {e for c in contents for e in c.ocr_engines.values()}
+    if unread:
+        read = "unread"
+    elif any(e != "transcript" for e in engines):
+        read = "ocr"
+    elif engines:
+        read = "transcript"
+    else:
+        read = "text"
+    return {
+        "source": source,
+        "form_layout": "+".join(layouts) or "no-form",
+        "read": read,
+        "department": department or "?",
+    }
 
 
 # Facts attribute for each fallback field.
@@ -215,9 +249,9 @@ def _best_title(documents: list[DocumentRecord], facts: Facts) -> str:
     return facts.title or ""
 
 
-def _department_from_titles(documents: list[DocumentRecord]) -> str | None:
-    for doc in documents:
-        if m := re.search(r"\((\d{2}|2[AB])\)", doc.title):
+def _department_from_titles(titles: list[str]) -> str | None:
+    for title in titles:
+        if m := re.search(r"\((\d{2}|2[AB])\)", title):
             return m[1]
     return None
 

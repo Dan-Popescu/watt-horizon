@@ -33,8 +33,10 @@ from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers
 from radar.pipeline.corrections import reviewed_references
+from radar.pipeline.filings import read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
+from radar.quality import cases, errors
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
@@ -283,6 +285,41 @@ def cmd_triage(args: argparse.Namespace, s: Settings) -> Any:
     return {"queue": len(queue), "items": queue[: args.limit]}
 
 
+def cmd_errors(_: argparse.Namespace, s: Settings) -> Any:
+    """Where the machine fails, according to human corrections; and whether detectors saw it coming."""
+    with Database(s.db_path) as db:
+        return errors.analyse(db.filings(), db.corrections())
+
+
+def cmd_cases(args: argparse.Namespace, s: Settings) -> Any:
+    """export: human-verified filings -> gold/cases (replayable tests). check: replay all, update statuses."""
+    if args.action == "check":
+        result = cases.refresh(s.cases_dir)
+        summary: dict[str, Any] = {k: len(v) for k, v in result.items()} | {"regressed": result["regressed"]}
+        if args.strict and result["regressed"]:
+            summary["error"] = "regression: a case that passed fails again"
+        return summary
+    services = make_services(s, make_http(s))
+    written = []
+    with Database(s.db_path) as db:
+        filings = db.filings()
+        _, verified = reviewed_references(filings, db.corrections())
+        for filing in filings:
+            if filing.number not in verified:
+                continue
+            documents = db.documents(filing.key)
+            case = cases.make_case(
+                filing, documents, read_documents(documents, services), verified[filing.number].expected
+            )
+            previous = s.cases_dir / f"{case.number}.json"
+            if previous.exists():  # never downgrade a fixed field: its failure must surface as a regression
+                old = cases.load(previous)
+                case.status |= {k: "fixed" for k, v in old.status.items() if v == "fixed" and k in case.status}
+            cases.save(case, s.cases_dir)
+            written.append(case.number)
+    return {"written": written, "dir": str(s.cases_dir)}
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -355,6 +392,10 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--strict", action="store_true", help="exit 2 if any metric regressed")
     ev.add_argument("--classifier", action="store_true", help="also re-run the model classifier alone (paid)")
     ev.add_argument("--draft-fields", action="store_true", help="add unverified field references from extractions")
+    sub.add_parser("errors", help="error clusters from human corrections, detector precision / recall")
+    cs = sub.add_parser("cases", help="regression cases from human-verified filings (gold/cases)")
+    cs.add_argument("action", choices=["export", "check"])
+    cs.add_argument("--strict", action="store_true", help="check: exit 2 on any regression")
     tri = sub.add_parser("triage", help="review queue: what a human should check first, and why")
     tri.add_argument("--limit", type=int, default=20)
     hl = sub.add_parser("health", help="collector health (blocked / empty / stale / crashed sources)")
@@ -393,6 +434,8 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "review": cmd_review,
     "health": cmd_health,
     "triage": cmd_triage,
+    "errors": cmd_errors,
+    "cases": cmd_cases,
 }
 
 
