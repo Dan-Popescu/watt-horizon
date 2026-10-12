@@ -12,11 +12,11 @@ uv sync --all-extras                      # install (extra "llm" = anthropic SDK
 uv run pytest                             # offline tests (network tests: -m network)
 uv run ruff format src tests && uv run ruff check src tests && uv run mypy   # must all pass
 uv run radar --help                       # CLI; every command prints ONE JSON object on stdout
-RADAR_OFFLINE=1 uv run radar run          # rebuild filings -> links -> projects, no network
+RADAR_OFFLINE=1 uv run radar run          # rebuild changed filings -> links -> projects, no network (--full: all)
 RADAR_OFFLINE=1 uv run radar eval         # quality report, stored and compared with the previous run
 uv run radar eval --strict                # exit 2 on any regression (CI / before merging an extractor change)
 uv run radar web [--review]               # map + JSON API + MCP over HTTP (127.0.0.1:8765); --review = correction UI
-uv run radar review export|import         # back up / restore human corrections (gold/corrections.jsonl)
+uv run radar review export|import         # back up / restore corrections + link decisions (gold/*.jsonl)
 uv run radar changes --since 2026-10-01   # change log (new / changed / removed projects)
 uv run radar export csv|geojson           # files in <data>/exports/
 uv run radar digest --since 2026-10-05    # weekly alert e-mail (HTML or --format text)
@@ -28,6 +28,10 @@ uv run radar improve [--field F]          # agent-ready tickets: failing cases +
 uv run radar shadow [--strict]            # dry run of current code on ALL filings: fixes / breaks vs verified
 uv run radar aliases export               # learn name spellings from corrections (gold/aliases.json)
 uv run radar templates [export]           # document templates seen / accept them (gold/templates.json)
+uv run radar rules list|adopt|disable     # regex rules adopted without code (gold/rules.json), learned reliability
+uv run radar screen-terms [suggest|adopt] # screen terms learned from screen misses (gold/screen_terms.json)
+uv run radar robustness                  # metamorphic check: text perturbations must not change values
+uv run radar corpus build|snapshot        # redacted real-PDF corpus (tests/corpus), replayed by the tests
 uv run radar mcp                          # MCP server, stdio
 uv run radar update                       # scheduled job: polite collect of recent items + run (network!)
 docker build -t radar-raccordement .      # production image (see compose.yaml); also runs the OCR evaluation
@@ -44,7 +48,7 @@ Definition of done: format + ruff + mypy strict + pytest green, and `radar run` 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `RADAR_DATA_DIR` | `data` | state: `radar.sqlite`, `blobs/`, `transcripts/`, `cache/` (lookups, `derived.sqlite`), `reference/`, `exports/` |
-| `RADAR_GOLD_DIR` | `gold` | versioned references: `labels.jsonl`, `fields.jsonl`, `corrections.jsonl` (human work: in git) |
+| `RADAR_GOLD_DIR` | `gold` | versioned references: `labels.jsonl`, `fields.jsonl`, `corrections.jsonl`, `link_decisions.jsonl`, adopted `rules.json` / `screen_terms.json` / `aliases.json` / `templates.json` (human work: in git) |
 | `RADAR_OFFLINE` | `0` | `1` = no network at all: no HTTP, no LLM; lookups from cache + reference files only |
 | `RADAR_LLM_MODEL` | unset | e.g. `claude-opus-5-5`: enables LLM classification + fallback extraction (extra `llm` + `ANTHROPIC_API_KEY`) |
 | `RADAR_TESSERACT` | `1` | OCR scanned pages with local Tesseract when on PATH (after transcripts); `0` disables |
@@ -62,17 +66,22 @@ domain/         pure types + rules (no I/O): enums, models, ids, geo, power, tex
 store/          db.py (SQLite, migrations), blobs.py (sha256 files), cache.py (disposable derived results)
 reading/        bytes -> PdfContent (text, AcroForm fields, scanned pages); ocr.py = engines + provenance + cache
 extraction/     PdfContent/text -> Facts (value + Evidence): cerfa, decision, substation; llm.py = verified fallback
-classification/ rules.screen (layer 1, recall-first) -> Classifier chain (LLM cached, then gold labels)
+classification/ rules.screen (layer 1, recall-first; + adopted terms.py) -> Classifier chain (LLM cached, then
+                gold labels); bayes = local second opinion (never decides, flags confident disagreements)
 validation/     Facts + Lookups port -> Checks (GDPR, SIRET, commune, GPS, power, dates) + confidence
-linking/        linker (related links), resolve (same-project groups), registry (commissioned installations)
+linking/        linker (related links), resolve (same-project groups, must/cannot-link), registry
+                (commissioned installations), review (human link verdicts: queue, linker/grouping metrics)
 pipeline/       filings (build), corrections (human overrides), run (process / link_and_build), changes (log),
-                projects, health (collectors), importers
+                projects, health (collectors), importers, fingerprint (incremental: skip unchanged filings)
 evaluation/     gold (field references), fields, ocr, classification, privacy, stats (Wilson, dev/test split),
                 rigor (strata, calibration, blind, recall estimate), report (run-to-run comparison)
 quality/        flags (doubt detectors), audit (fetch although rejected), triage (review queue), errors (learn
                 from corrections), cases (regression cases), locate + suggest + improve (bad example -> ticket),
                 arbiter (learned source reliabilities), confidence (calibrated per-field), propagate (same-error
-                suggestions, aliases), shadow (whole-corpus dry run), templates (layout fingerprints), drift
+                suggestions, aliases), shadow (whole-corpus dry run), templates (layout fingerprints), drift,
+                rulebook (adopted regex rules), robustness (metamorphic), corpus (redacted real PDFs),
+                pageview (evidence highlighted on its PDF page), screen_terms (screen misses -> terms),
+                agreement (double annotation, kappa)
 net/http.py     PoliteHttp: per-host pacing, retries, SiteBlockedError
 sources/        collectors: dreal, mrae, georisques, registry (companies), energy_registry, press, prefectures
 api/            read queries -> pydantic views (only thing MCP/CLI/web expose); exports, digest, review
@@ -97,7 +106,9 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
    parallelise requests to one host, never retry around a 403/429/disconnect, never bypass a block.
    Prefecture sites blocked us once (2026-10): keep `MIN_INTERVAL_S = 5` and a page budget.
 5. **Writes**: `Database` writes do not commit; the caller wraps them in `with db.transaction():`.
-6. **Idempotence**: `process`/`link`/`run` rebuild from stored documents; re-running changes nothing.
+6. **Idempotence**: `process`/`link`/`run` rebuild from stored documents; re-running changes nothing. A filing
+   is skipped when its input fingerprint is unchanged (`pipeline/fingerprint.py`: documents, code hash, steering
+   gold files, setup, corrections, learned state); `--full` forces it. Each filing records `versions.code`/`git`.
 7. **Layer 1 screen is recall-first**: it may keep noise, it must not drop a target. Regex changes need a test with
    the verbatim title that motivated them.
 8. **Read API is read-only.** MCP tools and web endpoints open one short-lived connection per call; bad input ->
@@ -112,6 +123,7 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
     them, so a bump never reads a stale answer. `data/cache/derived.sqlite` can be deleted at any time.
 13. **Same-project grouping is conservative**: same commune AND (same SIRET or same developer). A SIRET alone is not
     enough (one company files several projects). Registry "in service" needs the strict match in `linking/registry.py`.
+    Human link verdicts (`LinkDecision`: same_project / related / unrelated) override grouping at every build.
 14. **Web UI** (`web/static/index.html`): one file, no build step, escapes every value (`esc`, `safeUrl`).
     `tests/test_web.py` checks its JavaScript with `node --check`.
 
@@ -133,7 +145,17 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
 6. **Check before adopting**: `radar shadow --strict` (whole corpus: fixes / breaks / unknown), `radar cases check
    --strict`, `radar eval --strict`. After `radar run`, changed machine values are logged and queued for review.
 7. **Watch**: `radar health` (collectors + drift per source / template), `radar eval` (intervals, dev/test,
-   strata incl. template, calibration diagram + ECE, auto-accept share, arbitration table).
+   strata incl. template, calibration diagram + ECE, auto-accept share, arbitration table, robustness, second
+   opinion, linker precision + grouping, reviewer agreement + kappa).
+8. **Without code**: `radar rules adopt` (regex rule from a validated `radar improve` candidate; dropped
+   automatically if reviews prove it unreliable), `radar screen-terms adopt` (term rescuing screen misses, with
+   its cost in extra fetches), aliases, templates. Each is a versioned file in `gold/`.
+9. **Project level**: review mode « Liens entre dossiers » (pairs ordered by consequence: machine merges first).
+10. **References**: ~10 % of reviewed filings come back for a blind second review by another reviewer
+   (`quality/agreement.py`); accuracy above the agreement rate is not meaningful.
+11. **Robustness**: `radar robustness` (perturbed texts) and the redacted real-PDF corpus replay
+   (`tests/test_corpus.py`) catch reading/library changes. Review shows each value on its PDF page
+   (`/api/review/{key}/evidence/{field}.png`, rendered in memory, names blacked out).
 
 Rules: never look at test-split errors or tune on them (`evaluation/stats.split_of`; they never become cases).
 Drafts (`verified: false`) only catch regressions. OCR quality runs where Tesseract exists (Docker).
@@ -162,7 +184,10 @@ Drafts (`verified: false`) only catch regressions. OCR quality runs where Tesser
 
 - Offline by default; HTTP is mocked with `httpx.MockTransport`; LLMs with a fake client (`tests/test_llm_extraction.py`).
 - Test text comes from real public documents (verbatim excerpts). Say so when values are combined.
-- PDFs are generated with `tests.conftest.make_pdf(pages, fields)`; no binary fixtures.
+- PDFs are generated with `tests.conftest.make_pdf(pages, fields)`. Only binary exception: `tests/corpus/`, real
+  public PDFs redacted by `radar corpus build` (persons, images, digital signatures, metadata removed; scanned
+  documents refused; the audit must be empty). Never add an unredacted PDF. After an intended output change:
+  `radar corpus snapshot` and review the `expected.json` diff.
 - Shared end-to-end dataset: fixture `loaded_db` in `tests/conftest.py`. The `settings` fixture points `gold_dir`
   to a temp dir: tests must never read or write the repository's `gold/`.
 

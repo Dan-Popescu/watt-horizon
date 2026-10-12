@@ -44,7 +44,8 @@ La carte est alors sur http://127.0.0.1:8765. Avec `RADAR_OFFLINE=1`, rien n'est
   - le tri ;
   - les données personnelles.
 - `radar web --review` ouvre la page de **relecture**, en usage interne. Chaque dossier validé ou corrigé devient une référence vérifiée. Les corrections l'emportent sur la machine, et la machine reste mesurée telle quelle.
-- `radar review export` sauvegarde les corrections dans `gold/`, qui est versionné.
+- `radar review export` sauvegarde les corrections et les décisions sur les liens dans `gold/`, qui est versionné.
+- En relecture, « voir dans le PDF » montre la page d'origine avec la valeur surlignée, et le mode « Liens entre dossiers » fait confirmer ou séparer les projets.
 
 - À chaque construction de dossier, des **signalements** repèrent les cas suspects. La file de relecture (`radar triage`) les présente en premier, avec la raison.
 - `radar errors` montre où la machine se trompe le plus. `radar cases` transforme chaque dossier vérifié en test de non-régression.
