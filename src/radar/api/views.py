@@ -116,6 +116,16 @@ class CorrectionView(View):
     note: str
     author: str
     created_at: str
+    cause: str | None = None
+    blind: bool = False
+
+
+class FlagView(View):
+    code: str
+    severity: str
+    field: str | None
+    detail: str
+    label: str
 
 
 class ReviewItem(View):
@@ -136,3 +146,7 @@ class ReviewItem(View):
     documents: list[DocumentView]
     checks: list[CheckView]
     corrections: list[CorrectionView]
+    priority: float = Field(default=0.0, description="review priority (0 = reviewed and up to date)")
+    reasons: list[str] = Field(default_factory=list, description="why to review it, most important first")
+    flags: list[FlagView] = Field(default_factory=list)
+    stale_review: bool = False

@@ -4,34 +4,41 @@ Writes go through `submit_review`; the caller then rebuilds the filing (`process
 so corrections are applied by the same code path as every nightly run.
 """
 
+import json
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from radar.api.views import CheckView, CorrectionView, DocumentView, EvidenceView, ReviewItem
+from radar.api.views import CheckView, CorrectionView, DocumentView, EvidenceView, FlagView, ReviewItem
 from radar.classification.gold import GoldLabel
 from radar.domain.enums import Category
 from radar.domain.fields import field_values, machine_values
 from radar.domain.models import Correction, Filing
 from radar.domain.privacy import PersonScrubber
-from radar.pipeline.corrections import VALIDATED, validate_value
+from radar.pipeline.corrections import CAUSES, VALIDATED, validate_value
+from radar.quality.flags import FLAGS
+from radar.quality.triage import triage
 from radar.store.db import Database
 
 _NOTES = PersonScrubber()
 
 
-def _priority(item: ReviewItem) -> tuple[int, str]:
-    """Never reviewed and doubtful first, then never reviewed, then reviewed."""
-    if item.reviewed_at is None:
-        return (0 if item.confidence == "review" else 1, item.number)
-    return (2, item.number)
-
-
-def review_items(db: Database, labels: dict[str, GoldLabel]) -> list[ReviewItem]:
+def review_items(db: Database, labels: dict[str, GoldLabel], today: date | None = None) -> list[ReviewItem]:
+    """Every filing, the review queue first (by priority, see quality/triage.py), reviewed ones last."""
+    all_corrections = db.corrections()
     corrections: dict[str, list[Correction]] = {}
-    for c in db.corrections():
+    for c in all_corrections:
         corrections.setdefault(c.filing_key, []).append(c)
-    items = [_item(db, f, labels.get(f.number), corrections.get(f.key, [])) for f in db.filings()]
-    return sorted(items, key=_priority)
+    filings = db.filings()
+    queue = {t.key: t for t in triage(filings, all_corrections, today or date.today())}
+    items = []
+    for f in filings:
+        item = _item(db, f, labels.get(f.number), corrections.get(f.key, []))
+        if t := queue.get(f.key):
+            item = item.model_copy(
+                update={"priority": round(t.priority, 2), "reasons": t.reasons, "stale_review": t.stale_review}
+            )
+        items.append(item)
+    return sorted(items, key=lambda i: (-i.priority, i.number))
 
 
 def _item(db: Database, f: Filing, label: GoldLabel | None, corrections: Iterable[Correction]) -> ReviewItem:
@@ -63,6 +70,12 @@ def _item(db: Database, f: Filing, label: GoldLabel | None, corrections: Iterabl
             for d in docs.values()
         ],
         checks=[CheckView(name=c.name, status=c.status.value, detail=c.detail) for c in f.checks],
+        flags=[
+            FlagView(
+                code=g.code, severity=g.severity.value, field=g.field, detail=g.detail, label=FLAGS[g.code].label_fr
+            )
+            for g in f.flags
+        ],
         corrections=[
             CorrectionView(
                 id=c.id or 0,
@@ -71,6 +84,8 @@ def _item(db: Database, f: Filing, label: GoldLabel | None, corrections: Iterabl
                 note=c.note,
                 author=c.author,
                 created_at=c.created_at.isoformat(timespec="seconds"),
+                cause=c.cause,
+                blind=c.blind,
             )
             for c in corrections
         ],
@@ -85,9 +100,13 @@ def submit_review(
     changes: dict[str, str | float | None],
     note: str = "",
     validate: bool = False,
+    cause: str | None = None,
+    blind: bool = False,
     now: datetime | None = None,
 ) -> list[int]:
-    """Record field corrections (and optionally "everything else is right"). Raises ValueError on bad input."""
+    """Record field corrections (and optionally "everything else is right"). Raises ValueError on bad input.
+    `blind`: values typed without seeing the machine's; every typed field is stored, even when equal to it.
+    The validation row keeps a snapshot of the machine values, so a later change re-opens the review."""
     filing = db.filing(filing_key)
     if filing is None:
         raise ValueError(f"unknown filing {filing_key}")
@@ -99,6 +118,8 @@ def submit_review(
         raise ValueError("author is required")
     if not changes and not validate:
         raise ValueError("nothing to record")
+    if cause is not None and cause not in CAUSES:
+        raise ValueError(f"cause must be one of {', '.join(CAUSES)}")
     at = now or datetime.now(UTC)
     clean_note = _NOTES.scrub(note.strip()) or ""
     rows = [
@@ -109,13 +130,22 @@ def submit_review(
             note=clean_note,
             author=author,
             created_at=at,
+            cause=cause,
+            blind=blind,
         )
         for name, value in changes.items()
     ]
     if validate:
+        snapshot = json.dumps(machine_values(filing), ensure_ascii=False, sort_keys=True)
         rows.append(
             Correction(
-                filing_key=filing_key, field=VALIDATED, value=None, note=clean_note, author=author, created_at=at
+                filing_key=filing_key,
+                field=VALIDATED,
+                value=snapshot,
+                note=clean_note,
+                author=author,
+                created_at=at,
+                blind=blind,
             )
         )
     with db.transaction():

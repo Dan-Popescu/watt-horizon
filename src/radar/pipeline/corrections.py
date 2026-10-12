@@ -29,6 +29,15 @@ CORRECTABLE: tuple[str, ...] = (
     "review_decision",
 )
 POWER_FIELDS = frozenset({"power_mw", "power_mw_min", "energy_mwh"})
+CAUSES: dict[str, str] = {  # why the machine was wrong: drives where to improve (quality/errors.py)
+    "ocr": "lecture / OCR",
+    "layout": "mise en page du document",
+    "rule": "règle d'extraction",
+    "classification": "classement",
+    "merge": "fusion des documents du dossier",
+    "source": "document ambigu ou erroné",
+    "other": "autre",
+}
 _NOTES = PersonScrubber()  # reviewers' notes: civility names, e-mails and phones are masked too
 
 

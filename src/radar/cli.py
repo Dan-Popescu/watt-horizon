@@ -35,6 +35,7 @@ from radar.pipeline import importers
 from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
+from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
 from radar.sources.regions import get_region
@@ -275,6 +276,13 @@ def cmd_health(args: argparse.Namespace, s: Settings) -> Any:
     return result
 
 
+def cmd_triage(args: argparse.Namespace, s: Settings) -> Any:
+    """The review queue: filings to look at first, with reasons (see quality/triage.py)."""
+    with Database(s.db_path) as db:
+        queue = triage(db.filings(), db.corrections(), date.today())
+    return {"queue": len(queue), "items": queue[: args.limit]}
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -347,6 +355,8 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--strict", action="store_true", help="exit 2 if any metric regressed")
     ev.add_argument("--classifier", action="store_true", help="also re-run the model classifier alone (paid)")
     ev.add_argument("--draft-fields", action="store_true", help="add unverified field references from extractions")
+    tri = sub.add_parser("triage", help="review queue: what a human should check first, and why")
+    tri.add_argument("--limit", type=int, default=20)
     hl = sub.add_parser("health", help="collector health (blocked / empty / stale / crashed sources)")
     hl.add_argument("--strict", action="store_true", help="exit 2 on any alert")
     rev = sub.add_parser("review", help="export/import human corrections (gold/corrections.jsonl)")
@@ -382,6 +392,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "web": cmd_web,
     "review": cmd_review,
     "health": cmd_health,
+    "triage": cmd_triage,
 }
 
 

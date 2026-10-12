@@ -141,6 +141,8 @@ class Correction(Model):
     note: str = ""
     author: str  # internal only: never exposed through the API or MCP
     created_at: datetime
+    cause: str | None = None  # why the machine was wrong (see pipeline.corrections.CAUSES)
+    blind: bool = False  # typed without seeing machine values: an unbiased measurement of the machine
 
 
 class Signal(Model):

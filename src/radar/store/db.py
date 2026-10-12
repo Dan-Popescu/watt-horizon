@@ -64,6 +64,10 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX listing_items_source ON listing_items(source);
     """,
+    """
+    ALTER TABLE corrections ADD COLUMN cause TEXT;
+    ALTER TABLE corrections ADD COLUMN blind INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -252,8 +256,18 @@ class Database:
     # Human corrections (append-only; withdrawing one sets active = 0) ---------------------------------
     def add_correction(self, c: Correction) -> int:
         cur = self.conn.execute(
-            "INSERT INTO corrections (filing_key, field, value, note, author, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (c.filing_key, c.field, json.dumps(c.value), c.note, c.author, c.created_at.isoformat()),
+            "INSERT INTO corrections (filing_key, field, value, note, author, created_at, cause, blind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                c.filing_key,
+                c.field,
+                json.dumps(c.value),
+                c.note,
+                c.author,
+                c.created_at.isoformat(),
+                c.cause,
+                int(c.blind),
+            ),
         )
         return int(cur.lastrowid or 0)
 
@@ -274,6 +288,8 @@ class Database:
                 note=r["note"],
                 author=r["author"],
                 created_at=datetime.fromisoformat(r["created_at"]),
+                cause=r["cause"],
+                blind=bool(r["blind"]),
             )
             for r in self.conn.execute(sql + " ORDER BY id", args)
         ]

@@ -140,6 +140,8 @@ def build_app(
                 changes=dict(body.get("changes") or {}),
                 note=str(body.get("note", "")),
                 validate=bool(body.get("validate", False)),
+                cause=body.get("cause") or None,
+                blind=bool(body.get("blind", False)),
             )
             review[0](db, key)
             return next(i for i in review_items(db, review[1]()) if i.key == key)

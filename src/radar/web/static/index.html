@@ -181,7 +181,9 @@
           <div><h1>Relecture</h1><div class="sub" id="review-progress"></div></div>
           <div class="row" style="margin:0">
             <select id="review-filter" aria-label="Filtre" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
-              <option value="todo">À relire</option><option value="all">Tous les dossiers</option></select>
+              <option value="todo">File de relecture</option><option value="all">Tous les dossiers</option></select>
+            <select id="review-flag" aria-label="Signalement" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px"><option value="">Tous les signalements</option></select>
+            <label class="chip" title="Saisir sans voir les valeurs de la machine : mesure non biaisée"><input type="checkbox" id="review-blind"> À l'aveugle</label>
             <button class="chip" id="review-author"></button>
           </div>
         </div>
@@ -445,6 +447,12 @@ function askAuthor() {
 }
 $("review-author").onclick = askAuthor;
 $("review-filter").onchange = renderReview;
+$("review-flag").onchange = renderReview;
+$("review-blind").onchange = renderReview;
+const CAUSES = { ocr: "lecture / OCR", layout: "mise en page du document", rule: "règle d'extraction",
+  classification: "classement", merge: "fusion des documents du dossier", source: "document ambigu ou erroné", other: "autre" };
+const blindMode = () => $("review-blind").checked;
+const inQueue = (it) => it.priority > 0;
 
 async function loadReview() {
   try { reviewItems = await api("api/review"); }
@@ -456,38 +464,50 @@ function options(map, current) {
   return Object.entries(map).map(([k, label]) => `<option value="${esc(k)}" ${k === current ? "selected" : ""}>${esc(label)}</option>`).join("");
 }
 function reviewCard(it) {
+  const blind = blindMode();  // blind: empty inputs, no machine value, no quote (unbiased measurement)
   const fields = REVIEW_FIELDS.map(([name, label, type]) => {
-    const value = str(it.values[name]), machine = str(it.machine_values[name]);
+    const value = blind ? "" : str(it.values[name]), machine = str(it.machine_values[name]);
     const input = type === "select"
-      ? `<select data-f="${name}">${options(DECISIONS, value)}</select>`
+      ? `<select data-f="${name}">${blind ? '<option value="" selected>— à lire dans le document —</option>' : ""}${options(DECISIONS, value)}</select>`
       : `<input data-f="${name}" type="${type}" ${type === "number" ? 'step="any"' : ""} value="${esc(value)}" placeholder="absent du document">`;
     const ev = it.evidence[EVIDENCE_OF[name] || name];
-    const hint = [ev ? `« ${esc(ev.quote.slice(0, 160))} »` : "",
+    const hint = blind ? "" : [ev ? `« ${esc(ev.quote.slice(0, 160))} »` : "",
       machine !== value ? `<span class="machine">machine : ${esc(machine || "—")}</span>` : ""].filter(Boolean).join(" · ");
     return `<label>${label}${input}</label>${hint ? `<div class="q">${hint}</div>` : ""}`;
   }).join("");
+  const reasons = blind ? "" : it.reasons.map((r) => `<span class="tag review" title="${esc(r)}">${esc(r.length > 70 ? r.slice(0, 70) + "…" : r)}</span>`).join(" ");
   const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a> <span class="sub">${esc(d.read_by)}</span>`).join(" · ");
   const alerts = it.checks.filter((c) => c.status === "alert").map((c) =>
     `<div class="check"><span class="dot s-alert"></span><b>${esc(CHECKS[c.name] || c.name)}</b><span class="sub">${esc(c.detail)}</span></div>`).join("");
-  const history = it.corrections.map((c) => `<li>${esc(c.field)} = <b>${esc(str(c.value) || "—")}</b> <span class="sub">${esc(c.author)}, ${esc(c.created_at.slice(0, 10))}</span> <button class="btn" data-undo="${c.id}">annuler</button></li>`).join("");
+  const history = it.corrections.filter((c) => c.field !== "validated").map((c) => `<li>${esc(c.field)} = <b>${esc(str(c.value) || "—")}</b> <span class="sub">${esc(c.author)}, ${esc(c.created_at.slice(0, 10))}${c.cause ? ", " + esc(CAUSES[c.cause] || c.cause) : ""}${c.blind ? ", à l'aveugle" : ""}</span> <button class="btn" data-undo="${c.id}">annuler</button></li>`).join("");
+  const category = blind || !ALL_CATEGORIES[it.category] ? `<option value="" selected>— à choisir —</option>` : "";
   return `<div class="tile rv" data-key="${esc(it.key)}">
     <div class="row" style="margin:0 0 4px"><b>${esc(it.number)}</b><span class="tag ${esc(it.confidence)}">${CONFIDENCE[it.confidence] || esc(it.confidence)}</span>
-      ${it.reviewed_at ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}</div>
+      ${it.reviewed_at ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}
+      ${it.priority > 0 ? `<span class="tag" title="priorité de relecture">priorité ${esc(it.priority.toFixed(1))}</span>` : ""}</div>
+    ${reasons ? `<div class="row" style="margin:2px 0 6px">${reasons}</div>` : ""}
     <div class="sub">${esc(it.title)}</div>
     <div class="sub" style="margin:4px 0">${docs}</div>
-    <label>Catégorie<select data-f="category">${ALL_CATEGORIES[it.category] ? "" : `<option value="${esc(it.category)}" selected>— à choisir —</option>`}${options(ALL_CATEGORIES, it.category)}</select></label>
-    <div class="q"><span class="machine">machine : ${esc(ALL_CATEGORIES[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · étiquette provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>
-    ${fields}${alerts}
+    <label>Catégorie<select data-f="category">${category}${options(ALL_CATEGORIES, blind ? "" : it.category)}</select></label>
+    ${blind ? "" : `<div class="q"><span class="machine">machine : ${esc(ALL_CATEGORIES[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · étiquette provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>`}
+    ${fields}${blind ? "" : alerts}
+    <label>Cause<select data-cause><option value="">— si une valeur était fausse —</option>${options(CAUSES, "")}</select></label>
     <label>Note<input data-note placeholder="ce qui justifie la correction (facultatif)"></label>
     <div class="actions"><button class="btn primary" data-act="save">Enregistrer et valider</button><button class="btn" data-act="ok">Tout est juste</button><span class="sub" data-msg></span></div>
     ${history ? `<ul class="plain sub" style="margin-top:8px">${history}</ul>` : ""}
   </div>`;
 }
 function renderReview() {
-  const todo = $("review-filter").value === "todo";
-  const rows = reviewItems.filter((it) => !todo || !it.reviewed_at);
-  const done = reviewItems.filter((it) => it.reviewed_at).length;
-  $("review-progress").textContent = `${done} / ${reviewItems.length} dossiers relus`;
+  const todo = $("review-filter").value === "todo", code = $("review-flag").value;
+  const labels = {};
+  reviewItems.forEach((it) => it.flags.forEach((f) => { labels[f.code] = f.label; }));
+  const selected = code;
+  $("review-flag").innerHTML = '<option value="">Tous les signalements</option>' +
+    Object.entries(labels).sort((a, b) => a[1].localeCompare(b[1])).map(([k, l]) =>
+      `<option value="${esc(k)}" ${k === selected ? "selected" : ""}>${esc(l)} (${reviewItems.filter((it) => it.flags.some((f) => f.code === k)).length})</option>`).join("");
+  const rows = reviewItems.filter((it) => (!todo || inQueue(it)) && (!code || it.flags.some((f) => f.code === code)));
+  const done = reviewItems.filter((it) => !inQueue(it)).length;
+  $("review-progress").textContent = `${done} / ${reviewItems.length} dossiers relus · ${reviewItems.length - done} dans la file, par priorité`;
   $("review-list").innerHTML = rows.map(reviewCard).join("") || '<div class="empty">Tout est relu.</div>';
   document.querySelectorAll("#review-list [data-key]").forEach((card) => {
     card.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => submitReview(card, b.dataset.act === "save"));
@@ -501,17 +521,22 @@ async function submitReview(card, withChanges) {
   const who = author() || askAuthor();
   if (!who) return;
   const it = reviewItems.find((x) => x.key === card.dataset.key);
-  const changes = {};
-  if (withChanges) card.querySelectorAll("[data-f]").forEach((el) => {
+  const blind = blindMode(), changes = {};
+  // Blind: everything typed is a measurement, stored even when equal to the machine value.
+  if (withChanges || blind) card.querySelectorAll("[data-f]").forEach((el) => {
     const name = el.dataset.f, value = el.value.trim();
-    if (value !== str(it.values[name])) changes[name] = value === "" ? null : value;
+    if (blind ? !(value === "" && (name === "category" || name === "review_decision")) : value !== str(it.values[name])) {
+      changes[name] = value === "" ? null : value;
+    }
   });
   const msg = card.querySelector("[data-msg]");
+  if (blind && !changes.category) { msg.textContent = "Choisir la catégorie."; return; }
   card.querySelectorAll("button").forEach((b) => b.disabled = true);
   msg.textContent = "Enregistrement…";
   try {
     await api("api/review/" + encodeURIComponent(it.key) + "/corrections", "POST",
-      { author: who, changes, note: card.querySelector("[data-note]").value, validate: true });
+      { author: who, changes, note: card.querySelector("[data-note]").value, validate: true, blind,
+        cause: Object.keys(changes).length && !blind ? card.querySelector("[data-cause]").value || null : null });
     await loadReview(); await reloadProjects();
   } catch (e) { msg.textContent = e.message; card.querySelectorAll("button").forEach((b) => b.disabled = false); }
 }
