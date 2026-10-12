@@ -92,6 +92,14 @@ class Flag(Model):
     detail: str = ""
 
 
+class Candidate(Model):
+    """One source's value for a field, kept even when another source wins (quality/arbiter.py learns from them)."""
+
+    source: str  # "<role>:<kind>", e.g. "form:field", "decision:clause", "llm"
+    value: str | float | None
+    weak: bool = False  # e.g. a substation given only as a voltage
+
+
 class MachineOutput(Model):
     classification: Classification
     values: dict[str, str | float | None]  # see domain.fields.field_values
@@ -131,6 +139,8 @@ class Filing(Model):
     flags: tuple[Flag, ...] = ()  # computed at every build: what a reviewer should look at first
     # Slices for metrics and error analysis: source, form_layout, read (text|ocr|transcript|unread), department.
     strata: dict[str, str] = Field(default_factory=dict)
+    candidates: dict[str, list[Candidate]] = Field(default_factory=dict)  # field -> every source's value
+    field_confidence: dict[str, float] = Field(default_factory=dict)  # field -> calibrated probability of being right
 
 
 class Correction(Model):

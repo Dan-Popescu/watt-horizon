@@ -17,6 +17,7 @@ from radar.evaluation.classification import ClassifierReport, screening_report
 from radar.evaluation.fields import score_fields
 from radar.evaluation.gold import FieldGold
 from radar.evaluation.stats import split_of
+from radar.quality.arbiter import learn
 from radar.quality.errors import analyse
 
 LOWER_IS_BETTER = frozenset(
@@ -109,6 +110,7 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
             "unflagged_errors": errors.unflagged,
             "by_flag": errors.by_flag,
         },
+        "arbitration": learn(filings, inputs.corrections).table(),
         "integrity": {"quote_not_found": sum(g.code == "quote_not_found" for f in filings for g in f.flags)},
         "undecided": {"share": rigor.undecided_share(filings)},
         "cases": cases,

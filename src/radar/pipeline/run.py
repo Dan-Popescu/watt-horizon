@@ -1,7 +1,7 @@
 """Whole-database steps used by the CLI: process filings, link, build projects. Each step is idempotent."""
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from radar.domain.enums import TARGET_CATEGORIES
@@ -11,6 +11,7 @@ from radar.linking.registry import commissioned
 from radar.pipeline.changes import track_changes
 from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.projects import build_projects
+from radar.quality.arbiter import learn
 from radar.store.db import Database, utcnow
 
 
@@ -23,8 +24,11 @@ class StepReport:
 
 
 def process_filings(db: Database, services: Services, only: set[str] | None = None) -> StepReport:
-    """(Re)build every filing that has documents. One failing filing never stops the others."""
+    """(Re)build every filing that has documents. One failing filing never stops the others.
+    Source reliabilities are re-learned from human reviews first, unless `services.arbiter` is given."""
     report = StepReport()
+    if services.arbiter is None:
+        services = replace(services, arbiter=learn(db.filings(), db.corrections()))
     for key in db.filing_keys_with_documents():
         if only is not None and key not in only:
             continue

@@ -9,7 +9,16 @@ from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.rules import screen
 from radar.domain.departments import code_from_postcode
 from radar.domain.enums import TARGET_CATEGORIES, Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
-from radar.domain.models import Classification, Correction, DocumentRecord, Evidence, Filing, Location, Power
+from radar.domain.models import (
+    Candidate,
+    Classification,
+    Correction,
+    DocumentRecord,
+    Evidence,
+    Filing,
+    Location,
+    Power,
+)
 from radar.domain.power import estimate_power
 from radar.domain.privacy import PersonScrubber
 from radar.domain.text import contains_quote, squash
@@ -20,6 +29,7 @@ from radar.extraction.facts import Facts
 from radar.extraction.llm import ExtractionInput, FieldExtractor
 from radar.extraction.substation import is_voltage_only
 from radar.pipeline.corrections import apply_corrections, with_machine
+from radar.quality.arbiter import Arbiter, comparable
 from radar.quality.flags import QualityInput, ReadDocument, detect
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
@@ -38,6 +48,7 @@ class Services:
     classifier: Classifier | None
     lookups: Lookups
     extractor: FieldExtractor | None = None  # LLM fallback for fields the rules missed (target filings only)
+    arbiter: Arbiter | None = None  # learned source reliabilities (None: priors = hand-written precedence)
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -54,11 +65,59 @@ def classification_text(description: str | None, texts: list[str]) -> str:
     return squash(" ".join([description or "", *texts]))
 
 
+# Field -> (Facts attribute, evidence key) for arbitrated fields.
+ARBITRATED_ATTRS: dict[str, tuple[str, str]] = {
+    "developer": ("developer", "developer"),
+    "siret": ("siret", "siret"),
+    "commune": ("commune", "commune"),
+    "power_mw": ("mw_max", "power"),
+    "substation": ("substation", "substation"),
+    "filed_on": ("filed_on", "filed_on"),
+    "review_decision": ("review_decision", "review_decision"),
+}
+
+
+@dataclass
+class Extraction:
+    form: Facts
+    decision: Facts
+    facts: Facts  # merged, arbitrated
+    candidates: dict[str, list[Candidate]]
+    support: dict[str, tuple[float, int, int]]  # field -> (support of the chosen value, agreeing sources, candidates)
+
+
+def _candidates(role: str, facts: Facts) -> dict[str, Candidate]:
+    out = {}
+    for name, (attr, key) in ARBITRATED_ATTRS.items():
+        value = getattr(facts, attr)
+        if name == "power_mw" and value is None:
+            value = facts.mw_min
+        if value in (None, ""):
+            continue
+        ev = facts.evidence.get(key)
+        kind = ev.locator.split(":")[0] if ev else "unknown"
+        weak = name == "substation" and is_voltage_only(str(value))
+        out[name] = Candidate(source=f"{role}:{kind}", value=comparable(value), weak=weak)
+    return out
+
+
+def _take(facts: Facts, winner: Facts, other: Facts, name: str) -> None:
+    attr, key = ARBITRATED_ATTRS[name]
+    if name == "power_mw":
+        facts.mw_min, facts.mw_max, facts.mwh = winner.mw_min, winner.mw_max, winner.mwh
+        if facts.mwh is None and other.mwh is not None and other.mw_max in (None, winner.mw_max):
+            facts.mwh = other.mwh  # same power, energy stated only in the other document
+    else:
+        setattr(facts, attr, getattr(winner, attr))
+    if key in winner.evidence:
+        facts.evidence[key] = winner.evidence[key]
+
+
 def extract_facts(
-    documents: list[tuple[str, DocumentRole, str]], contents: list[PdfContent]
-) -> tuple[Facts, Facts, Facts]:
-    """Rule extraction for one filing: (form facts, decision facts, merged facts). Pure: also used to replay
-    regression cases from stored texts (quality/cases.py). `documents` = (id, role, title) per content."""
+    documents: list[tuple[str, DocumentRole, str]], contents: list[PdfContent], arbiter: Arbiter | None = None
+) -> Extraction:
+    """Rule extraction for one filing, then arbitration between form and decision values (quality/arbiter.py).
+    Pure: also used to replay regression cases from stored texts. `documents` = (id, role, title) per content."""
     form, decision = Facts(), Facts()
     for (doc_id, role, title), content in zip(documents, contents, strict=True):
         if role is DocumentRole.FORM:
@@ -68,12 +127,24 @@ def extract_facts(
     facts = Facts()
     facts.fill_from(form)
     facts.fill_from(decision, override=DECISION_WINS)
-    if is_voltage_only(facts.substation) and decision.substation and not is_voltage_only(decision.substation):
-        facts.evidence.pop("substation", None)
-        facts.set("substation", decision.substation, decision.evidence.get("substation"))
+    by_role = {"form": _candidates("form", form), "decision": _candidates("decision", decision)}
+    source_facts = {"form": form, "decision": decision}
+    arbiter = arbiter or Arbiter()
+    candidates: dict[str, list[Candidate]] = {}
+    support: dict[str, tuple[float, int, int]] = {}
+    for name in ARBITRATED_ATTRS:
+        options = [by_role[r][name] for r in ("form", "decision") if name in by_role[r]]
+        if not options:
+            continue
+        candidates[name] = options
+        if chosen := arbiter.choose(name, options):
+            lead, score, agreeing = chosen
+            winner = lead.source.split(":")[0]
+            _take(facts, source_facts[winner], source_facts["decision" if winner == "form" else "form"], name)
+            support[name] = (score, agreeing, len(options))
     titles = [title for _, _, title in documents]
     facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(titles)
-    return form, decision, facts
+    return Extraction(form, decision, facts, candidates, support)
 
 
 def build_filing(
@@ -91,7 +162,8 @@ def build_filing(
         doc.id for doc, c in zip(documents, contents, strict=True) if c.unread_scanned_pages and c.is_mostly_scanned
     ]
 
-    form, decision, facts = extract_facts([(d.id, d.role, d.title) for d in documents], contents)
+    extraction = extract_facts([(d.id, d.role, d.title) for d in documents], contents, services.arbiter)
+    form, decision, facts = extraction.form, extraction.decision, extraction.facts
     # GDPR: from here on, nothing derived from the documents may carry a natural person's name.
     privacy = PersonScrubber.for_filing(form_fields, [facts.developer, facts.legal_name])
     texts = [privacy.scrub(t) or "" for t in texts]
@@ -106,6 +178,11 @@ def build_filing(
     extractor_used = None
     if services.extractor and classification.category in TARGET_CATEGORIES:
         extractor_used = _llm_fallback(key, title, facts, documents, texts, services.extractor)
+        for name in ARBITRATED_ATTRS:  # LLM values are candidates too: their reliability is learned like any source
+            ev = facts.evidence.get(ARBITRATED_ATTRS[name][1])
+            if ev is not None and ev.locator.startswith("llm-extract:"):
+                value = getattr(facts, ARBITRATED_ATTRS[name][0])
+                extraction.candidates.setdefault(name, []).append(Candidate(source="llm", value=comparable(value)))
     validation = validate(facts, services.lookups)
     flags = detect(
         QualityInput(
@@ -164,6 +241,7 @@ def build_filing(
         unread_scans=tuple(unread),
         reading=reading,
         flags=flags,
+        candidates=extraction.candidates,
         strata=_strata(source.value, documents, contents, unread, facts.department),
         versions={
             "extraction": EXTRACTION_VERSION,

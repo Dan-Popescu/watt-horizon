@@ -73,7 +73,7 @@ def make_case(
 
 def replay(case: Case) -> dict[str, Value]:
     contents = [PdfContent(pages=1, fields=d.fields, page_texts=(d.text,), scanned_pages=()) for d in case.documents]
-    _, _, facts = extract_facts([(d.id, DocumentRole(d.role), d.title) for d in case.documents], contents)
+    facts = extract_facts([(d.id, DocumentRole(d.role), d.title) for d in case.documents], contents).facts
     out: dict[str, Value] = {}
     for name, attr in REPLAYABLE.items():
         value = getattr(facts, attr)
