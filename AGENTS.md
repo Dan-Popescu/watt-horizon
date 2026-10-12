@@ -24,6 +24,10 @@ uv run radar health [--strict]            # collector health (blocked / empty / 
 uv run radar triage                       # review queue: doubtful filings first, with reasons
 uv run radar errors                       # error clusters from corrections, detector precision/recall
 uv run radar cases export|check [--strict] # regression cases from human-verified filings (gold/cases)
+uv run radar improve [--field F]          # agent-ready tickets: failing cases + validated rule candidates
+uv run radar shadow [--strict]            # dry run of current code on ALL filings: fixes / breaks vs verified
+uv run radar aliases export               # learn name spellings from corrections (gold/aliases.json)
+uv run radar templates [export]           # document templates seen / accept them (gold/templates.json)
 uv run radar mcp                          # MCP server, stdio
 uv run radar update                       # scheduled job: polite collect of recent items + run (network!)
 docker build -t radar-raccordement .      # production image (see compose.yaml); also runs the OCR evaluation
@@ -65,8 +69,10 @@ pipeline/       filings (build), corrections (human overrides), run (process / l
                 projects, health (collectors), importers
 evaluation/     gold (field references), fields, ocr, classification, privacy, stats (Wilson, dev/test split),
                 rigor (strata, calibration, blind, recall estimate), report (run-to-run comparison)
-quality/        flags (doubt detectors, at every build), audit (what to fetch although rejected), triage (review
-                queue), errors (learning from corrections), cases (replayable regression cases)
+quality/        flags (doubt detectors), audit (fetch although rejected), triage (review queue), errors (learn
+                from corrections), cases (regression cases), locate + suggest + improve (bad example -> ticket),
+                arbiter (learned source reliabilities), confidence (calibrated per-field), propagate (same-error
+                suggestions, aliases), shadow (whole-corpus dry run), templates (layout fingerprints), drift
 net/http.py     PoliteHttp: per-host pacing, retries, SiteBlockedError
 sources/        collectors: dreal, mrae, georisques, registry (companies), energy_registry, press, prefectures
 api/            read queries -> pydantic views (only thing MCP/CLI/web expose); exports, digest, review
@@ -111,19 +117,26 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
 
 ## Quality loop (how the system improves) — method in `docs/qualite.md`
 
-1. **Detect**: `quality/flags.detect` runs at every build and stores `Filing.flags` (code, severity, field, detail).
-   Collectors also fetch near-miss and ~3 % random rejected items (`quality/audit.decide`, `DocumentRecord.audit`)
-   and record every listed item (`listing_items`) for the recall estimate.
-2. **Prioritise**: `quality/triage` ranks filings: (doubt + 0.5) x stakes + random-audit duty + stale review.
-3. **Correct**: review UI records a `cause` per correction and supports blind entry (`Correction.blind`).
-4. **Learn**: `radar errors` -> clusters (field x outcome x cause x layout x read path) = what to fix first;
-   `unflagged` errors = a detector to write. Fix the rule, add a test with the verbatim text.
-5. **Lock in**: `radar cases export` turns verified dev-split filings into `gold/cases/<number>.json`;
-   `tests/test_gold_cases.py` replays them (fixed fields must pass; open fields are xfail known errors).
-6. **Measure**: `radar eval` (intervals, dev/test, strata, calibration, blind, recall estimate, integrity, cases).
+1. **Detect**: `quality/flags.detect` at every build (`Filing.flags`); unknown layouts via `quality/templates`
+   (`new_template`); collectors fetch near-miss and ~3 % random rejected items (`quality/audit`).
+2. **Choose and score**: every source keeps its value (`Filing.candidates`); `quality/arbiter` picks by reliability
+   learned from reviews (priors = hand-written precedence); `quality/confidence` gives each field a calibrated
+   probability (`Filing.field_confidence`) and auto-accepts only proven-reliable fields. Both re-learn each run.
+3. **Prioritise**: `quality/triage` (doubt incl. uncertain fields and unreviewed machine changes, x stakes).
+4. **Correct fast**: review UI per filing or per field (batch, keyboard); `cause`; blind mode; one-click
+   propagation of a fix to filings with the same wrong value; spelling-only fixes become aliases
+   (`radar aliases export`, applied at every build). A corrected value found in a document gets that passage as
+   evidence (`quality/locate`).
+5. **Learn**: `radar errors` (clusters, unflagged errors); `radar improve` writes `data/improve/<field>.md`: failing
+   cases with the verified value in context + regex candidates validated on all verified cases (never applied
+   automatically). Implement the fix (+ test with the verbatim text), bump `EXTRACTION_VERSION`.
+6. **Check before adopting**: `radar shadow --strict` (whole corpus: fixes / breaks / unknown), `radar cases check
+   --strict`, `radar eval --strict`. After `radar run`, changed machine values are logged and queued for review.
+7. **Watch**: `radar health` (collectors + drift per source / template), `radar eval` (intervals, dev/test,
+   strata incl. template, calibration diagram + ECE, auto-accept share, arbitration table).
 
-Rules: never look at test-split errors or tune on them (`evaluation/stats.split_of`; reports hide them; they never
-become cases). Drafts (`verified: false`) only catch regressions. OCR quality runs where Tesseract exists (Docker).
+Rules: never look at test-split errors or tune on them (`evaluation/stats.split_of`; they never become cases).
+Drafts (`verified: false`) only catch regressions. OCR quality runs where Tesseract exists (Docker).
 
 ## Recipes
 
@@ -155,6 +168,8 @@ become cases). Drafts (`verified: false`) only catch regressions. OCR quality ru
 
 ## Gotchas
 
+- A dataclass attribute named `field` shadows `dataclasses.field` inside the class body: write
+  `import dataclasses` and `dataclasses.field(...)` in such classes (mypy reports "str not callable").
 - **Never edit regexes or `\n` through shell heredocs / Python string replacements**: escapes get mangled (`\b`
   became a backspace twice). Use the editor tool. `tests/test_llm_extraction.py` rejects control characters.
 - Windows: the CLI reconfigures stdout to UTF-8; ad-hoc scripts need `PYTHONIOENCODING=utf-8`. In Git Bash, prefix

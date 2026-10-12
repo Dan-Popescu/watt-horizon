@@ -21,6 +21,16 @@ collecte ─► dossiers + signalements ─► file de relecture ─► correcti
 | 6. Ne jamais régresser | `radar cases export` puis `check` | Chaque dossier vérifié devient un test rejoué sans PDF. Une erreur connue reste « ouverte » jusqu'à sa correction. Un champ corrigé qui casse de nouveau bloque les tests. |
 | 7. Mesurer | `radar eval`, onglet Qualité | Scores avec marge d'erreur, par type de document, sur un jeu de test gelé. Plus : calibration de la confiance, justesse à l'aveugle, rappel estimé du tri, intégrité des preuves, régressions. |
 
+## Ce qui s'améliore tout seul, et ce qui reste humain
+
+| Automatique (à chaque `radar run`) | Humain (rapide) |
+| --- | --- |
+| Fiabilité de chaque source réapprise à partir des relectures (arbitrage) | Relire le haut de la file, par dossier ou **par champ** au clavier |
+| Confiance par champ recalibrée ; acceptation automatique seulement quand c'est prouvé | Appliquer en un clic une correction **propagée** aux dossiers qui ont la même erreur |
+| Variantes d'écriture apprises appliquées partout (`radar aliases export`) | Choisir la cause de l'erreur |
+| Changements de la machine enregistrés et mis en relecture | Donner un ticket `radar improve` à un agent, puis vérifier `radar shadow --strict` |
+| Modèles de documents inconnus et dérives signalés | Accepter un nouveau modèle (`radar templates export`) une fois ses règles vérifiées |
+
 ## Règles de méthode
 
 - **Jeu de test gelé.** Environ 30 % des dossiers sont tirés une fois pour toutes (de façon stable, par numéro). On voit leurs scores, jamais le détail de leurs erreurs, et ils ne deviennent pas des cas de test : sinon on règle les règles sur eux et leurs scores mentent. Les dossiers traités avant le 2026-10-12 ont déjà servi au réglage : le jeu de test n'est fiable que pour les dossiers ajoutés depuis.
