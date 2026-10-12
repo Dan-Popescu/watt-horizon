@@ -87,14 +87,23 @@
   .diff { font-size:13px; margin-top:6px; } .diff div { display:flex; gap:6px; } .diff .l { color:var(--muted); min-width:120px; }
   .diff s { color:var(--muted); }
   details summary { cursor:pointer; list-style:none; } details[open] summary { display:none; }
-  .rv label { display:grid; grid-template-columns:130px 1fr; gap:8px; align-items:start; margin:6px 0; font-size:13px; }
-  .rv input, .rv select { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:13px; }
-  .rv .q { margin:-4px 0 6px 138px; font-size:12px; color:var(--muted); font-style:italic; }
+  .page.wide { max-width:none; }
+  .rv-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(620px,100%),1fr)); gap:14px; }
+  .rv-head { display:flex; justify-content:space-between; align-items:center; gap:8px 16px; flex-wrap:wrap; }
+  .rv-id { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .rv-title { margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rv .fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px 14px; margin-top:12px; }
+  .rv .fld { display:flex; flex-direction:column; gap:3px; min-width:0; font-size:13px; }
+  .rv .fld > span { font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .rv .fld-2 { grid-column:span 2; }
+  .rv input, .rv select { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:5px 8px; font-size:13px; }
+  .rv .q { font-size:11.5px; color:var(--muted); font-style:italic; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
   .rv .machine { color:#9a5b00; font-style:normal; }
-  .rv .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  .rv .check { margin:6px 0 0; }
+  .rv .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
   .btn { border:0; border-radius:9px; padding:6px 12px; cursor:pointer; background:var(--chip); }
   .btn.primary { background:var(--accent); color:#fff; } .btn:disabled { opacity:.5; cursor:default; }
-  @media (max-width: 860px) { .rv label { grid-template-columns:1fr; } .rv .q { margin-left:0; } }
+  @media (max-width: 860px) { .rv .fld-2 { grid-column:auto; } .rv .fields { grid-template-columns:1fr 1fr; } }
   pre { background:var(--chip); border-radius:10px; padding:10px; overflow:auto; font-size:12.5px; }
   .big { display:inline-block; margin-top:8px; padding:8px 14px; border-radius:10px; background:var(--accent); color:#fff; text-decoration:none; font-weight:600; }
   .empty { color:var(--muted); padding:16px; text-align:center; }
@@ -179,7 +188,7 @@
     </section>
 
     <section class="view" id="view-review">
-      <div class="page">
+      <div class="page wide">
         <div class="head" style="padding:0 0 12px">
           <div><h1>Relecture</h1><div class="sub" id="review-progress"></div></div>
           <div class="row" style="margin:0">
@@ -191,12 +200,12 @@
           </div>
         </div>
         <div class="sub" style="margin-bottom:10px">Chaque correction l'emporte sur l'extraction automatique et devient une référence vérifiée pour mesurer la qualité (<code>radar eval</code>).</div>
-        <div class="grid" id="review-list" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))"></div>
+        <div class="rv-grid" id="review-list"></div>
       </div>
     </section>
 
     <section class="view" id="view-quality">
-      <div class="page">
+      <div class="page wide">
         <div class="head" style="padding:0 0 12px">
           <div><h1>Qualité</h1><div class="sub" id="quality-when">Mesures de la dernière évaluation (<code>radar eval</code>), relecture et erreurs apprises.</div></div>
         </div>
@@ -485,7 +494,7 @@ function reviewCard(it) {
     const ev = it.evidence[EVIDENCE_OF[name] || name];
     const hint = blind ? "" : [ev ? `« ${esc(ev.quote.slice(0, 160))} »` : "",
       machine !== value ? `<span class="machine">machine : ${esc(machine || "—")}</span>` : ""].filter(Boolean).join(" · ");
-    return `<label>${label}${input}</label>${hint ? `<div class="q">${hint}</div>` : ""}`;
+    return `<label class="fld"><span>${label}</span>${input}${hint ? `<div class="q" title="${esc(ev ? ev.quote : "")}">${hint}</div>` : ""}</label>`;
   }).join("");
   const reasons = blind ? "" : it.reasons.map((r) => `<span class="tag review" title="${esc(r)}">${esc(r.length > 70 ? r.slice(0, 70) + "…" : r)}</span>`).join(" ");
   const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener">${esc(d.role)}</a> <span class="sub">${esc(d.read_by)}</span>`).join(" · ");
@@ -493,18 +502,23 @@ function reviewCard(it) {
     `<div class="check"><span class="dot s-alert"></span><b>${esc(CHECKS[c.name] || c.name)}</b><span class="sub">${esc(c.detail)}</span></div>`).join("");
   const history = it.corrections.filter((c) => c.field !== "validated").map((c) => `<li>${esc(c.field)} = <b>${esc(str(c.value) || "—")}</b> <span class="sub">${esc(c.author)}, ${esc(c.created_at.slice(0, 10))}${c.cause ? ", " + esc(CAUSES[c.cause] || c.cause) : ""}${c.blind ? ", à l'aveugle" : ""}</span> <button class="btn" data-undo="${c.id}">annuler</button></li>`).join("");
   const category = blind || !ALL_CATEGORIES[it.category] ? `<option value="" selected>— à choisir —</option>` : "";
+  const machineCategory = blind ? "" : `<div class="q"><span class="machine">machine : ${esc(ALL_CATEGORIES[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>`;
   return `<div class="tile rv" data-key="${esc(it.key)}">
-    <div class="row" style="margin:0 0 4px"><b>${esc(it.number)}</b><span class="tag ${esc(it.confidence)}">${CONFIDENCE[it.confidence] || esc(it.confidence)}</span>
-      ${it.reviewed_at ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}
-      ${it.priority > 0 ? `<span class="tag" title="priorité de relecture">priorité ${esc(it.priority.toFixed(1))}</span>` : ""}</div>
-    ${reasons ? `<div class="row" style="margin:2px 0 6px">${reasons}</div>` : ""}
-    <div class="sub">${esc(it.title)}</div>
-    <div class="sub" style="margin:4px 0">${docs}</div>
-    <label>Catégorie<select data-f="category">${category}${options(ALL_CATEGORIES, blind ? "" : it.category)}</select></label>
-    ${blind ? "" : `<div class="q"><span class="machine">machine : ${esc(ALL_CATEGORIES[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · étiquette provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>`}
-    ${fields}${blind ? "" : alerts}
-    <label>Cause<select data-cause><option value="">— si une valeur était fausse —</option>${options(CAUSES, "")}</select></label>
-    <label>Note<input data-note placeholder="ce qui justifie la correction (facultatif)"></label>
+    <div class="rv-head">
+      <div class="rv-id"><b>${esc(it.number)}</b><span class="tag ${esc(it.confidence)}">${CONFIDENCE[it.confidence] || esc(it.confidence)}</span>
+        ${it.reviewed_at ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}
+        ${it.priority > 0 ? `<span class="tag" title="priorité de relecture">priorité ${esc(it.priority.toFixed(1))}</span>` : ""}</div>
+      <div class="sub rv-docs">${docs}</div>
+    </div>
+    ${reasons ? `<div class="row" style="margin:6px 0 2px">${reasons}</div>` : ""}
+    <div class="sub rv-title" title="${esc(it.title)}">${esc(it.title)}</div>
+    ${blind ? "" : alerts}
+    <div class="fields">
+      <label class="fld"><span>Catégorie</span><select data-f="category">${category}${options(ALL_CATEGORIES, blind ? "" : it.category)}</select>${machineCategory}</label>
+      ${fields}
+      <label class="fld"><span>Cause (si une valeur était fausse)</span><select data-cause><option value="">—</option>${options(CAUSES, "")}</select></label>
+      <label class="fld fld-2"><span>Note</span><input data-note placeholder="ce qui justifie la correction (facultatif)"></label>
+    </div>
     <div class="actions"><button class="btn primary" data-act="save">Enregistrer et valider</button><button class="btn" data-act="ok">Tout est juste</button><span class="sub" data-msg></span></div>
     ${history ? `<ul class="plain sub" style="margin-top:8px">${history}</ul>` : ""}
   </div>`;

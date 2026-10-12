@@ -7,6 +7,7 @@ from radar.domain.enums import CheckStatus
 from radar.domain.ids import luhn_ok
 from radar.domain.models import Check
 from radar.domain.power import storage_duration_ok
+from radar.domain.privacy import MASKED_PERSON
 from radar.domain.text import fold
 from radar.extraction.facts import Facts
 from radar.validation.lookups import CommuneInfo, Lookups
@@ -17,7 +18,6 @@ _COMPANY_MARKERS = re.compile(
     re.IGNORECASE,
 )
 _PERSON = re.compile(r"^(?:M\.|Mme|Monsieur|Madame)?\s*[A-ZÉ][a-zéèëï]+(?:-[A-ZÉ][a-zéèëï]+)?\s+[A-ZÉ][A-Za-zéèëï\-]+$")
-MASKED_PERSON = "Personne physique (nom masqué)"
 
 
 def looks_like_person(name: str | None) -> bool:

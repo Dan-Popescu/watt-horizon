@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from radar.domain.text import fold
 
 MASK = "[nom masqué]"
+MASKED_PERSON = "Personne physique (nom masqué)"  # developer value when the applicant is a natural person
 EMAIL_MASK = "[courriel]"
 PHONE_MASK = "[téléphone]"
 

@@ -2,6 +2,7 @@
 
 from radar.domain.enums import PowerStatus
 from radar.domain.models import Filing
+from radar.domain.privacy import MASKED_PERSON
 
 Value = str | float | None
 
@@ -11,7 +12,7 @@ def field_values(filing: Filing) -> dict[str, Value]:
     known = filing.power.status is PowerStatus.KNOWN
     return {
         "category": filing.classification.category.value,
-        "developer": filing.developer,
+        "developer": None if filing.developer == MASKED_PERSON else filing.developer,  # a person is "no company"
         "siret": filing.siret,
         "commune": filing.location.commune,
         "department": filing.location.department,
