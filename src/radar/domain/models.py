@@ -193,6 +193,27 @@ class Link(Model):
     a: str
     b: str
     reasons: tuple[str, ...]
+    verdict: str | None = None  # latest human decision on the pair (LinkDecision.verdict), None = undecided
+
+
+LINK_VERDICTS = {
+    "same_project": "même projet",  # filings: merged into one project, whatever the automatic keys say
+    "related": "liés, projets distincts",  # filings: never merged; signal: kept on the project
+    "unrelated": "sans rapport",  # filings: never merged; signal: removed from the project
+    "undecided": "décision retirée",  # withdraws the previous decision
+}
+
+
+class LinkDecision(Model):
+    """A human decision on a pair of records (append-only; the latest per pair wins). Keys are sorted (a < b)."""
+
+    id: int | None = None
+    a: str
+    b: str
+    verdict: str  # see LINK_VERDICTS
+    author: str  # internal only
+    created_at: datetime
+    note: str = ""
 
 
 class Project(Model):

@@ -128,6 +128,30 @@ class FlagView(View):
     label: str
 
 
+class LinkSide(View):
+    key: str
+    kind: str  # filing | signal
+    label: str  # filing number or signal title
+    category: str | None
+    developer: str | None
+    commune: str | None
+    power_mw: float | None
+    substation: str | None
+    date: str | None
+    url: str | None
+
+
+class LinkReviewItem(View):
+    """A pair of records the linker related (internal review mode only)."""
+
+    a: LinkSide
+    b: LinkSide
+    reasons: list[str]
+    verdict: str | None
+    merged_by_machine: bool
+    priority: float
+
+
 class ReviewItem(View):
     """One filing as a reviewer sees it (internal review mode only: includes reviewer names)."""
 

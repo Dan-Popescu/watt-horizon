@@ -212,6 +212,8 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
                 else None,
                 ocr=ocr,
                 classifier=classifier,
+                links=db.links(),
+                link_decisions=db.current_link_decisions(),
             )
         )
         report["robustness"] = robustness.check_robustness(corpus_documents(db, make_services(s, None))).summary()
@@ -295,14 +297,25 @@ def cmd_review(args: argparse.Namespace, s: Settings) -> Any:
     """Back up / restore human corrections (gold/corrections.jsonl, versioned). Run `radar run` after an import."""
     path = Path(args.path) if args.path else s.corrections_path
     with Database(s.db_path) as db:
+        links_path = s.link_decisions_path
         if args.action == "export":
             rows = review.export_corrections(db)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            lines = [json.dumps(r, ensure_ascii=False) for r in rows]
-            path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8", newline="\n")
-            return {"path": str(path), "corrections": len(rows)}
+            _write_jsonl(path, rows)
+            decisions = review.export_link_decisions(db)
+            _write_jsonl(links_path, decisions)
+            return {"path": str(path), "corrections": len(rows), "link_decisions": len(decisions)}
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        return {"path": str(path), "added": review.import_corrections(db, rows), "next": "radar run"}
+        added = {"corrections": review.import_corrections(db, rows)}
+        if links_path.exists():
+            lines = links_path.read_text(encoding="utf-8").splitlines()
+            added["link_decisions"] = review.import_link_decisions(db, [json.loads(x) for x in lines if x.strip()])
+        return {"path": str(path), "added": added, "next": "radar run"}
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps(r, ensure_ascii=False) for r in rows]
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8", newline="\n")
 
 
 def cmd_health(args: argparse.Namespace, s: Settings) -> Any:

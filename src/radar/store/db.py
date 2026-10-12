@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from radar.domain.geo import bbox_around
-from radar.domain.models import Correction, DocumentRecord, Filing, Link, Project, ProjectChange, Signal
+from radar.domain.models import Correction, DocumentRecord, Filing, Link, LinkDecision, Project, ProjectChange, Signal
 from radar.domain.text import fold
 
 _MIGRATIONS: tuple[str, ...] = (
@@ -74,6 +74,13 @@ _MIGRATIONS: tuple[str, ...] = (
         before TEXT, after TEXT, version TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX machine_changes_filing ON machine_changes(filing_key);
+    """,
+    """
+    CREATE TABLE link_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, a TEXT NOT NULL, b TEXT NOT NULL, verdict TEXT NOT NULL,
+        author TEXT NOT NULL, created_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX link_decisions_pair ON link_decisions(a, b);
     """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -301,6 +308,35 @@ class Database:
             )
             for r in self.conn.execute(sql + " ORDER BY id", args)
         ]
+
+    # Human link decisions (append-only; the latest per pair wins) ---------------------------------------
+    def add_link_decision(self, d: LinkDecision) -> int:
+        a, b = sorted((d.a, d.b))
+        cur = self.conn.execute(
+            "INSERT INTO link_decisions (a, b, verdict, author, created_at, note) VALUES (?, ?, ?, ?, ?, ?)",
+            (a, b, d.verdict, d.author, d.created_at.isoformat(), d.note),
+        )
+        return int(cur.lastrowid or 0)
+
+    def link_decisions(self) -> list[LinkDecision]:
+        """Every decision, oldest first (history and export)."""
+        return [
+            LinkDecision(
+                id=r["id"],
+                a=r["a"],
+                b=r["b"],
+                verdict=r["verdict"],
+                author=r["author"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+                note=r["note"],
+            )
+            for r in self.conn.execute("SELECT * FROM link_decisions ORDER BY id")
+        ]
+
+    def current_link_decisions(self) -> dict[tuple[str, str], LinkDecision]:
+        """Latest decision per pair, withdrawn ones (« undecided ») left out."""
+        latest = {(d.a, d.b): d for d in self.link_decisions()}
+        return {pair: d for pair, d in latest.items() if d.verdict != "undecided"}
 
     # Listing items: every item a collector saw (kept or not), for unbiased screen-recall estimates ---------
     def record_listing_item(self, url: str, source: str, title: str, kept: bool, audit: str | None) -> None:

@@ -28,17 +28,25 @@ def build_projects(
     now: datetime,
     commissioned: Mapping[str, Signal] | None = None,
 ) -> list[Project]:
-    """One project per group of target filings (see linking.resolve); the most recent filing leads."""
+    """One project per group of target filings (see linking.resolve); the most recent filing leads.
+    Human link verdicts win: « same_project » merges, « related » / « unrelated » keep apart, and an « unrelated »
+    signal is not attached."""
     commissioned = commissioned or {}
     signal_keys = {s.key for s in signals}
+    links = list(links)
+    must = [(lk.a, lk.b) for lk in links if lk.verdict == "same_project"]
+    cannot = [(lk.a, lk.b) for lk in links if lk.verdict in {"related", "unrelated"}]
     linked: dict[str, set[str]] = {}
     for link in links:
+        if link.verdict == "unrelated":
+            continue
         for this, other in ((link.a, link.b), (link.b, link.a)):
             if other in signal_keys:
                 linked.setdefault(this, set()).add(other)
 
     projects = []
-    for group in group_filings(f for f in filings if f.classification.category in TARGET_CATEGORIES):
+    targets = (f for f in filings if f.classification.category in TARGET_CATEGORIES)
+    for group in group_filings(targets, must, cannot):
         newest = sorted(group, key=lambda f: (f.filed_on or date.min, f.key), reverse=True)
         lead = newest[0]
         category = lead.classification.category

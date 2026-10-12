@@ -23,8 +23,9 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from radar.api import exports, queries
-from radar.api.review import review_items, submit_review
+from radar.api.review import link_items, review_items, submit_link_decision, submit_review
 from radar.classification.gold import GoldLabel
+from radar.pipeline.run import link_and_build
 from radar.quality import pageview, propagate
 from radar.store.db import Database
 
@@ -153,6 +154,34 @@ def build_app(
 
         return await run_in_threadpool(endpoint(write), request)
 
+    def review_links(db: Database, _: Request) -> Any:
+        if review is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        return link_items(db)
+
+    async def review_link_decide(request: Request) -> Response:
+        """Body: {a, b, verdict, author, note}. Projects are rebuilt at once (the decision overrides grouping)."""
+        if review is None:
+            return _json({"error": "review mode is off (radar web --review)"}, 404)
+        try:
+            body = await request.json()
+        except ValueError:
+            return _json({"error": "JSON body expected"}, 400)
+
+        def write(db: Database, _: Request) -> Any:
+            decision = submit_link_decision(
+                db,
+                str(body.get("a", "")),
+                str(body.get("b", "")),
+                verdict=str(body.get("verdict", "")),
+                author=str(body.get("author", "")),
+                note=str(body.get("note", "")),
+            )
+            link_and_build(db)
+            return {"a": decision.a, "b": decision.b, "verdict": decision.verdict}
+
+        return await run_in_threadpool(endpoint(write), request)
+
     def review_suggestions(db: Database, _: Request) -> Any:
         if review is None:
             return _json({"error": "review mode is off (radar web --review)"}, 404)
@@ -241,6 +270,8 @@ def build_app(
         Route("/api/quality", endpoint(quality_view)),
         Route("/api/review", endpoint(review_list)),
         Route("/api/review/{key}/corrections", review_submit, methods=["POST"]),
+        Route("/api/review/links", endpoint(review_links)),
+        Route("/api/review/links", review_link_decide, methods=["POST"]),
         Route("/api/review/suggestions", endpoint(review_suggestions)),
         Route("/api/review/suggestions/apply", review_propagate, methods=["POST"]),
         Route("/api/review/{key}/evidence/{field}.png", endpoint(evidence_page)),

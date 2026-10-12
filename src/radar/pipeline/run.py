@@ -9,6 +9,7 @@ from radar.domain.enums import TARGET_CATEGORIES
 from radar.domain.models import Link
 from radar.linking.linker import propose_links
 from radar.linking.registry import commissioned
+from radar.linking.review import apply_link_decisions
 from radar.pipeline.changes import track_changes
 from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.projects import build_projects
@@ -81,6 +82,7 @@ def link_and_build(db: Database, now: datetime | None = None) -> dict[str, objec
         )
         for key, s in in_service.items()
     ]
+    links = apply_link_decisions(links, db.current_link_decisions())
     built = build_projects(filings, signals, links, now=now, commissioned=in_service)
     projects, changes = track_changes(db.projects(), built, now)
     with db.transaction():

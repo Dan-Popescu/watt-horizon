@@ -78,6 +78,11 @@ class Settings:
         return self.gold_dir / "aliases.json"
 
     @property
+    def link_decisions_path(self) -> Path:
+        """Export of human link decisions (`radar review export`): same project / related / unrelated."""
+        return self.gold_dir / "link_decisions.jsonl"
+
+    @property
     def corrections_path(self) -> Path:
         """Export of human corrections (`radar review export`), so reviews survive a lost database."""
         return self.gold_dir / "corrections.jsonl"

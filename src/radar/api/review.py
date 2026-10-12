@@ -8,12 +8,22 @@ import json
 from collections.abc import Iterable
 from datetime import UTC, date, datetime
 
-from radar.api.views import CheckView, CorrectionView, DocumentView, EvidenceView, FlagView, ReviewItem
+from radar.api.views import (
+    CheckView,
+    CorrectionView,
+    DocumentView,
+    EvidenceView,
+    FlagView,
+    LinkReviewItem,
+    LinkSide,
+    ReviewItem,
+)
 from radar.classification.gold import GoldLabel
 from radar.domain.enums import Category
 from radar.domain.fields import field_values, machine_values
-from radar.domain.models import Correction, Filing
+from radar.domain.models import LINK_VERDICTS, Correction, Filing, LinkDecision, Signal
 from radar.domain.privacy import PersonScrubber
+from radar.linking import review as link_review
 from radar.pipeline.corrections import CAUSES, VALIDATED, validate_value
 from radar.quality.flags import FLAGS
 from radar.quality.triage import triage
@@ -168,5 +178,72 @@ def import_corrections(db: Database, rows: Iterable[dict[str, object]]) -> int:
             c = Correction.model_validate(row)
             if (c.filing_key, c.field, c.author, c.created_at) not in seen:
                 db.add_correction(c)
+                added += 1
+    return added
+
+
+def _side(key: str, filings: dict[str, Filing], signals: dict[str, Signal]) -> LinkSide:
+    if f := filings.get(key):
+        return LinkSide(
+            key=key, kind="filing", label=f.number, category=f.classification.category.value, developer=f.developer,
+            commune=f.location.commune, power_mw=f.power.mw, substation=f.substation,
+            date=f.filed_on.isoformat() if f.filed_on else None, url=None,
+        )  # fmt: skip
+    s = signals.get(key)
+    return LinkSide(
+        key=key, kind="signal", label=s.title if s else key, category=s.category_hint.value if s and s.category_hint else None,
+        developer=s.developer if s else None, commune=", ".join(s.communes) if s else None, power_mw=None,
+        substation=None, date=s.observed_on.isoformat() if s and s.observed_on else None, url=s.url if s else None,
+    )  # fmt: skip
+
+
+def link_items(db: Database) -> list[LinkReviewItem]:
+    """Links touching a target filing, undecided and most consequential first (linking/review.queue)."""
+    filings = {f.key: f for f in db.filings()}
+    signals = {s.key: s for s in db.signals()}
+    pairs = link_review.queue(list(filings.values()), db.links())
+    return [
+        LinkReviewItem(
+            a=_side(p.a, filings, signals),
+            b=_side(p.b, filings, signals),
+            reasons=list(p.reasons),
+            verdict=p.verdict,
+            merged_by_machine=p.merged_by_machine,
+            priority=round(p.priority, 2),
+        )
+        for p in pairs
+    ]
+
+
+def submit_link_decision(
+    db: Database, a: str, b: str, *, verdict: str, author: str, note: str = "", now: datetime | None = None
+) -> LinkDecision:
+    if verdict not in LINK_VERDICTS:
+        raise ValueError(f"verdict must be one of {', '.join(LINK_VERDICTS)}")
+    if not author.strip():
+        raise ValueError("author is required")
+    a, b = sorted((a, b))
+    if a == b:
+        raise ValueError("a link needs two different records")
+    decision = LinkDecision(
+        a=a, b=b, verdict=verdict, author=author.strip(), created_at=now or datetime.now(UTC), note=note
+    )
+    with db.transaction():
+        return decision.model_copy(update={"id": db.add_link_decision(decision)})
+
+
+def export_link_decisions(db: Database) -> list[dict[str, object]]:
+    """Every link decision (history kept: the latest per pair wins), for `gold/link_decisions.jsonl`."""
+    return [d.model_dump(mode="json", exclude={"id"}) for d in db.link_decisions()]
+
+
+def import_link_decisions(db: Database, rows: Iterable[dict[str, object]]) -> int:
+    seen = {(d.a, d.b, d.author, d.created_at) for d in db.link_decisions()}
+    added = 0
+    with db.transaction():
+        for row in sorted(rows, key=lambda r: str(r["created_at"])):
+            d = LinkDecision.model_validate(row)
+            if (d.a, d.b, d.author, d.created_at) not in seen:
+                db.add_link_decision(d)
                 added += 1
     return added

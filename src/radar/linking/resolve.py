@@ -24,10 +24,19 @@ def _keys(f: Filing) -> list[str]:
     return keys
 
 
-def group_filings(filings: Iterable[Filing]) -> list[list[Filing]]:
-    """Union-find over shared keys; groups and their members are sorted by filing key (stable output)."""
+def group_filings(
+    filings: Iterable[Filing],
+    must: Iterable[tuple[str, str]] = (),
+    cannot: Iterable[tuple[str, str]] = (),
+) -> list[list[Filing]]:
+    """Union-find over shared keys; groups and their members are sorted by filing key (stable output).
+    Human decisions win: `must` pairs (filing keys) are merged first, and no merge ever joins a `cannot` pair."""
     items = sorted(filings, key=lambda f: f.key)
+    index = {f.key: i for i, f in enumerate(items)}
     parent = list(range(len(items)))
+    members: dict[int, set[int]] = {i: {i} for i in range(len(items))}
+    forbidden = {(index[a], index[b]) for a, b in cannot if a in index and b in index}
+    forbidden |= {(j, i) for i, j in forbidden}
 
     def root(i: int) -> int:
         while parent[i] != i:
@@ -35,11 +44,21 @@ def group_filings(filings: Iterable[Filing]) -> list[list[Filing]]:
             i = parent[i]
         return i
 
+    def union(i: int, j: int) -> None:
+        ri, rj = root(i), root(j)
+        if ri == rj or any((x, y) in forbidden for x in members[ri] for y in members[rj]):
+            return
+        parent[ri] = rj
+        members[rj] |= members.pop(ri)
+
+    for a, b in must:
+        if a in index and b in index:
+            union(index[a], index[b])
     owner: dict[str, int] = {}
     for i, f in enumerate(items):
         for k in _keys(f):
             if k in owner:
-                parent[root(i)] = root(owner[k])
+                union(i, owner[k])
             else:
                 owner[k] = i
     groups: dict[int, list[Filing]] = {}

@@ -12,12 +12,13 @@ from typing import Any
 from radar.classification import bayes
 from radar.classification.gold import GoldLabel
 from radar.domain.enums import TARGET_CATEGORIES
-from radar.domain.models import Correction, Filing
+from radar.domain.models import Correction, Filing, Link, LinkDecision
 from radar.evaluation import rigor
 from radar.evaluation.classification import ClassifierReport, screening_report
 from radar.evaluation.fields import score_fields
 from radar.evaluation.gold import FieldGold
 from radar.evaluation.stats import split_of
+from radar.linking import review as link_review
 from radar.quality.arbiter import learn
 from radar.quality.confidence import calibrate, observations
 from radar.quality.errors import analyse
@@ -49,6 +50,8 @@ class ReportInputs:
     cases: dict[str, list[str]] | None = None
     ocr: dict[str, Any] | None = None
     classifier: ClassifierReport | None = None
+    links: list[Link] = field(default_factory=list)  # stored links, annotated with human verdicts
+    link_decisions: dict[tuple[str, str], LinkDecision] = field(default_factory=dict)
 
 
 def completeness(filings: list[Filing]) -> dict[str, float]:
@@ -136,6 +139,7 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
                 bayes.trusted_examples(filings, {n: g.category for n, g in inputs.labels.items() if g.verified})
             )
         ),
+        "linking": asdict(link_review.report(filings, inputs.links, inputs.link_decisions)),
         "arbitration": learn(filings, inputs.corrections).table(),
         "field_calibration": _field_calibration(filings, inputs.corrections),
         "integrity": {"quote_not_found": sum(g.code == "quote_not_found" for f in filings for g in f.flags)},
@@ -181,6 +185,9 @@ def metrics(report: dict[str, Any]) -> dict[str, float]:
         out["cases.fixed"] = float(report["cases"]["fixed"])
     if (miss := report["ocr"].get("mean_word_miss_rate")) is not None:
         out["ocr.mean_word_miss_rate"] = miss
+    for name in ("precision", "recall"):
+        if (value := report["linking"]["grouping"].get(name)) is not None:
+            out[f"grouping.{name}"] = value
     if (loo := report["second_opinion"].get("loo_accuracy")) is not None:
         out["second_opinion.loo_accuracy"] = loo
     if (accuracy := report.get("classifier", {}).get("accuracy")) is not None:

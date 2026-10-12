@@ -147,6 +147,10 @@
   #pdf-view .bar .sp { flex:1; }
   #pdf-view .scroll { overflow:auto; flex:1; background:#fff; }
   #pdf-view img { display:block; width:100%; height:auto; }
+  .lk-pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px; }
+  .lk-side { background:var(--chip); border-radius:11px; padding:9px 12px; font-size:15px; min-width:0; }
+  .lk-side b { font-size:16px; } .lk-side div { overflow-wrap:anywhere; }
+  @media (max-width:640px) { .lk-pair { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -222,7 +226,7 @@
           <div><h1>Relecture</h1><div class="sub" id="review-progress"></div></div>
           <div class="row" style="margin:0">
             <select id="review-mode" aria-label="Mode" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
-              <option value="filing">Par dossier</option><option value="field">Par champ (lot, clavier)</option></select>
+              <option value="filing">Par dossier</option><option value="field">Par champ (lot, clavier)</option><option value="links">Liens entre dossiers</option></select>
             <select id="review-field" aria-label="Champ" hidden style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px"></select>
             <select id="review-filter" aria-label="Filtre" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 9px">
               <option value="todo">File de relecture</option><option value="all">Tous les dossiers</option></select>
@@ -236,6 +240,7 @@
         <div id="review-suggestions"></div>
         <div class="rv-grid" id="review-list"></div>
         <div id="review-batch" hidden></div>
+        <div class="rv-grid" id="review-links" hidden></div>
       </div>
     </section>
 
@@ -489,6 +494,7 @@ $("since").onchange = loadChanges;
 // --- Review (internal mode: radar web --review) ----------------------------------------------------
 const ALL_CATEGORIES = { ...CATEGORIES, renewable_substation: "Poste pour solaire/éolien", public_grid: "Poste public / rénovation",
   battery_waste: "Batteries usagées (déchets)", other: "Autre" };
+const CATEGORY_LABELS = { ...ALL_CATEGORIES, needs_review: "À décider (pages illisibles)", unclassified: "Non classé" };
 const DECISIONS = { not_subject: "Non soumis à étude d'impact", subject: "Soumis à étude d'impact", pending: "En attente" };
 const REVIEW_FIELDS = [
   ["developer", "Porteur", "text"], ["siret", "SIRET", "text"], ["commune", "Commune", "text"],
@@ -577,7 +583,7 @@ function renderBatch(rows) {
       const ev = it.evidence[EVIDENCE_OF[name] || name];
       const verified = it.corrections.some((c) => c.field === name);
       return `<tr data-row="${i}" data-key="${esc(it.key)}" class="${i === batchFocus ? "focus" : ""} ${verified ? "done" : ""}" tabindex="0">
-        <td style="width:150px"><b>${esc(it.number)}</b><div class="sub" style="font-size:13.5px">${esc(ALL_CATEGORIES[it.category] || it.category)}</div></td>
+        <td style="width:150px"><b>${esc(it.number)}</b><div class="sub" style="font-size:13.5px">${esc(CATEGORY_LABELS[it.category] || it.category)}</div></td>
         <td style="width:300px">${input(it)}</td>
         <td style="width:150px">${confBadge(it, name)}</td>
         <td class="qt">${ev ? "« " + esc(ev.quote.slice(0, 180)) + " » " + seeButton(it, EVIDENCE_OF[name] || name, name) : ""}</td>
@@ -662,7 +668,7 @@ function reviewCard(it) {
     `<div class="check"><span class="dot s-alert"></span><b>${esc(CHECKS[c.name] || c.name)}</b><span class="sub">${esc(c.detail)}</span></div>`).join("");
   const history = it.corrections.filter((c) => c.field !== "validated").map((c) => `<li>${esc(c.field)} = <b>${esc(str(c.value) || "—")}</b> <span class="sub">${esc(c.author)}, ${esc(c.created_at.slice(0, 10))}${c.cause ? ", " + esc(CAUSES[c.cause] || c.cause) : ""}${c.blind ? ", à l'aveugle" : ""}</span> <button class="btn" data-undo="${c.id}">annuler</button></li>`).join("");
   const category = blind || !ALL_CATEGORIES[it.category] ? `<option value="" selected>— à choisir —</option>` : "";
-  const machineCategory = blind ? "" : `<div class="q"><span class="machine">machine : ${esc(ALL_CATEGORIES[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>`;
+  const machineCategory = blind ? "" : `<div class="q"><span class="machine">machine : ${esc(CATEGORY_LABELS[it.machine_category] || it.machine_category)} (${esc(it.machine_method)})</span>${it.draft_label ? ` · provisoire : ${esc(ALL_CATEGORIES[it.draft_label] || it.draft_label)}` : ""}</div>`;
   return `<div class="tile rv" data-key="${esc(it.key)}">
     <div class="rv-head">
       <div class="rv-id"><b>${esc(it.number)}</b><span class="tag ${esc(it.confidence)}">${CONFIDENCE[it.confidence] || esc(it.confidence)}</span>
@@ -694,9 +700,11 @@ function renderReview() {
   const rows = reviewItems.filter((it) => (!todo || inQueue(it)) && (!code || it.flags.some((f) => f.code === code)));
   const done = reviewItems.filter((it) => !inQueue(it)).length;
   $("review-progress").textContent = `${done} / ${reviewItems.length} dossiers relus · ${reviewItems.length - done} dans la file, par priorité`;
-  const batch = $("review-mode").value === "field";
+  const batch = $("review-mode").value === "field", linksMode = $("review-mode").value === "links";
   $("review-batch").hidden = !batch;
-  $("review-list").hidden = batch;
+  $("review-links").hidden = !linksMode;
+  $("review-list").hidden = batch || linksMode;
+  if (linksMode) { renderLinks(); return; }
   if (batch) { renderBatch(rows); return; }
   $("review-list").innerHTML = rows.map(reviewCard).join("") || '<div class="empty">Tout est relu.</div>';
   document.querySelectorAll("#review-list [data-key]").forEach((card) => {
@@ -707,6 +715,52 @@ function renderReview() {
     });
   });
 }
+// Links: is it the same physical project? The verdict overrides the automatic grouping at once.
+const LINK_VERDICTS = { same_project: "Même projet", related: "Liés, projets distincts", unrelated: "Sans rapport" };
+let linkItems = [];
+function linkSide(s) {
+  const what = s.kind === "filing" ? `Dossier <b>${esc(s.label)}</b>` : `Signal : <b>${esc(s.label)}</b>`;
+  const rows = [
+    s.category ? esc(CATEGORY_LABELS[s.category] || s.category) : "",
+    s.developer ? "Porteur : " + esc(s.developer) : "",
+    s.commune ? "Commune : " + esc(s.commune) : "",
+    s.power_mw != null ? "Puissance : " + esc(s.power_mw) + " MW" : "",
+    s.substation ? "Poste : " + esc(s.substation) : "",
+    s.date ? "Date : " + esc(s.date) : "",
+  ].filter(Boolean).map((r) => `<div>${r}</div>`).join("");
+  const link = s.url ? `<div><a href="${safeUrl(s.url)}" target="_blank" rel="noopener">source</a></div>` : "";
+  return `<div class="lk-side"><div>${what}</div>${rows}${link}</div>`;
+}
+async function renderLinks() {
+  try { linkItems = await api("api/review/links"); }
+  catch (e) { $("review-links").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
+  const todo = $("review-filter").value === "todo";
+  const rows = linkItems.filter((it) => !todo || !it.verdict);
+  $("review-progress").textContent = `${linkItems.filter((it) => it.verdict).length} lien(s) décidé(s) sur ${linkItems.length}`;
+  $("review-links").innerHTML = rows.map((it, i) => `<div class="tile rv" data-link="${i}">
+      <div class="rv-head"><div class="rv-id">
+        <span class="tag ${it.merged_by_machine ? "review" : ""}">${it.merged_by_machine ? "fusionnés automatiquement" : "séparés automatiquement"}</span>
+        ${it.verdict ? `<span class="tag high">décidé : ${esc(LINK_VERDICTS[it.verdict] || it.verdict)}</span>` : ""}</div>
+        <div class="sub">${it.reasons.map(esc).join(" · ")}</div></div>
+      <div class="lk-pair">${linkSide(it.a)}${linkSide(it.b)}</div>
+      <div class="actions">${Object.entries(LINK_VERDICTS).map(([v, label]) =>
+        `<button class="btn ${it.verdict === v ? "primary" : ""}" data-verdict="${v}">${label}</button>`).join("")}
+        ${it.verdict ? '<button class="btn" data-verdict="undecided">Retirer la décision</button>' : ""}<span class="sub" data-msg></span></div>
+    </div>`).join("") || '<div class="empty">Aucun lien à relire.</div>';
+  $("review-links").querySelectorAll("[data-link]").forEach((card) => {
+    const it = rows[+card.dataset.link];
+    card.querySelectorAll("[data-verdict]").forEach((b) => b.onclick = async () => {
+      const who = author() || askAuthor();
+      if (!who) return;
+      card.querySelectorAll("button").forEach((x) => x.disabled = true);
+      try {
+        await api("api/review/links", "POST", { a: it.a.key, b: it.b.key, verdict: b.dataset.verdict, author: who });
+        await renderLinks(); await reloadProjects();
+      } catch (e) { card.querySelector("[data-msg]").textContent = e.message; card.querySelectorAll("button").forEach((x) => x.disabled = false); }
+    });
+  });
+}
+
 async function submitReview(card, withChanges) {
   const who = author() || askAuthor();
   if (!who) return;
