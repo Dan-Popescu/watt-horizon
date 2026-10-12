@@ -4,6 +4,7 @@ radar import files|signals|gold|cache|communes ...   load data already on disk (
 radar collect dreal|mrae|georisques|registry|press|prefectures ...   polite network collection
 radar process | link | run                           build filings, links, projects (idempotent)
 radar changes --since D | export csv|geojson      alerts and files for clients
+radar web                                            map + JSON API + MCP over HTTP
 radar eval | stats | mcp
 """
 
@@ -152,6 +153,19 @@ def cmd_export(args: argparse.Namespace, s: Settings) -> Any:
     return {"path": str(out), "projects": len(projects)}
 
 
+def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
+    import uvicorn
+
+    from radar.web.app import build_app
+
+    if args.host not in {"127.0.0.1", "localhost", "::1"} and not s.api_token:
+        return {"error": "Refusing to listen on a public interface without RADAR_API_TOKEN."}
+    app = build_app(s.db_path, token=s.api_token, mcp_host=args.public_host or args.host)
+    print(f"http://{args.host}:{args.port}  (MCP: /mcp)", file=sys.stderr)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return None
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -201,6 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--category", help="bess | bess_hybrid | storage_substation | datacenter")
         p.add_argument("--department", help='code, e.g. "60"')
     chg.add_argument("--limit", type=int, default=200)
+    web = sub.add_parser("web", help="map UI + JSON API + MCP over HTTP (read-only)")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--public-host", help="host name clients use (behind a proxy); default: --host")
     for name, text in (
         ("link", "propose links, rebuild projects"),
         ("eval", "quality report against the gold set"),
@@ -222,6 +240,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "changes": cmd_changes,
     "export": cmd_export,
     "mcp": cmd_mcp,
+    "web": cmd_web,
 }
 
 
@@ -232,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     result = COMMANDS[args.command](args, load_settings())
     if result is not None:
         _emit(result)
-    return 0
+    return 2 if isinstance(result, dict) and "error" in result else 0
 
 
 if __name__ == "__main__":

@@ -91,6 +91,7 @@ class DatasetInfo(View):
 
 class FieldChangeView(View):
     field: str
+    label: str = Field(description="French label for humans")
     before: str | None
     after: str | None
 

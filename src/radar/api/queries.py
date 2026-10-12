@@ -226,7 +226,12 @@ def what_changed(
             category=c.category.value,
             department=c.department,
             summary=_change_summary(c),
-            fields=[FieldChangeView(field=f.field, before=f.before, after=f.after) for f in c.fields],
+            fields=[
+                FieldChangeView(
+                    field=f.field, label=FIELD_LABELS_FR.get(f.field, f.field), before=f.before, after=f.after
+                )
+                for f in c.fields
+            ],
         )
         for c in rows
     ]

@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar Raccordement</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.9.0/maplibre-gl.min.css">
+<style>
+  :root {
+    --bg:#f4f6f9; --panel:#fff; --ink:#18202c; --muted:#5d6778; --line:#e2e7ef; --chip:#eef2f8; --accent:#2457d6;
+    --ok:#1f9d55; --alert:#d4380d; --unknown:#8a94a6;
+    --bess:#e5484d; --bess_hybrid:#f76b15; --storage_substation:#0e9f8e; --datacenter:#8b5cf6;
+    --shadow:0 6px 24px rgba(20,30,50,.08);
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#0f141b; --panel:#171e28; --ink:#e7ecf3; --muted:#9aa5b5; --line:#283140; --chip:#212b3a; --accent:#78a2ff;
+    --shadow:0 6px 24px rgba(0,0,0,.35);
+  } }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; }
+  body { font:14.5px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  button, input, select { font:inherit; color:inherit; }
+  a { color:var(--accent); }
+
+  .app { display:grid; grid-template-columns:68px 1fr; height:100vh; }
+  .rail { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; gap:6px; padding:12px 0; }
+  .logo { width:38px; height:38px; border-radius:11px; background:linear-gradient(135deg,var(--bess),var(--datacenter)); margin-bottom:10px; display:grid; place-items:center; color:#fff; font-weight:700; }
+  .rail button { width:48px; height:48px; border:0; border-radius:12px; background:transparent; color:var(--muted); cursor:pointer; display:grid; place-items:center; position:relative; }
+  .rail button:hover { background:var(--chip); color:var(--ink); }
+  .rail button.on { background:var(--chip); color:var(--accent); }
+  .rail svg { width:22px; height:22px; }
+  .rail .badge { position:absolute; top:6px; right:6px; min-width:16px; height:16px; border-radius:8px; background:var(--bess); color:#fff; font-size:10.5px; line-height:16px; padding:0 4px; }
+
+  main { min-width:0; overflow:hidden; }
+  .view { display:none; height:100%; overflow:auto; }
+  .view.on { display:flex; flex-direction:column; }
+  .head { padding:14px 18px 10px; display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center; justify-content:space-between; }
+  h1 { font-size:19px; margin:0; } h2 { font-size:16px; margin:0 0 8px; }
+  .sub { color:var(--muted); font-size:13px; }
+
+  .kpis { display:flex; gap:8px; flex-wrap:wrap; }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px 12px; min-width:104px; }
+  .kpi b { display:block; font-size:19px; line-height:1.2; } .kpi span { color:var(--muted); font-size:12px; }
+
+  .filters { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 18px 12px; }
+  .chip { border:1px solid var(--line); background:var(--panel); border-radius:999px; padding:4px 11px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; font-size:13px; }
+  .chip.off { opacity:.45; }
+  .dot { width:10px; height:10px; border-radius:50%; flex:none; }
+  .filters select, .filters input { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:4px 9px; font-size:13px; }
+  .filters input[type=search] { min-width:180px; }
+
+  .split { flex:1; min-height:0; display:grid; grid-template-columns:1fr 400px; gap:12px; padding:0 18px 18px; }
+  .mapbox { position:relative; border-radius:16px; overflow:hidden; border:1px solid var(--line); box-shadow:var(--shadow); min-height:360px; }
+  #map { position:absolute; inset:0; background:#e3e9ef; }
+  .legend { position:absolute; left:10px; bottom:10px; background:rgba(255,255,255,.93); color:#1c2330; border-radius:10px; padding:7px 10px; font-size:12px; box-shadow:0 2px 10px rgba(0,0,0,.12); }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:16px; overflow:auto; box-shadow:var(--shadow); }
+  .panel-head { position:sticky; top:0; background:var(--panel); padding:12px 14px 8px; border-bottom:1px solid var(--line); z-index:1; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+
+  .cards { display:flex; flex-direction:column; gap:8px; padding:10px; }
+  .card { border:1px solid var(--line); border-radius:13px; padding:10px 12px; background:var(--panel); cursor:pointer; border-left:4px solid var(--c, var(--line)); }
+  .card:hover { background:var(--chip); }
+  .card.sel { outline:2px solid var(--accent); }
+  .card .t { font-weight:600; } .card .m { color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:5px; }
+  .tag { font-size:11.5px; padding:1px 8px; border-radius:999px; background:var(--chip); color:var(--muted); white-space:nowrap; }
+  .tag.review { background:#fff1e0; color:#9a5b00; } .tag.high { background:#e6f6ec; color:#17773f; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tag.review { background:#3a2a12; color:#f3b860; } :root:not([data-theme="light"]) .tag.high { background:#13321f; color:#6fd39a; } }
+  .mw { font-weight:700; font-size:15px; }
+
+  .detail { padding:12px 14px 18px; }
+  .back { border:0; background:var(--chip); border-radius:9px; padding:4px 10px; cursor:pointer; }
+  .facts { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin:12px 0; }
+  .fact { background:var(--chip); border-radius:11px; padding:8px 10px; } .fact span { display:block; font-size:11.5px; color:var(--muted); } .fact b { font-size:15px; }
+  .section { margin-top:16px; }
+  .ev { border-left:3px solid var(--line); padding:2px 0 2px 10px; margin:8px 0; }
+  .ev .f { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .ev q { display:block; font-style:italic; quotes:"« " " »"; }
+  .check { display:flex; gap:8px; align-items:baseline; margin:5px 0; font-size:13.5px; }
+  .s-ok { background:var(--ok); } .s-alert { background:var(--alert); } .s-unknown { background:var(--unknown); }
+  ul.plain { list-style:none; padding:0; margin:6px 0; } ul.plain li { margin:4px 0; }
+
+  .page { padding:16px 18px 32px; max-width:1100px; width:100%; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; box-shadow:var(--shadow); }
+  .kind { font-size:11.5px; font-weight:600; padding:1px 8px; border-radius:999px; color:#fff; }
+  .k-new { background:var(--ok); } .k-changed { background:var(--accent); } .k-removed { background:var(--unknown); }
+  .diff { font-size:13px; margin-top:6px; } .diff div { display:flex; gap:6px; } .diff .l { color:var(--muted); min-width:120px; }
+  .diff s { color:var(--muted); }
+  details summary { cursor:pointer; list-style:none; } details[open] summary { display:none; }
+  pre { background:var(--chip); border-radius:10px; padding:10px; overflow:auto; font-size:12.5px; }
+  .big { display:inline-block; margin-top:8px; padding:8px 14px; border-radius:10px; background:var(--accent); color:#fff; text-decoration:none; font-weight:600; }
+  .empty { color:var(--muted); padding:16px; text-align:center; }
+  .error { color:var(--alert); }
+
+  @media (max-width: 860px) {
+    .app { grid-template-columns:1fr; grid-template-rows:1fr 60px; }
+    .rail { grid-row:2; flex-direction:row; justify-content:space-around; border-right:0; border-top:1px solid var(--line); padding:4px 8px; }
+    .logo { display:none; }
+    .split { flex:none; grid-template-columns:1fr; grid-template-rows:55vh auto; padding:0 16px 16px; }
+    .panel { overflow:visible; }
+    .view.on { overflow:auto; }
+    .head, .filters, .page { padding-left:16px; padding-right:16px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Navigation">
+    <div class="logo" aria-hidden="true">R</div>
+    <button data-view="map" class="on" title="Carte des projets" aria-label="Carte">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>
+    </button>
+    <button data-view="changes" title="Nouveautés" aria-label="Nouveautés">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      <span class="badge" id="badge" hidden></span>
+    </button>
+    <button data-view="exports" title="Exports et connexion des agents" aria-label="Exports">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>
+    </button>
+    <button data-view="about" title="Couverture et limites" aria-label="À propos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+    </button>
+  </nav>
+
+  <main>
+    <section class="view on" id="view-map">
+      <div class="head">
+        <div><h1>Radar Raccordement</h1><div class="sub" id="coverage">Chargement…</div></div>
+        <div class="kpis" id="kpis"></div>
+      </div>
+      <div class="filters">
+        <span id="cats"></span>
+        <select id="dep" aria-label="Département"><option value="">Tous départements</option></select>
+        <input id="minmw" type="number" min="0" step="10" placeholder="MW min" aria-label="Puissance minimale" style="width:96px">
+        <input id="q" type="search" placeholder="Commune, porteur, poste…" aria-label="Recherche">
+      </div>
+      <div class="split">
+        <div class="mapbox">
+          <div id="map"></div>
+          <div class="legend">Taille = puissance · plein = GPS du dossier · pâle = centre de la commune</div>
+        </div>
+        <aside class="panel" id="panel"></aside>
+      </div>
+    </section>
+
+    <section class="view" id="view-changes">
+      <div class="page">
+        <div class="head" style="padding:0 0 12px">
+          <div><h1>Nouveautés</h1><div class="sub">Projets nouveaux, modifiés ou retirés à chaque mise à jour des données.</div></div>
+          <label class="sub">Depuis le <input id="since" type="date" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 8px"></label>
+        </div>
+        <div class="grid" id="changes"></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-exports">
+      <div class="page">
+        <h1 style="margin-bottom:12px">Exports et agents</h1>
+        <div class="grid">
+          <div class="tile"><h2>Tableur (CSV)</h2><div class="sub">Séparateur « ; », virgule décimale : s'ouvre directement dans Excel. Suit les filtres de la carte.</div><a class="big" id="csv" href="api/export.csv">Télécharger le CSV</a></div>
+          <div class="tile"><h2>Cartographie (GeoJSON)</h2><div class="sub">Pour QGIS, ArcGIS ou une autre carte. Suit les filtres de la carte.</div><a class="big" id="geojson" href="api/export.geojson">Télécharger le GeoJSON</a></div>
+          <div class="tile"><h2>Agents IA (MCP)</h2><div class="sub">Un agent (Claude, etc.) interroge directement la base avec ces outils : <code>search_projects</code>, <code>get_project</code>, <code>zone_pressure</code>, <code>projects_near_substation</code>, <code>what_changed</code>.</div><pre id="mcp"></pre></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-about">
+      <div class="page">
+        <h1 style="margin-bottom:12px">Couverture et limites</h1>
+        <div class="grid" id="about"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.9.0/maplibre-gl.min.js"></script>
+<script>
+"use strict";
+const CATEGORIES = {
+  bess: "Batteries", bess_hybrid: "Batteries + solaire/éolien",
+  storage_substation: "Poste pour batteries", datacenter: "Data center",
+};
+const COLORS = { bess: "#e5484d", bess_hybrid: "#f76b15", storage_substation: "#0e9f8e", datacenter: "#8b5cf6" };
+const FIELDS = {
+  developer: "Porteur", legal_name: "Raison sociale", siret: "SIRET", commune: "Commune", lat: "Coordonnées GPS",
+  power: "Puissance", substation: "Poste", review_decision: "Décision", filed_on: "Date de dépôt",
+  description: "Description", title: "Intitulé", number: "N° de dossier", procedures: "Procédures",
+};
+const CHECKS = { gdpr: "RGPD", siret: "SIRET", commune: "Commune", gps: "GPS", power: "Puissance", dates: "Dates" };
+const CHANGE_KINDS = { new: "Nouveau", changed: "Modifié", removed: "Retiré" };
+const CONFIDENCE = { high: "fiable", medium: "assez fiable", review: "à vérifier" };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? esc(u) : "#");
+const num = (n) => Number(n).toLocaleString("fr-FR", { maximumFractionDigits: 1 });
+const isoDaysAgo = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
+
+const state = { projects: [], cats: new Set(Object.keys(CATEGORIES)), dep: "", minMw: null, q: "", selected: null };
+
+// --- API (an optional bearer token is asked once and kept in this browser) -------------------------
+function token() { try { return localStorage.getItem("radar-token"); } catch { return null; } }
+async function api(path) {
+  const headers = token() ? { Authorization: "Bearer " + token() } : {};
+  const res = await fetch(path, { headers });
+  if (res.status === 401) {
+    const t = prompt("Jeton d'accès à l'API :");
+    if (t) { try { localStorage.setItem("radar-token", t); } catch {} return api(path); }
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+function power(p) {
+  if (p.power_mw == null) return '<span class="m">puissance n.c.</span>';
+  const range = p.power_mw_min != null && p.power_mw_min !== p.power_mw ? num(p.power_mw_min) + "–" : "";
+  const approx = p.power_status === "estimated" ? "≈ " : "";
+  return `<span class="mw">${approx}${range}${num(p.power_mw)} MW</span>${p.energy_mwh ? ` <span class="m">/ ${num(p.energy_mwh)} MWh</span>` : ""}`;
+}
+
+// --- Filters ---------------------------------------------------------------------------------
+function filtered() {
+  const q = state.q.trim().toLowerCase();
+  return state.projects.filter((p) =>
+    state.cats.has(p.category) &&
+    (!state.dep || p.department === state.dep) &&
+    (state.minMw == null || (p.power_mw || 0) >= state.minMw) &&
+    (!q || [p.name, p.developer, p.commune, p.substation].some((v) => (v || "").toLowerCase().includes(q))));
+}
+function renderFilters() {
+  $("cats").innerHTML = Object.entries(CATEGORIES).map(([k, label]) =>
+    `<button class="chip ${state.cats.has(k) ? "" : "off"}" data-cat="${k}"><span class="dot" style="background:${COLORS[k]}"></span>${label}</button>`).join(" ");
+  document.querySelectorAll("[data-cat]").forEach((b) => b.onclick = () => {
+    const k = b.dataset.cat; state.cats.has(k) ? state.cats.delete(k) : state.cats.add(k); refresh();
+  });
+}
+$("dep").onchange = (e) => { state.dep = e.target.value; refresh(true); };
+$("minmw").oninput = (e) => { state.minMw = e.target.value === "" ? null : Number(e.target.value); refresh(); };
+$("q").oninput = (e) => { state.q = e.target.value; refresh(); };
+
+function exportQuery() {
+  const p = new URLSearchParams();
+  if (state.dep) p.set("department", state.dep);
+  if (state.cats.size === 1) p.set("category", [...state.cats][0]);
+  return p.toString() ? "?" + p : "";
+}
+
+// --- KPIs and list ---------------------------------------------------------------------------
+function renderKpis(rows) {
+  const known = rows.filter((p) => p.power_mw != null && p.power_status === "known");
+  const kpis = [
+    [rows.length, "projets"],
+    [num(known.reduce((s, p) => s + p.power_mw, 0)) + " MW", "puissance déclarée"],
+    [rows.filter((p) => p.power_mw == null).length, "sans puissance"],
+    [rows.filter((p) => p.confidence === "review").length, "à vérifier"],
+  ];
+  $("kpis").innerHTML = kpis.map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
+}
+function card(p) {
+  return `<div class="card ${state.selected === p.project_id ? "sel" : ""}" data-id="${esc(p.project_id)}" style="--c:${COLORS[p.category]}">
+    <div class="t">${esc(p.name)}</div>
+    <div class="m">${esc(p.developer || "porteur inconnu")}${p.department ? " · " + esc(p.department) : ""}</div>
+    <div class="row">${power(p)}</div>
+    <div class="row">${p.substation ? `<span class="tag">poste ${esc(p.substation)}</span>` : ""}
+      <span class="tag ${esc(p.confidence)}">${CONFIDENCE[p.confidence] || esc(p.confidence)}</span>
+      ${p.first_seen ? `<span class="tag">déposé ${esc(p.first_seen)}</span>` : ""}</div></div>`;
+}
+function renderList(rows) {
+  const sorted = [...rows].sort((a, b) => (b.power_mw || 0) - (a.power_mw || 0));
+  $("panel").innerHTML = `<div class="panel-head"><b>${rows.length} projet${rows.length > 1 ? "s" : ""}</b><span class="sub">tri : puissance</span></div>
+    <div class="cards">${sorted.map(card).join("") || '<div class="empty">Aucun projet avec ces filtres.</div>'}</div>`;
+  document.querySelectorAll(".card[data-id]").forEach((el) => el.onclick = () => select(el.dataset.id));
+}
+
+// --- Detail ----------------------------------------------------------------------------------
+async function select(id, fly = true) {
+  state.selected = id;
+  $("panel").innerHTML = '<div class="empty">Chargement…</div>';
+  let d;
+  try { d = await api("api/projects/" + encodeURIComponent(id)); }
+  catch (e) { $("panel").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
+  const s = d.summary;
+  if (fly && s.lat != null) map.flyTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 9.5), speed: 1.4 });
+  const evidence = d.evidence.map((e) => `<div class="ev"><div class="f">${esc(FIELDS[e.field] || e.field)}</div>
+      <q>${esc(e.quote)}</q>${e.document_url ? `<a href="${safeUrl(e.document_url)}" target="_blank" rel="noopener">document</a> · ` : ""}<span class="sub">${esc(e.locator)}</span></div>`).join("");
+  const checks = d.checks.map((c) => `<div class="check"><span class="dot s-${esc(c.status)}"></span><b>${esc(CHECKS[c.name] || c.name)}</b><span class="sub">${esc(c.detail)}</span></div>`).join("");
+  const docs = d.documents.map((x) => `<li><a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title || x.url)}</a> <span class="tag">${esc(x.role)}</span></li>`).join("");
+  const related = d.related.map((r) => `<li>${r.url ? `<a href="${safeUrl(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)} <span class="tag">${esc(r.kind)}</span><div class="sub">${esc(r.reasons.join(" ; "))}</div></li>`).join("");
+  $("panel").innerHTML = `<div class="panel-head"><button class="back" id="back">← Liste</button><span class="tag" style="background:${COLORS[s.category]};color:#fff">${esc(CATEGORIES[s.category])}</span></div>
+    <div class="detail">
+      <h2>${esc(s.name)}</h2>
+      <div class="m">${esc(s.developer || "porteur inconnu")}${d.siret ? " · SIRET " + esc(d.siret) : ""}</div>
+      <div class="facts">
+        <div class="fact"><span>Puissance</span><b>${s.power_mw != null ? (s.power_status === "estimated" ? "≈ " : "") + num(s.power_mw) + " MW" : "n.c."}</b></div>
+        <div class="fact"><span>Énergie</span><b>${s.energy_mwh != null ? num(s.energy_mwh) + " MWh" : "n.c."}</b></div>
+        <div class="fact"><span>Poste</span><b>${esc(s.substation || "n.c.")}</b></div>
+        <div class="fact"><span>Déposé le</span><b>${esc(s.first_seen || "n.c.")}</b></div>
+      </div>
+      <div class="sub">${esc(s.status)} · ${esc(s.commune || "")} (${esc(s.department || "?")}) · position : ${s.location_precision === "exact" ? "GPS du dossier" : "centre de la commune"} · confiance : ${CONFIDENCE[s.confidence] || esc(s.confidence)}</div>
+      ${d.power_basis && s.power_status === "estimated" ? `<div class="sub">Estimation : ${esc(d.power_basis)}</div>` : ""}
+      ${d.description ? `<div class="section"><h2>Description</h2>${d.description.length > 280
+        ? `<details><summary>${esc(d.description.slice(0, 280))}… <a>Lire la suite</a></summary>${esc(d.description)}</details>`
+        : `<div>${esc(d.description)}</div>`}</div>` : ""}
+      <div class="section"><h2>Preuves (citations exactes)</h2>${evidence || '<div class="sub">Aucune</div>'}</div>
+      <div class="section"><h2>Contrôles automatiques</h2>${checks}</div>
+      <div class="section"><h2>Documents</h2><ul class="plain">${docs}</ul></div>
+      ${related ? `<div class="section"><h2>Signaux liés (à confirmer)</h2><ul class="plain">${related}</ul></div>` : ""}
+    </div>`;
+  $("back").onclick = () => { state.selected = null; renderList(filtered()); };
+}
+
+// --- Map -------------------------------------------------------------------------------------
+// Self-hosted fallback (department outlines, IGN ADMIN EXPRESS, Licence Ouverte) when vector tiles cannot load.
+const FALLBACK = { version: 8, glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+  sources: { deps: { type: "geojson", data: "static/departements.geojson" } },
+  layers: [{ id: "bg", type: "background", paint: { "background-color": "#dfe7ee" } },
+           { id: "deps-fill", type: "fill", source: "deps", paint: { "fill-color": "#f8f7f3" } },
+           { id: "deps-line", type: "line", source: "deps", paint: { "line-color": "#a3acba", "line-width": 0.8 } }] };
+const map = new maplibregl.Map({
+  container: "map", style: "https://tiles.openfreemap.org/styles/positron",
+  center: [2.6, 49.9], zoom: 6.6, attributionControl: { compact: true },
+});
+map.addControl(new maplibregl.NavigationControl(), "top-right");
+map.addControl(new maplibregl.FullscreenControl(), "top-right");
+let usedFallback = false;
+map.on("error", () => { if (!usedFallback && !map.isStyleLoaded()) { usedFallback = true; map.setStyle(FALLBACK); } });
+
+function geojson(rows) {
+  return { type: "FeatureCollection", features: rows.filter((p) => p.lat != null).map((p) => ({
+    type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+    properties: { id: p.project_id, category: p.category, mw: p.power_mw || 0, exact: p.location_precision === "exact",
+      label: `${p.commune || ""}${p.power_mw ? " · " + num(p.power_mw) + " MW" : ""}` } })) };
+}
+const colorExpr = ["match", ["get", "category"], ...Object.entries(COLORS).flat(), "#888"];
+const radiusExpr = ["interpolate", ["linear"], ["zoom"], 5, ["+", 4, ["*", 0.5, ["sqrt", ["get", "mw"]]]], 11, ["+", 8, ["*", 1.6, ["sqrt", ["get", "mw"]]]]];
+function addLayers() {
+  if (map.getSource("projects")) return;
+  map.addSource("projects", { type: "geojson", data: geojson(filtered()) });
+  map.addLayer({ id: "halo", type: "circle", source: "projects", paint: { "circle-color": colorExpr, "circle-opacity": 0.16, "circle-blur": 0.6, "circle-radius": ["*", 1.9, radiusExpr] } });
+  map.addLayer({ id: "dots", type: "circle", source: "projects", paint: {
+    "circle-color": colorExpr, "circle-radius": radiusExpr, "circle-opacity": ["case", ["get", "exact"], 0.95, 0.55],
+    "circle-stroke-color": "#fff", "circle-stroke-width": 1.8 } });
+  map.addLayer({ id: "labels", type: "symbol", source: "projects", minzoom: 7.4,
+    layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-offset": [0, 1.3], "text-anchor": "top" },
+    paint: { "text-color": "#23262d", "text-halo-color": "#fff", "text-halo-width": 1.6 } });
+  map.on("click", "dots", (e) => select(e.features[0].properties.id, false));
+  map.on("mouseenter", "dots", () => map.getCanvas().style.cursor = "pointer");
+  map.on("mouseleave", "dots", () => map.getCanvas().style.cursor = "");
+}
+map.on("load", addLayers);
+map.on("style.load", () => { addLayers(); refresh(); });
+
+function fit(rows) {
+  const pts = rows.filter((p) => p.lat != null);
+  if (!pts.length) return;
+  const b = new maplibregl.LngLatBounds();
+  pts.forEach((p) => b.extend([p.lon, p.lat]));
+  map.fitBounds(b, { padding: 60, maxZoom: 10, duration: 600 });
+}
+
+function refresh(refit = false) {
+  const rows = filtered();
+  renderFilters(); renderKpis(rows);
+  if (!state.selected) renderList(rows);
+  map.getSource("projects")?.setData(geojson(rows));
+  if (refit) fit(rows);
+  const q = exportQuery();
+  $("csv").href = "api/export.csv" + q; $("geojson").href = "api/export.geojson" + q;
+}
+
+// --- Changes, exports, about -------------------------------------------------------------------
+async function loadChanges() {
+  const since = $("since").value || isoDaysAgo(30);
+  let rows;
+  try { rows = await api("api/changes?since=" + encodeURIComponent(since)); }
+  catch (e) { $("changes").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
+  $("changes").innerHTML = rows.map((c) => `<div class="tile ${c.kind === "removed" ? "" : "clk"}" data-id="${esc(c.project_id)}" data-kind="${esc(c.kind)}" style="cursor:${c.kind === "removed" ? "default" : "pointer"}">
+      <div class="row" style="margin:0 0 6px"><span class="kind k-${esc(c.kind)}">${CHANGE_KINDS[c.kind] || esc(c.kind)}</span><span class="sub">${esc(c.at.slice(0, 16).replace("T", " "))} UTC</span></div>
+      <b>${esc(c.name)}</b> <span class="sub">${esc(c.department || "")}</span>
+      ${c.fields.length ? `<div class="diff">${c.fields.map((f) => `<div><span class="l">${esc(f.label)}</span><span><s>${esc(f.before ?? "—")}</s> → <b>${esc(f.after ?? "—")}</b></span></div>`).join("")}</div>` : ""}
+    </div>`).join("") || '<div class="empty">Aucun changement sur la période. Le journal démarre à la première mise à jour suivie.</div>';
+  document.querySelectorAll("#changes [data-id]").forEach((el) => el.onclick = () => {
+    if (el.dataset.kind === "removed") return;
+    show("map"); select(el.dataset.id);
+  });
+}
+$("since").onchange = loadChanges;
+
+function show(view) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "view-" + view));
+  document.querySelectorAll(".rail [data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
+  if (view === "map") map.resize();
+  if (view === "changes") loadChanges();
+}
+document.querySelectorAll(".rail [data-view]").forEach((b) => b.onclick = () => show(b.dataset.view));
+
+async function init() {
+  $("since").value = isoDaysAgo(30);
+  $("mcp").textContent = JSON.stringify({ mcpServers: { radar: { type: "http", url: location.origin + "/mcp" } } }, null, 2);
+  try {
+    const [info, projects, recent] = await Promise.all([api("api/info"), api("api/projects"), api("api/changes?since=" + isoDaysAgo(7))]);
+    state.projects = projects;
+    $("coverage").textContent = info.coverage;
+    $("about").innerHTML = [`<div class="tile"><h2>Couverture</h2><div>${esc(info.coverage)}</div></div>`,
+      `<div class="tile"><h2>Contenu</h2><ul class="plain">${Object.entries(info.counts).map(([k, v]) => `<li>${esc(k)} : <b>${num(v)}</b></li>`).join("")}</ul></div>`,
+      `<div class="tile"><h2>Dernières mises à jour</h2><ul class="plain">${Object.entries(info.last_runs).map(([k, v]) => `<li>${esc(k)} : ${esc((v || "").slice(0, 16).replace("T", " "))} UTC</li>`).join("")}</ul></div>`,
+      `<div class="tile"><h2>À savoir</h2><ul>${info.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`].join("");
+    const deps = [...new Set(projects.map((p) => p.department).filter(Boolean))].sort();
+    $("dep").innerHTML += deps.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join("");
+    if (recent.length) { $("badge").textContent = recent.length; $("badge").hidden = false; }
+    refresh();
+    if (map.loaded()) fit(filtered()); else map.once("load", () => fit(filtered()));
+  } catch (e) {
+    $("coverage").innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+}
+init();
+</script>
+</body>
+</html>

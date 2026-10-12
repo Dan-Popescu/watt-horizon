@@ -12,6 +12,7 @@ class Settings:
     llm_model: str | None  # e.g. "claude-haiku-5-5"; None disables the LLM classifier
     use_tesseract: bool
     user_agent: str
+    api_token: str | None = None  # if set, `radar web` requires `Authorization: Bearer <token>`
 
     @property
     def db_path(self) -> Path:
@@ -54,4 +55,5 @@ def load_settings() -> Settings:
         user_agent=os.environ.get(
             "RADAR_USER_AGENT", "radar-raccordement/0.1 (+polite crawler; one request per second per host)"
         ),
+        api_token=os.environ.get("RADAR_API_TOKEN") or None,
     )
