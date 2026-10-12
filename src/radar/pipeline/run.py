@@ -59,7 +59,8 @@ def process_filings(
             rules=rule_filter(services.rules, arbiter),
             opinion=services.opinion or train(trusted_examples(filings, services.labels or {})),
         )
-    state = _state(db, services) if services.fingerprint and only is None and not full else None
+    state = _state(db, services) if services.fingerprint else None
+    may_skip = only is None and not full
     for key in db.filing_keys_with_documents():
         if only is not None and key not in only:
             continue
@@ -67,7 +68,7 @@ def process_filings(
             previous = db.filing(key)
             documents = db.documents(key)
             fingerprint = filing_fingerprint(state, documents) if state else None
-            if fingerprint and previous and previous.versions.get("input") == fingerprint:
+            if may_skip and fingerprint and previous and previous.versions.get("input") == fingerprint:
                 report.unchanged += 1
                 continue
             filing = build_filing(key, documents, services, db.corrections(key))

@@ -1,11 +1,17 @@
 """PDF reading: form fields (most reliable) > text layer > scanned pages flagged for OCR."""
 
+import base64
+import json
 import re
+import zlib
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import pymupdf
 
 from radar.domain.text import squash
+from radar.store.cache import KeyValueCache
 
 MIN_TEXT_CHARS_PER_PAGE = 200  # below this, a page is considered a scan
 
@@ -20,7 +26,7 @@ class PdfContent:
     ocr_engines: dict[int, str] = field(default_factory=dict)  # 1-based page -> engine label (provenance)
     field_names: tuple[str, ...] = ()  # every AcroForm field, filled or not (template fingerprint)
 
-    @property
+    @cached_property
     def text(self) -> str:
         """Whole document text (text layer, completed by OCR where available), whitespace-squashed."""
         parts = [self.ocr_texts.get(i + 1) or t for i, t in enumerate(self.page_texts)]
@@ -93,3 +99,56 @@ def read_pdf(data: bytes) -> PdfContent:
             scanned_pages=tuple(scanned),
             field_names=tuple(sorted(names)),
         )
+
+
+# Bump when read_pdf's output can change (with the PyMuPDF version, it keys the reading cache).
+READER_VERSION = f"1:{pymupdf.VersionBind}:{MIN_TEXT_CHARS_PER_PAGE}"
+
+
+class PdfReader:
+    """`read_pdf` with a persistent cache (derived.sqlite, compressed) keyed by document hash + reader version,
+    and a small in-process memo: parsing is most of the build time and the same PDF is read by several steps.
+    The cache holds the raw text (like `blobs/`): local only, deletable at any time."""
+
+    NAMESPACE = "pdf"
+    MEMO = 256
+
+    def __init__(self, cache: KeyValueCache | None = None) -> None:
+        self.cache = cache
+        self._memo: OrderedDict[str, PdfContent] = OrderedDict()
+
+    def read(self, document_id: str, data: bytes) -> PdfContent:
+        if (hit := self._memo.get(document_id)) is not None:
+            self._memo.move_to_end(document_id)
+            return hit
+        key = f"{document_id}:{READER_VERSION}"
+        stored = self.cache.get(self.NAMESPACE, key) if self.cache is not None else None
+        if stored is not None:
+            content = _decode(stored)
+        else:
+            content = read_pdf(data)
+            if self.cache is not None:
+                self.cache.put(self.NAMESPACE, key, _encode(content))
+        self._memo[document_id] = content
+        if len(self._memo) > self.MEMO:
+            self._memo.popitem(last=False)
+        return content
+
+
+def _encode(c: PdfContent) -> str:
+    raw = {
+        "pages": c.pages,
+        "fields": c.fields,
+        "texts": c.page_texts,
+        "scanned": c.scanned_pages,
+        "names": c.field_names,
+    }
+    return base64.b64encode(zlib.compress(json.dumps(raw, ensure_ascii=False).encode(), 6)).decode()
+
+
+def _decode(value: str) -> PdfContent:
+    raw = json.loads(zlib.decompress(base64.b64decode(value)))
+    return PdfContent(
+        pages=raw["pages"], fields=raw["fields"], page_texts=tuple(raw["texts"]),
+        scanned_pages=tuple(raw["scanned"]), field_names=tuple(raw["names"]),
+    )  # fmt: skip

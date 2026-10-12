@@ -2,16 +2,19 @@
 
 from radar.domain.enums import DocumentRole
 from radar.domain.privacy import PersonScrubber
-from radar.reading.pdf import read_pdf
+from radar.reading.pdf import PdfReader
 from radar.store.blobs import BlobStore
 from radar.store.db import Database
 
 
-def audit_privacy(db: Database, blobs: BlobStore) -> list[str]:
+def audit_privacy(db: Database, blobs: BlobStore, reader: PdfReader | None = None) -> list[str]:
     """Names from form person fields, civility names, e-mails and phones still present in stored texts."""
     leaks: list[str] = []
+    reader = reader or PdfReader()
     for filing in db.filings():
-        forms = [read_pdf(blobs.get(d.id)).fields for d in db.documents(filing.key) if d.role is DocumentRole.FORM]
+        forms = [
+            reader.read(d.id, blobs.get(d.id)).fields for d in db.documents(filing.key) if d.role is DocumentRole.FORM
+        ]
         audit = PersonScrubber.for_filing(forms, [filing.developer, filing.legal_name])
         texts = {
             "title": filing.title,

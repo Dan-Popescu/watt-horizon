@@ -9,6 +9,7 @@ URL formats are stable on purpose: they are the cache keys.
 
 import json
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -47,12 +48,22 @@ def _to_commune(row: dict[str, Any]) -> CommuneInfo:
 
 
 class ReferenceCommunes:
+    """Official commune list, indexed on first use (loading it costs ~1 s: skipped when nothing is rebuilt)."""
+
     def __init__(self, path: Path) -> None:
-        rows = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-        self.communes = [_to_commune(r) for r in rows if r.get("code") and r.get("nom")]
-        self._by_name: dict[str, list[CommuneInfo]] = {}
+        self.path = path
+
+    @cached_property
+    def communes(self) -> list[CommuneInfo]:
+        rows = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else []
+        return [_to_commune(r) for r in rows if r.get("code") and r.get("nom")]
+
+    @cached_property
+    def _by_name(self) -> dict[str, list[CommuneInfo]]:
+        index: dict[str, list[CommuneInfo]] = {}
         for c in self.communes:
-            self._by_name.setdefault(fold(c.name), []).append(c)
+            index.setdefault(fold(c.name), []).append(c)
+        return index
 
     def __len__(self) -> int:
         return len(self.communes)

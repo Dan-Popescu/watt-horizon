@@ -12,6 +12,7 @@ from radar.quality.propagate import Aliases
 from radar.quality.rulebook import Rulebook
 from radar.quality.templates import Registry
 from radar.reading.ocr import make_ocr
+from radar.reading.pdf import PdfReader
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
 from radar.validation.lookups import ApiLookups, CompositeLookups, JsonCache, ReferenceCommunes
@@ -74,5 +75,6 @@ def make_services(settings: Settings, http: PoliteHttp | None) -> Services:
         labels={n: g.category for n, g in load_gold(settings.gold_path).items() if g.verified},
         screen_terms=ScreenTerms.load(settings.screen_terms_path).pattern(),
         fingerprint=setup,
+        reader=PdfReader(cache),
         lookups=make_lookups(settings, http),
     )

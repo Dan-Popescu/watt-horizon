@@ -2,12 +2,12 @@
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.bayes import BayesModel, vocabulary
-from radar.classification.rules import screen
+from radar.classification.rules import Screening, screen
 from radar.domain.departments import code_from_postcode
 from radar.domain.enums import TARGET_CATEGORIES, Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
 from radar.domain.fields import field_values
@@ -39,7 +39,7 @@ from radar.quality.propagate import ALIAS_FIELDS, Aliases
 from radar.quality.rulebook import LearnedRule, RuleHit, apply_rules
 from radar.quality.templates import Registry, fingerprint
 from radar.reading.ocr import OcrEngine
-from radar.reading.pdf import PdfContent, read_pdf
+from radar.reading.pdf import PdfContent, PdfReader
 from radar.store.blobs import BlobStore
 from radar.validation.lookups import CommuneInfo, Lookups
 from radar.validation.validator import validate
@@ -65,6 +65,7 @@ class Services:
     screen_terms: re.Pattern[str] | None = None  # adopted screen terms (gold/screen_terms.json)
     # Fingerprint of the setup (gold files, OCR, classifiers; see pipeline/fingerprint.py). None: always rebuild.
     fingerprint: str | None = None
+    reader: PdfReader = field(default_factory=PdfReader)  # PDF parsing, cached (reading/pdf.PdfReader)
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -72,7 +73,7 @@ def read_documents(documents: list[DocumentRecord], services: Services) -> list[
     contents = []
     for doc in documents:
         data = services.blobs.get(doc.id)
-        contents.append(services.ocr.complete(doc.id, data, read_pdf(data)))
+        contents.append(services.ocr.complete(doc.id, data, services.reader.read(doc.id, data)))
     return contents
 
 
@@ -218,7 +219,8 @@ def build_filing(
     }
     title = privacy.scrub(_best_title(documents, facts)) or ""
 
-    classification = _classify(key, number, title, facts, texts, services, bool(unread))
+    screening = screen(title, facts.description, *texts, extra=services.screen_terms)
+    classification = _classify(key, number, title, facts, texts, services, bool(unread), screening)
     classification = classification.model_copy(update={"quote": privacy.scrub(classification.quote) or ""})
     extractor_used = None
     if services.extractor and classification.category in TARGET_CATEGORIES:
@@ -257,7 +259,7 @@ def build_filing(
             classification=classification,
             checks=validation.checks,
             target=classification.category in TARGET_CATEGORIES,
-            kept_by_text=screen(title, facts.description, *texts, extra=services.screen_terms).keep,
+            kept_by_text=screening.keep,
             unread=unread,
             second_opinion=opinion,
         )
@@ -383,9 +385,15 @@ def _llm_fallback(
 
 
 def _classify(
-    key: str, number: str, title: str, facts: Facts, texts: list[str], services: Services, has_unread: bool
+    key: str,
+    number: str,
+    title: str,
+    facts: Facts,
+    texts: list[str],
+    services: Services,
+    has_unread: bool,
+    screening: Screening,
 ) -> Classification:
-    screening = screen(title, facts.description, *texts, extra=services.screen_terms)
     classifier = services.classifier
     if not screening.keep:
         return Classification(category=Category.OTHER, method="rules", confidence="no clue")

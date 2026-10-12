@@ -200,13 +200,14 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
             if llm is None:
                 return {"error": "No model classifier: set RADAR_LLM_MODEL (and ANTHROPIC_API_KEY), not offline."}
             classifier = evaluate_classifier(llm, db, services, labels)
+        eval_services = make_services(s, None)
         report = build_report(
             ReportInputs(
                 filings=filings,
                 labels=labels,
                 field_gold=field_gold,
                 corrections=db.corrections(),
-                privacy_leaks=audit_privacy(db, blobs),
+                privacy_leaks=audit_privacy(db, blobs, eval_services.reader),
                 listing=db.listing_counts(),
                 cases=cases.refresh(s.cases_dir, rulebook.Rulebook.load(s.rules_path).effective())
                 if s.cases_dir.exists()
@@ -217,7 +218,7 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
                 link_decisions=db.current_link_decisions(),
             )
         )
-        report["robustness"] = robustness.check_robustness(corpus_documents(db, make_services(s, None))).summary()
+        report["robustness"] = robustness.check_robustness(corpus_documents(db, eval_services)).summary()
         previous = db.last_runs().get("eval", {}).get("stats", {}).get("metrics", {})
         current = eval_metrics(report)
         comparison = compare_reports(previous, current) if previous else {"regressions": [], "improvements": []}
