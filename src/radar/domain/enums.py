@@ -42,6 +42,7 @@ class SourceKind(StrEnum):
     GEORISQUES = "georisques"
     COMPANY_REGISTRY = "company_registry"
     PRESS = "press"
+    ENERGY_REGISTRY = "energy_registry"  # national register of production/storage installations in service (ODRÉ)
     MANUAL = "manual"
 
 

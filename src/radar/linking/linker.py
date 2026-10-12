@@ -4,7 +4,8 @@ Rules:
 - same commune (folded) between any two records;
 - same distinctive word in developer names (generic words such as "energy" or "storage" are ignored);
 - same substation name between two filings.
-Press-to-press links are skipped (articles often cite many places).
+Only pairs involving at least one filing are compared (signal-to-signal links are never used), and installations
+from the national register are matched by the strict rule in `linking/registry.py` instead.
 """
 
 from collections.abc import Iterable
@@ -75,11 +76,11 @@ def _from_signal(s: Signal) -> _Node:
 
 
 def propose_links(filings: Iterable[Filing], signals: Iterable[Signal]) -> list[Link]:
-    nodes = [_from_filing(f) for f in filings] + [_from_signal(s) for s in signals]
+    filing_nodes = [_from_filing(f) for f in filings]
+    signal_nodes = [_from_signal(s) for s in signals if s.source is not SourceKind.ENERGY_REGISTRY]
+    pairs = [*combinations(filing_nodes, 2), *((f, s) for f in filing_nodes for s in signal_nodes)]
     links: list[Link] = []
-    for a, b in combinations(nodes, 2):
-        if a.source is SourceKind.PRESS and b.source is SourceKind.PRESS:
-            continue
+    for a, b in pairs:
         reasons: list[str] = []
         if shared := a.communes & b.communes:
             reasons.append("même commune : " + ", ".join(sorted(shared)))

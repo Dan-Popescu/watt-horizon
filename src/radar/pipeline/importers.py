@@ -12,6 +12,7 @@ from radar.domain.enums import Category, SignalKind, SourceKind
 from radar.domain.ids import normalize_filing_number
 from radar.domain.models import Signal
 from radar.pipeline.ingest import ingest_pdf
+from radar.sources import energy_registry
 from radar.store.blobs import BlobStore
 from radar.store.db import Database
 from radar.validation.lookups import JsonCache
@@ -157,3 +158,12 @@ def import_communes(source: Path, target: Path) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, target)
     return len(rows)
+
+
+def import_energy_registry(db: Database, path: Path) -> int:
+    """Storage rows of the national register (ODRÉ JSON export), stored as installation signals."""
+    signals = energy_registry.to_signals(json.loads(path.read_text(encoding="utf-8")))
+    with db.transaction():
+        for signal in signals:
+            db.upsert_signal(signal)
+    return len(signals)

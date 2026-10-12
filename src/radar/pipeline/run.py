@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from radar.domain.enums import TARGET_CATEGORIES
+from radar.domain.models import Link
 from radar.linking.linker import propose_links
+from radar.linking.registry import commissioned
 from radar.pipeline.changes import track_changes
 from radar.pipeline.corrections import apply_corrections, with_machine
 from radar.pipeline.filings import Services, build_filing
@@ -47,8 +49,16 @@ def link_and_build(db: Database, now: datetime | None = None) -> dict[str, objec
     """Propose links, rebuild projects and append the change log, in one transaction."""
     now = now or utcnow()
     filings, signals = db.filings(), db.signals()
-    links = propose_links(filings, signals)
-    built = build_projects(filings, signals, links, now=now)
+    in_service = commissioned(filings, signals)
+    links = propose_links(filings, signals) + [
+        Link(
+            a=min(key, s.key),
+            b=max(key, s.key),
+            reasons=(f"registre national : installation en service compatible ({s.payload['power_mw']} MW)",),
+        )
+        for key, s in in_service.items()
+    ]
+    built = build_projects(filings, signals, links, now=now, commissioned=in_service)
     projects, changes = track_changes(db.projects(), built, now)
     with db.transaction():
         db.replace_links(links)

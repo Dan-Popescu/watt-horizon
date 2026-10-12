@@ -14,7 +14,7 @@ import json
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers
 from radar.pipeline.corrections import reviewed_references
+from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
@@ -78,6 +79,8 @@ def cmd_import(args: argparse.Namespace, s: Settings) -> Any:
         if args.what == "signals":
             if args.kind == "registry":
                 return {"signals": importers.import_registry_signals(db, Path(args.path))}
+            if args.kind == "energy-registry":
+                return {"signals": importers.import_energy_registry(db, Path(args.path))}
             return {"signals": importers.import_press_signals(db, Path(args.path))}
     if args.what == "gold":
         return {"labels": importers.import_gold(Path(args.path), s.gold_path)}
@@ -128,7 +131,10 @@ def cmd_update(args: argparse.Namespace, s: Settings) -> Any:
     with _require_http(s) as http, Database(s.db_path) as db:
         for source in args.sources:
             collected[source] = _collect_one(source, args, s, http, db)
-    return {"collect": collected, **cmd_run(args, s)}
+    result = {"collect": collected, **cmd_run(args, s)}
+    with Database(s.db_path) as db:
+        health = collector_health(db.runs("collect:"), now=datetime.now(UTC))
+    return {**result, "health_alerts": [h.source for h in health if h.status == "alert"]}
 
 
 def cmd_process(args: argparse.Namespace, s: Settings) -> Any:
@@ -258,6 +264,17 @@ def cmd_review(args: argparse.Namespace, s: Settings) -> Any:
         return {"path": str(path), "added": review.import_corrections(db, rows), "next": "radar run"}
 
 
+def cmd_health(args: argparse.Namespace, s: Settings) -> Any:
+    """Collector health from the run history. --strict: exit 2 on any alert (for the scheduler)."""
+    with Database(s.db_path) as db:
+        report = collector_health(db.runs("collect:"), now=datetime.now(UTC))
+    alerts = [h.source for h in report if h.status == "alert"]
+    result: dict[str, Any] = {"sources": report, "alerts": alerts}
+    if args.strict and alerts:
+        result["error"] = "collector alerts: " + ", ".join(alerts)
+    return result
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -279,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     files.add_argument("--region", default="hauts-de-france")
     files.add_argument("--transcripts", help="directory of '<pdf file>.txt' verbatim transcriptions")
     sig = isub.add_parser("signals")
-    sig.add_argument("kind", choices=["registry", "press"])
+    sig.add_argument("kind", choices=["registry", "press", "energy-registry"])
     sig.add_argument("path")
     for name in ("gold", "cache", "communes"):
         isub.add_parser(name).add_argument("path")
@@ -330,6 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--strict", action="store_true", help="exit 2 if any metric regressed")
     ev.add_argument("--classifier", action="store_true", help="also re-run the model classifier alone (paid)")
     ev.add_argument("--draft-fields", action="store_true", help="add unverified field references from extractions")
+    hl = sub.add_parser("health", help="collector health (blocked / empty / stale / crashed sources)")
+    hl.add_argument("--strict", action="store_true", help="exit 2 on any alert")
     rev = sub.add_parser("review", help="export/import human corrections (gold/corrections.jsonl)")
     rev.add_argument("action", choices=["export", "import"])
     rev.add_argument("--path", help="default: gold/corrections.jsonl")
@@ -362,6 +381,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "mcp": cmd_mcp,
     "web": cmd_web,
     "review": cmd_review,
+    "health": cmd_health,
 }
 
 

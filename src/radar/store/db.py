@@ -321,6 +321,22 @@ class Database:
         )
         return {r["kind"]: {"finished_at": r["finished_at"], "stats": json.loads(r["stats"])} for r in rows}
 
+    def runs(self, kind_prefix: str = "", limit: int = 500) -> list[dict[str, Any]]:
+        """Most recent runs first: kind, started_at, finished_at (None if it crashed or is running), stats."""
+        rows = self.conn.execute(
+            "SELECT kind, started_at, finished_at, stats FROM runs WHERE kind LIKE ? ORDER BY id DESC LIMIT ?",
+            (kind_prefix + "%", limit),
+        )
+        return [
+            {
+                "kind": r["kind"],
+                "started_at": datetime.fromisoformat(r["started_at"]),
+                "finished_at": datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else None,
+                "stats": json.loads(r["stats"]),
+            }
+            for r in rows
+        ]
+
     def counts(self) -> dict[str, int]:
         return {
             t: int(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
