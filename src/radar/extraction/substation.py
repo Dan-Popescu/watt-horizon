@@ -7,7 +7,7 @@ A name beats a bare voltage, wherever it appears: the first mention is often gen
 
 import re
 
-from radar.domain.text import squash
+from radar.domain.text import fold, squash
 
 # Keywords are case-insensitive; a qualifier is required so « poste de livraison » or « poste de travail » never match.
 _KEYWORDS = (
@@ -17,8 +17,20 @@ _KEYWORDS = (
 _VOLTAGE = r"\d{2,3}\s?(?i:000\s?volts|kV)(?:\s?/\s?\d{2,3}\s?(?i:kV))?"
 # Proper noun, case-sensitive: « Famars », « SAUCOURT », « La Capelle », « Lislet 2 », « CHEMIN DE VAILLY ».
 # Words join only through a connector (de, sur…), so « SEQUEDIN ENEDIS » stops at « SEQUEDIN ».
-_WORD = r"(?:(?:La|Le|Les)\s+|L[’'])?(?!(?i:poste)\b)[A-ZÉÈÎ][A-Za-zÀ-ÿ\-]{1,30}"
-_NAME = _WORD + r"(?:\s(?i:de|du|des|sur|sous|lès|en)\s+" + _WORD + r")*(?:\s\d{1,2}\b)?"
+_WORD = r"(?:(?i:la|le|les)\s+|(?i:l)[’'])?(?!(?i:poste)\b)[A-ZÉÈÎ][A-Za-zÀ-ÿ\-]{1,30}"
+_NAME = _WORD + r"(?:\s(?i:de|du|des|sur|sous|lès|les)\s+" + _WORD + r")*(?:\s\d{1,2}\b)?"
+# Words that are never a substation name (all-caps documents make every word look like a proper noun).
+GENERIC = frozenset(
+    {"transformation", "livraison", "source", "electrique", "raccordement", "poste", "commune", "zone", "parcelle",
+     "site", "projet", "ville", "region", "societe", "rte", "enedis", "la", "le", "les", "amont", "aval", "reseau"}
+)  # fmt: skip
+
+
+def _generic(name: str) -> bool:
+    words = [w for w in fold(name).split() if w not in {"la", "le", "les", "l"}]
+    return not words or words[0] in GENERIC
+
+
 _POSTE = re.compile(
     _KEYWORDS + r"\s*(?:"
     r"(?i:de\s+)?[«\"“]\s*(?P<quoted>[^»\"”]{2,40}?)\s*[»\"”]"
@@ -34,6 +46,8 @@ def find_substation(*texts: str | None) -> tuple[str, str] | None:
     for text in texts:
         for m in _POSTE.finditer(text or ""):
             kind = next(k for k in _RANK if m[k])
+            if kind == "named" and _generic(m[kind]):
+                continue
             if best is None or _RANK[kind] < best[0]:
                 best = (_RANK[kind], m[kind].strip(), _sentence(text or "", m.start(), m.end()))
                 if best[0] == 0:

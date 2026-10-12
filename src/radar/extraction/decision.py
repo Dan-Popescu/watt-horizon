@@ -15,26 +15,27 @@ from radar.domain.departments import code_from_name
 from radar.domain.enums import ReviewDecision
 from radar.domain.models import Evidence
 from radar.domain.power import read_power
-from radar.domain.text import squash
+from radar.domain.text import fold, squash
 from radar.extraction.facts import Facts
 from radar.extraction.substation import find_substation
 
+# Folded month names: OCR and some PDFs lose accents (« fevrier », « aout »), see quality/robustness.py.
 MONTHS = {
     name: i
     for i, name in enumerate(
         (
             "janvier",
-            "février",
+            "fevrier",
             "mars",
             "avril",
             "mai",
             "juin",
             "juillet",
-            "août",
+            "aout",
             "septembre",
             "octobre",
             "novembre",
-            "décembre",
+            "decembre",
         ),
         start=1,
     )
@@ -43,11 +44,11 @@ APOS = "[’']"
 
 _CLAUSE = re.compile(r"Vu (?:la demande|le formulaire)[^;]{20,700}?;", re.IGNORECASE)
 _NUMBER = re.compile(r"n\s*[°º]\s*([\w/ -]{3,20}?)\s*,")
-_DATE = re.compile(r"le (\d{1,2})(?:er)? ([a-zéû]+) (\d{4})", re.IGNORECASE)
+_DATE = re.compile(r"le (\d{1,2})(?:er)? ([a-zéèûô]+) (\d{4})", re.IGNORECASE)
 # « par » follows « au cas » in « au cas par cas »: the look-behind skips it.
 _DEVELOPER = re.compile(
-    rf"(?<!cas )\bpar (?:la (?:société |SASU |SAS |SARL |SA )|la |le |l{APOS}|Monsieur |Madame )?(.+?)"
-    rf"(?:,? le \d|,? relati(?:f|ve)\b|,? (?:située? à [^,]+,\s*)?concernant\b)",
+    rf"(?<!cas )\bpar (?:la (?:soci[ée]t[ée] |SASU |SAS |SARL |SA )|la |le |l{APOS}|Monsieur |Madame )?(.+?)"
+    rf"(?:,? le \d|,? relati(?:f|ve)\b|,? (?:situ[ée]e? [àa] [^,]+,\s*)?concernant\b)",
     re.IGNORECASE,
 )
 _PROJECT = re.compile(
@@ -56,7 +57,7 @@ _PROJECT = re.compile(
 _COMMUNE = re.compile(
     rf"sur (?:la|les) communes? (?:de |d{APOS})(.+?)(?:,|;| dans le| et les informations)", re.IGNORECASE
 )
-_DEPARTMENT = re.compile(rf"dans le département (?:de l{APOS}|d{APOS}|de |du |des )?([^;,]+)", re.IGNORECASE)
+_DEPARTMENT = re.compile(rf"dans le d[ée]partement (?:de l{APOS}|d{APOS}|de |du |des )?([^;,]+)", re.IGNORECASE)
 _ARTICLE_1 = re.compile(
     r"Article\s*1(?:er| er)?\s*:?\s*(.{20,400}?(?:n.est pas soumis|est soumis)[^.]{0,120})", re.IGNORECASE
 )
@@ -74,9 +75,9 @@ def extract_decision(document_id: str, text: str, title: str = "") -> Facts:
         quote = ev("clause:request", clause)
         if m := _NUMBER.search(clause):
             facts.set("number", squash(m[1]), quote)
-        if (m := _DATE.search(clause)) and m[2].lower() in MONTHS:
+        if (m := _DATE.search(clause)) and fold(m[2]) in MONTHS:
             with contextlib.suppress(ValueError):
-                facts.set("filed_on", date(int(m[3]), MONTHS[m[2].lower()], int(m[1])), quote)
+                facts.set("filed_on", date(int(m[3]), MONTHS[fold(m[2])], int(m[1])), quote)
         if m := _DEVELOPER.search(clause):
             facts.set("developer", squash(m[1]), quote)
         if m := _PROJECT.search(clause):
@@ -93,9 +94,9 @@ def extract_decision(document_id: str, text: str, title: str = "") -> Facts:
         )
         facts.set("review_decision", decision, ev("article:1", phrase))
     elif title:  # scanned decisions: the official title still states the outcome
-        if re.search(r"Décision de non soumission", title, re.I):
+        if re.search(r"D[ée]cision de non soumission", title, re.I):
             facts.set("review_decision", ReviewDecision.NOT_SUBJECT, ev("title", title))
-        elif re.search(r"Décision de soumission", title, re.I):
+        elif re.search(r"D[ée]cision de soumission", title, re.I):
             facts.set("review_decision", ReviewDecision.SUBJECT, ev("title", title))
 
     if (

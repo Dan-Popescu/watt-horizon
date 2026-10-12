@@ -24,6 +24,7 @@ from radar.api import digest, exports, queries, review
 from radar.api.quality import quality_overview
 from radar.classification.gold import load_gold
 from radar.config import Settings, load_settings
+from radar.domain.privacy import PersonScrubber
 from radar.evaluation.classification import evaluate_classifier
 from radar.evaluation.gold import draft as draft_field_gold
 from radar.evaluation.gold import load_field_gold, write_field_gold
@@ -37,10 +38,10 @@ from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers
 from radar.pipeline.corrections import reviewed_references
-from radar.pipeline.filings import read_documents
+from radar.pipeline.filings import Services, read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
-from radar.quality import cases, errors, improve, propagate, rulebook, shadow
+from radar.quality import cases, errors, improve, propagate, robustness, rulebook, shadow
 from radar.quality.arbiter import learn
 from radar.quality.drift import drift
 from radar.quality.suggest import suggest
@@ -208,6 +209,7 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
                 classifier=classifier,
             )
         )
+        report["robustness"] = robustness.check_robustness(corpus_documents(db, make_services(s, None))).summary()
         previous = db.last_runs().get("eval", {}).get("stats", {}).get("metrics", {})
         current = eval_metrics(report)
         comparison = compare_reports(previous, current) if previous else {"regressions": [], "improvements": []}
@@ -456,6 +458,31 @@ def cmd_rules(args: argparse.Namespace, s: Settings) -> Any:
     return {"path": str(s.rules_path), "rules": rows}
 
 
+def corpus_documents(db: Database, services: Services) -> list[tuple[str, list[robustness.Document]]]:
+    """Every stored filing as (number, documents with GDPR-scrubbed text), for corpus-wide checks."""
+    items = []
+    for key in db.filing_keys_with_documents():
+        documents = db.documents(key)
+        contents = read_documents(documents, services)
+        privacy = PersonScrubber.for_filing([c.fields for c in contents])
+        docs = [
+            robustness.Document(d.id, d.role, d.title, privacy.scrub(c.text) or "", c.fields)
+            for d, c in zip(documents, contents, strict=True)
+        ]
+        items.append((key.rsplit(":", 1)[-1], docs))
+    return items
+
+
+def cmd_robustness(_: argparse.Namespace, s: Settings) -> Any:
+    """Perturb every stored document like real PDFs differ; list values that move (brittle rules)."""
+    with Database(s.db_path) as db:
+        report = robustness.check_robustness(corpus_documents(db, make_services(s, make_http(s))))
+    path = s.data_dir / "improve" / "robustness.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(robustness.render(report), encoding="utf-8", newline="\n")
+    return {**report.summary(), "fragile": len(report.fragile), "report": str(path)}
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -534,6 +561,7 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--strict", action="store_true", help="check: exit 2 on any regression")
     imp = sub.add_parser("improve", help="agent-ready tickets per failing field, with validated rule candidates")
     imp.add_argument("--field", help="only this field")
+    sub.add_parser("robustness", help="perturb every stored document; list extracted values that move")
     ru = sub.add_parser("rules", help="adopted extraction rules (gold/rules.json): list, adopt, disable")
     ru.add_argument("action", nargs="?", choices=["list", "adopt", "disable"], default="list")
     ru.add_argument("--field", help="adopt: field (developer, siret, commune, power_mw, energy_mwh, ...)")
@@ -592,6 +620,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "shadow": cmd_shadow,
     "templates": cmd_templates,
     "rules": cmd_rules,
+    "robustness": cmd_robustness,
 }
 
 

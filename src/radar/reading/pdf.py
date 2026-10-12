@@ -1,5 +1,6 @@
 """PDF reading: form fields (most reliable) > text layer > scanned pages flagged for OCR."""
 
+import re
 from dataclasses import dataclass, field
 
 import pymupdf
@@ -23,7 +24,7 @@ class PdfContent:
     def text(self) -> str:
         """Whole document text (text layer, completed by OCR where available), whitespace-squashed."""
         parts = [self.ocr_texts.get(i + 1) or t for i, t in enumerate(self.page_texts)]
-        return squash(" ".join(parts))
+        return squash(" ".join(dehyphenate(p) for p in parts))
 
     @property
     def read_by(self) -> str:
@@ -44,6 +45,17 @@ class PdfContent:
     @property
     def is_mostly_scanned(self) -> bool:
         return self.pages > 0 and len(self.scanned_pages) * 2 > self.pages
+
+
+# Place-name connectors keep their hyphen: « Bonningues-\nlès-Calais », « Courcelles-\nsur-Vesle ».
+_CONNECTOR = r"(?:lès|les|lez|sur|sous|en|de|du|des|la|le|aux|au|et|d'|l')\b"
+_SPLIT_WORD = re.compile(rf"(?<=[a-zà-ÿ])-[ \t]*\n[ \t]*(?!{_CONNECTOR})(?=[a-zà-ÿ])")
+_SPLIT_COMPOUND = re.compile(r"(?<=\w)-[ \t]*\n[ \t]*(?=\w)")
+
+
+def dehyphenate(text: str) -> str:
+    """Line-end hyphenation: « installa-\ntion » -> « installation »; « Loon-\nPlage » -> « Loon-Plage »."""
+    return _SPLIT_COMPOUND.sub("-", _SPLIT_WORD.sub("", text))
 
 
 def _ranges(pages: list[int]) -> str:

@@ -164,6 +164,8 @@ def metrics(report: dict[str, Any]) -> dict[str, float]:
         out["calibration.ece"] = ece
     if (share := report["field_calibration"]["auto_accept_share"]) is not None:
         out["auto_accept.share"] = share
+    if (stable := report.get("robustness", {}).get("stable_share")) is not None:
+        out["robustness.stable_share"] = stable
     out["privacy.leaks"] = float(len(report["privacy"]["leaks"]))
     out["integrity.quote_not_found"] = float(report["integrity"]["quote_not_found"])
     if (share := report["undecided"]["share"]) is not None:
