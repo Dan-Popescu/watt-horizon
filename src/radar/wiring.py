@@ -3,6 +3,7 @@
 from radar.classification.base import CachedClassifier, ChainClassifier, Classifier
 from radar.classification.gold import GoldClassifier, load_gold
 from radar.config import Settings
+from radar.extraction.llm import FieldExtractor
 from radar.net.http import PoliteHttp
 from radar.pipeline.filings import Services
 from radar.reading.ocr import make_ocr
@@ -30,6 +31,15 @@ def make_classifier(
     return ChainClassifier(*classifiers) if classifiers else None
 
 
+def make_extractor(settings: Settings, cache: KeyValueCache | None = None) -> FieldExtractor | None:
+    if not settings.llm_model or settings.offline:
+        return None
+    from radar.extraction.llm import CachedExtractor, LlmExtractor  # optional dependency
+
+    llm = LlmExtractor(settings.llm_model)
+    return CachedExtractor(llm, cache) if cache else llm
+
+
 def make_lookups(settings: Settings, http: PoliteHttp | None) -> CompositeLookups:
     api = ApiLookups(http, JsonCache(settings.lookup_cache_path), offline=settings.offline)
     return CompositeLookups(ReferenceCommunes(settings.communes_path), api)
@@ -41,5 +51,6 @@ def make_services(settings: Settings, http: PoliteHttp | None) -> Services:
         blobs=BlobStore(settings.blobs_dir),
         ocr=make_ocr(settings.transcripts_dir, use_tesseract=settings.use_tesseract, cache=cache),
         classifier=make_classifier(settings, cache),
+        extractor=make_extractor(settings, cache),
         lookups=make_lookups(settings, http),
     )

@@ -2,19 +2,21 @@
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
 from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.rules import screen
 from radar.domain.departments import code_from_postcode
-from radar.domain.enums import Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
-from radar.domain.models import Classification, DocumentRecord, Filing, Location, Power
+from radar.domain.enums import TARGET_CATEGORIES, Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
+from radar.domain.models import Classification, DocumentRecord, Evidence, Filing, Location, Power
 from radar.domain.power import estimate_power
 from radar.domain.privacy import PersonScrubber
-from radar.domain.text import squash
+from radar.domain.text import contains_quote, squash
 from radar.extraction import EXTRACTION_VERSION
 from radar.extraction.cerfa import extract_cerfa
 from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
+from radar.extraction.llm import ExtractionInput, FieldExtractor
 from radar.extraction.substation import is_voltage_only
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
@@ -32,6 +34,7 @@ class Services:
     ocr: OcrEngine
     classifier: Classifier | None
     lookups: Lookups
+    extractor: FieldExtractor | None = None  # LLM fallback for fields the rules missed (target filings only)
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
@@ -85,6 +88,9 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
 
     classification = _classify(key, number, title, facts, texts, services.classifier, bool(unread))
     classification = classification.model_copy(update={"quote": privacy.scrub(classification.quote) or ""})
+    extractor_used = None
+    if services.extractor and classification.category in TARGET_CATEGORIES:
+        extractor_used = _llm_fallback(key, title, facts, documents, texts, services.extractor)
     validation = validate(facts, services.lookups)
     gps_ok = any(c.name == "gps" and c.status is CheckStatus.OK for c in validation.checks)
     needs_review = (
@@ -121,8 +127,44 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
             "extraction": EXTRACTION_VERSION,
             "classification": classification.method,
             "ocr": services.ocr.label,
+            **({"extraction_llm": extractor_used} if extractor_used else {}),
         },
     )
+
+
+# Facts attribute for each fallback field.
+FALLBACK_FIELDS: dict[str, str] = {
+    "developer": "developer",
+    "siret": "siret",
+    "commune": "commune",
+    "power_mw": "mw_max",
+    "power_mw_min": "mw_min",
+    "energy_mwh": "mwh",
+    "substation": "substation",
+    "filed_on": "filed_on",
+}
+
+
+def _llm_fallback(
+    key: str, title: str, facts: Facts, documents: list[DocumentRecord], texts: list[str], extractor: FieldExtractor
+) -> str | None:
+    """Ask the LLM only for missing fields; keep verified answers with their quote as evidence."""
+    missing = tuple(name for name, attr in FALLBACK_FIELDS.items() if getattr(facts, attr) in (None, ""))
+    if facts.mw_max is not None:
+        missing = tuple(m for m in missing if m != "power_mw_min")  # a single declared power is not a range
+    if not missing:
+        return None
+    found = extractor.extract(ExtractionInput(key, title, classification_text(facts.description, texts), missing))
+    for name, (value, quote) in found.items():
+        doc = next((d.id for d, t in zip(documents, texts, strict=True) if contains_quote(t, quote)), documents[0].id)
+        evidence = Evidence(document_id=doc, locator=extractor.name, quote=quote)
+        typed = date.fromisoformat(str(value)) if name == "filed_on" else value
+        if name in {"power_mw", "power_mw_min", "energy_mwh"}:
+            setattr(facts, FALLBACK_FIELDS[name], typed)
+            facts.evidence.setdefault("power", evidence)
+        else:
+            facts.set(FALLBACK_FIELDS[name], typed, evidence)
+    return extractor.name
 
 
 def _classify(

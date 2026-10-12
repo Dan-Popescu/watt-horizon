@@ -14,6 +14,7 @@ from datetime import date
 from radar.domain.departments import code_from_name
 from radar.domain.enums import ReviewDecision
 from radar.domain.models import Evidence
+from radar.domain.power import read_power
 from radar.domain.text import squash
 from radar.extraction.facts import Facts
 from radar.extraction.substation import find_substation
@@ -110,4 +111,8 @@ def extract_decision(document_id: str, text: str, title: str = "") -> Facts:
         facts.set("department", m[2])
     if found := find_substation(t):
         facts.set("substation", found[0], ev("text", found[1]))
+    # Decisions often restate the power (« 5 MW », « 130 MWac / 260 MWh »); the form's value wins when both exist.
+    if reading := read_power(t):
+        facts.mw_min, facts.mw_max, facts.mwh = reading.mw_min, reading.mw_max, reading.mwh
+        facts.evidence["power"] = ev("text", reading.quote)
     return facts
