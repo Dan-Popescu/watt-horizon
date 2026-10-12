@@ -1,0 +1,17 @@
+Radar Raccordement — Hauts-de-France — depuis le 01/01/2026
+3 nouveaux dossiers · 192 MW déclarés
+
+* Batteries — Nibas
+  RP-GLOBAL FRANCE · 45 MW / 90 MWh · poste : SAUCOURT
+  Cas par cas : demande déposée · déposé le 13/02/2026 · fiable
+  Source : https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/013263-cerfa.pdf
+* Batteries — Bonneuil-les-Eaux
+  APAL MW · 47 MW / 94 MWh · poste : Margot
+  Cas par cas : demande déposée · déposé le 11/02/2026 · à vérifier
+  Source : https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/012667-cerfa.pdf
+* Batteries — Aubenton
+  APAL MW · 100 MW / 200 MWh · poste : Les Hoquins
+  Cas par cas : non soumis à étude d'impact · déposé le 05/01/2026 · fiable
+  Source : https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/010504kkp_decision.pdf
+
+Données publiques (DREAL, MRAe, registres). Chaque information renvoie à son document source.

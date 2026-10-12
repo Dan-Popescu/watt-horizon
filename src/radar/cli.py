@@ -4,7 +4,7 @@ radar import files|signals|gold|cache|communes ...   load data already on disk (
 radar collect dreal|mrae|georisques|registry|press|prefectures ...   polite network collection
 radar process | link | run                           build filings, links, projects (idempotent)
 radar update                                         scheduled job: polite collect of recent items + run
-radar changes --since D | export csv|geojson      alerts and files for clients
+radar changes --since D | export csv|geojson | digest --since D   alerts and files for clients
 radar web                                            map + JSON API + MCP over HTTP
 radar eval | stats | mcp
 """
@@ -18,7 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from radar.api import exports, queries
+from radar.api import digest, exports, queries
 from radar.classification.gold import load_gold
 from radar.config import Settings, load_settings
 from radar.net.http import PoliteHttp, SiteBlockedError
@@ -184,6 +184,17 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
     return None
 
 
+def cmd_digest(args: argparse.Namespace, s: Settings) -> Any:
+    with Database(s.db_path) as db:
+        d = digest.build_digest(
+            db, args.since, department=args.department, category=args.category, scope=args.scope, map_url=args.map_url
+        )
+    out = Path(args.out) if args.out else s.data_dir / "exports" / f"alerte-{d.since}.{args.format}"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(digest.render_html(d) if args.format == "html" else digest.render_text(d), encoding="utf-8")
+    return {"path": str(out), "new_projects": len(d.new_projects), "changes": len(d.changes)}
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -242,7 +253,13 @@ def build_parser() -> argparse.ArgumentParser:
     exp = sub.add_parser("export", help="write projects to CSV (Excel, ';') or GeoJSON (GIS)")
     exp.add_argument("format", choices=["csv", "geojson"])
     exp.add_argument("--out", help="default: <data>/exports/projets.<format>")
-    for p in (chg, exp):
+    dig = sub.add_parser("digest", help="alert e-mail (HTML or text): new filings + changes since a date")
+    dig.add_argument("--since", required=True, help="ISO date, e.g. 2026-10-05")
+    dig.add_argument("--format", choices=["html", "text"], default="html")
+    dig.add_argument("--scope", default="Hauts-de-France", help="label shown in the e-mail")
+    dig.add_argument("--map-url", help="public map URL for links (none: no map links)")
+    dig.add_argument("--out", help="default: <data>/exports/alerte-<since>.<format>")
+    for p in (chg, exp, dig):
         p.add_argument("--category", help="bess | bess_hybrid | storage_substation | datacenter")
         p.add_argument("--department", help='code, e.g. "60"')
     chg.add_argument("--limit", type=int, default=200)
@@ -271,6 +288,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "stats": cmd_stats,
     "changes": cmd_changes,
     "export": cmd_export,
+    "digest": cmd_digest,
     "mcp": cmd_mcp,
     "web": cmd_web,
 }

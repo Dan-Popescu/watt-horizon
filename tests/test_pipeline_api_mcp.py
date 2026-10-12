@@ -1,13 +1,13 @@
 """End to end (fixture `loaded_db` in conftest) on generated PDFs: ingest -> process -> link -> projects -> queries -> MCP tools."""
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 from mcp import Client
 
-from radar.api import exports, queries
+from radar.api import digest, exports, queries
 from radar.classification.gold import GoldLabel
 from radar.domain.enums import Category, Confidence, PowerStatus, ReviewDecision
 from radar.mcp_server import build_server
@@ -118,3 +118,16 @@ def test_migrates_existing_database(tmp_path: Path) -> None:
     conn.close()
     with Database(path) as db:
         assert db.counts()["project_changes"] == 0
+
+
+def test_digest(loaded_db: Database) -> None:
+    d = digest.build_digest(
+        loaded_db, "2025-01-01", scope="Test", map_url="https://radar.example/", today=date(2026, 1, 9)
+    )
+    assert [p.summary.commune for p in d.new_projects] == ["Aubenton", "Béthune"]  # newest filing first
+    assert d.changes == []  # baseline "new" log entries are not repeated
+    html = digest.render_html(d)
+    assert "100 MW / 200 MWh" in html and "https://radar.example/#p=" in html and "Document source" in html
+    assert "2 nouveaux dossiers · 100 MW déclarés" in digest.render_text(d)
+    empty = digest.build_digest(loaded_db, "2030-01-01")
+    assert "Aucun nouveau dossier" in digest.render_html(empty)

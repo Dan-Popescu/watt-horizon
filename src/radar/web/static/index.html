@@ -423,7 +423,9 @@ async function init() {
     $("dep").innerHTML += deps.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if (recent.length) { $("badge").textContent = recent.length; $("badge").hidden = false; }
     refresh();
-    if (map.loaded()) fit(filtered()); else map.once("load", () => fit(filtered()));
+    const deepLink = new URLSearchParams(location.hash.slice(1)).get("p");  // links from alert e-mails: #p=<id>
+    if (deepLink) select(deepLink);
+    else if (map.loaded()) fit(filtered()); else map.once("load", () => fit(filtered()));
   } catch (e) {
     $("coverage").innerHTML = `<span class="error">${esc(e.message)}</span>`;
   }
