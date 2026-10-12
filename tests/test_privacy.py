@@ -5,7 +5,7 @@ from pathlib import Path
 from radar.classification.gold import GoldClassifier, GoldLabel
 from radar.domain.enums import Category, SourceKind
 from radar.domain.privacy import MASK, PersonScrubber, is_person_field, person_names
-from radar.pipeline.evaluate import audit_privacy
+from radar.evaluation.privacy import audit_privacy
 from radar.pipeline.filings import Services
 from radar.pipeline.ingest import ingest_pdf
 from radar.pipeline.run import process_filings

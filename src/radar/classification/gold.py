@@ -1,7 +1,8 @@
 """Human-reviewed labels ("gold set"): used to evaluate classifiers and as a fallback when no LLM is configured.
 
 File format (JSON Lines), one filing per line:
-  {"number": "2025-8646", "category": "bess", "note": "...", "annotator": "..."}
+  {"number": "2025-8646", "category": "bess", "note": "...", "annotator": "...", "verified": true}
+`verified` is true only once a human confirmed the label (review page or by hand); drafts still serve as fallback.
 """
 
 import json
@@ -19,6 +20,7 @@ class GoldLabel:
     category: Category
     note: str = ""
     annotator: str = ""
+    verified: bool = False
 
 
 def load_gold(path: Path) -> dict[str, GoldLabel]:
@@ -28,7 +30,13 @@ def load_gold(path: Path) -> dict[str, GoldLabel]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             row = json.loads(line)
-            label = GoldLabel(row["number"], Category(row["category"]), row.get("note", ""), row.get("annotator", ""))
+            label = GoldLabel(
+                row["number"],
+                Category(row["category"]),
+                row.get("note", ""),
+                row.get("annotator", ""),
+                bool(row.get("verified", False)),
+            )
             labels[label.number] = label
     return labels
 

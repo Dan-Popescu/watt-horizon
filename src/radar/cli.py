@@ -21,16 +21,26 @@ from typing import Any
 from radar.api import digest, exports, queries
 from radar.classification.gold import load_gold
 from radar.config import Settings, load_settings
+from radar.evaluation.classification import evaluate_classifier
+from radar.evaluation.gold import draft as draft_field_gold
+from radar.evaluation.gold import load_field_gold, write_field_gold
+from radar.evaluation.ocr import evaluate_ocr
+from radar.evaluation.privacy import audit_privacy
+from radar.evaluation.report import build_report
+from radar.evaluation.report import compare as compare_reports
+from radar.evaluation.report import metrics as eval_metrics
+from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers
-from radar.pipeline.evaluate import audit_privacy, evaluate
 from radar.pipeline.run import link_and_build, process_filings
+from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
 from radar.sources.regions import get_region
 from radar.store.blobs import BlobStore
+from radar.store.cache import KeyValueCache
 from radar.store.db import Database
 from radar.validation.lookups import JsonCache, ReferenceCommunes
-from radar.wiring import make_http, make_services
+from radar.wiring import make_classifier, make_http, make_services
 
 
 def _emit(payload: Any) -> None:
@@ -140,11 +150,36 @@ def cmd_run(args: argparse.Namespace, s: Settings) -> Any:
     return {"process": cmd_process(args, s), "link": cmd_link(args, s)}
 
 
-def cmd_eval(_: argparse.Namespace, s: Settings) -> Any:
+def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
+    """Quality report, stored and compared with the previous one. --strict: exit 2 on any regression."""
+    labels, field_gold = load_gold(s.gold_path), load_field_gold(s.field_gold_path)
+    blobs = BlobStore(s.blobs_dir)
     with Database(s.db_path) as db:
-        result = evaluate(db.filings(), load_gold(s.gold_path))
-        leaks = audit_privacy(db, BlobStore(s.blobs_dir))
-        return {**asdict(result), "screening_recall": result.screening_recall, "privacy_leaks": leaks}
+        filings = db.filings()
+        if args.draft_fields:
+            drafts = draft_field_gold([f for f in filings if f.number in labels], field_gold, EXTRACTION_VERSION)
+            write_field_gold(s.field_gold_path, [*field_gold.values(), *drafts])
+            field_gold = load_field_gold(s.field_gold_path)
+        ocr = None
+        if TesseractOcr.available():
+            ocr = evaluate_ocr(TesseractOcr(), blobs, s.transcripts_dir)
+        classifier = None
+        if args.classifier:
+            services = make_services(s, make_http(s))
+            llm = make_classifier(s, KeyValueCache(s.cache_path), with_gold=False)
+            if llm is None:
+                return {"error": "No model classifier: set RADAR_LLM_MODEL (and ANTHROPIC_API_KEY), not offline."}
+            classifier = evaluate_classifier(llm, db, services, labels)
+        report = build_report(filings, labels, field_gold, audit_privacy(db, blobs), ocr, classifier)
+        previous = db.last_runs().get("eval", {}).get("stats", {}).get("metrics", {})
+        current = eval_metrics(report)
+        comparison = compare_reports(previous, current) if previous else {"regressions": [], "improvements": []}
+        run_id = db.start_run("eval")
+        db.finish_run(run_id, {"metrics": current, "report": report})
+    result = {**report, "comparison": comparison}
+    if args.strict and comparison["regressions"]:
+        return {**result, "error": "regressions against the previous evaluation"}
+    return result
 
 
 def cmd_stats(_: argparse.Namespace, s: Settings) -> Any:
@@ -264,13 +299,16 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--category", help="bess | bess_hybrid | storage_substation | datacenter")
         p.add_argument("--department", help='code, e.g. "60"')
     chg.add_argument("--limit", type=int, default=200)
+    ev = sub.add_parser("eval", help="quality report vs gold sets, stored and compared with the previous run")
+    ev.add_argument("--strict", action="store_true", help="exit 2 if any metric regressed")
+    ev.add_argument("--classifier", action="store_true", help="also re-run the model classifier alone (paid)")
+    ev.add_argument("--draft-fields", action="store_true", help="add unverified field references from extractions")
     web = sub.add_parser("web", help="map UI + JSON API + MCP over HTTP (read-only)")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--public-host", help="host name clients use (behind a proxy); default: --host")
     for name, text in (
         ("link", "propose links, rebuild projects"),
-        ("eval", "quality report against the gold set"),
         ("stats", "dataset counts, freshness, caveats"),
         ("mcp", "serve the MCP server over stdio"),
     ):

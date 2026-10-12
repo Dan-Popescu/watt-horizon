@@ -10,8 +10,8 @@ from mcp import Client
 from radar.api import digest, exports, queries
 from radar.classification.gold import GoldLabel
 from radar.domain.enums import Category, Confidence, PowerStatus, ReviewDecision
+from radar.evaluation.classification import screening_report
 from radar.mcp_server import build_server
-from radar.pipeline.evaluate import evaluate
 from radar.pipeline.run import link_and_build
 from radar.store.db import _MIGRATIONS, Database
 
@@ -32,8 +32,8 @@ def test_pipeline_builds_traceable_projects(loaded_db: Database) -> None:
     dropped = loaded_db.filing("dreal_case_by_case:hauts-de-france:2025-9999")
     assert dropped is not None and dropped.classification.category is Category.OTHER
 
-    result = evaluate(loaded_db.filings(), {"010504": GoldLabel("010504", Category.BESS)})
-    assert result.screening_recall == 1.0
+    result = screening_report(loaded_db.filings(), {"010504": GoldLabel("010504", Category.BESS)})
+    assert result.recall == 1.0
 
 
 def test_queries(loaded_db: Database) -> None:

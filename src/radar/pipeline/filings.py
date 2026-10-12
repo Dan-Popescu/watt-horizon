@@ -17,7 +17,7 @@ from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
 from radar.extraction.substation import is_voltage_only
 from radar.reading.ocr import OcrEngine
-from radar.reading.pdf import read_pdf
+from radar.reading.pdf import PdfContent, read_pdf
 from radar.store.blobs import BlobStore
 from radar.validation.lookups import CommuneInfo, Lookups
 from radar.validation.validator import validate
@@ -34,23 +34,34 @@ class Services:
     lookups: Lookups
 
 
+def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
+    """Text layer + form fields + OCR for each document, in order."""
+    contents = []
+    for doc in documents:
+        data = services.blobs.get(doc.id)
+        contents.append(services.ocr.complete(doc.id, data, read_pdf(data)))
+    return contents
+
+
+def classification_text(description: str | None, texts: list[str]) -> str:
+    """What a classifier sees: the project description first, then every document (already GDPR-scrubbed)."""
+    return squash(" ".join([description or "", *texts]))
+
+
 def build_filing(key: str, documents: list[DocumentRecord], services: Services) -> Filing:
     if not documents:
         raise ValueError(f"filing {key} has no documents")
     source, region, number = documents[0].source, *key.split(":", 2)[1:]
-    form, decision, unread = Facts(), Facts(), []
-    texts: list[str] = []
-    form_fields: list[dict[str, str]] = []
-    reading: dict[str, str] = {}
+    form, decision = Facts(), Facts()
+    contents = read_documents(documents, services)
+    texts = [c.text for c in contents]
+    form_fields = [c.fields for c in contents]
+    reading = {doc.id: c.read_by for doc, c in zip(documents, contents, strict=True)}
+    unread = [
+        doc.id for doc, c in zip(documents, contents, strict=True) if c.unread_scanned_pages and c.is_mostly_scanned
+    ]
 
-    for doc in documents:
-        data = services.blobs.get(doc.id)
-        content = services.ocr.complete(doc.id, data, read_pdf(data))
-        if content.unread_scanned_pages and content.is_mostly_scanned:
-            unread.append(doc.id)
-        texts.append(content.text)
-        form_fields.append(content.fields)
-        reading[doc.id] = content.read_by
+    for doc, content in zip(documents, contents, strict=True):
         if doc.role is DocumentRole.FORM:
             form.fill_from(extract_cerfa(doc.id, content))
         elif doc.role is DocumentRole.DECISION:
@@ -121,7 +132,7 @@ def _classify(
     if not screening.keep:
         return Classification(category=Category.OTHER, method="rules", confidence="no clue")
     if classifier is not None:
-        text = squash(" ".join([facts.description or "", *texts]))
+        text = classification_text(facts.description, texts)
         if result := classifier.classify(ClassificationInput(filing_key=key, number=number, title=title, text=text)):
             return result
     category = Category.NEEDS_REVIEW if has_unread else Category.UNCLASSIFIED

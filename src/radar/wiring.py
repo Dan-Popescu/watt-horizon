@@ -15,14 +15,16 @@ def make_http(settings: Settings) -> PoliteHttp | None:
     return None if settings.offline else PoliteHttp(settings.user_agent)
 
 
-def make_classifier(settings: Settings, cache: KeyValueCache | None = None) -> Classifier | None:
+def make_classifier(
+    settings: Settings, cache: KeyValueCache | None = None, *, with_gold: bool = True
+) -> Classifier | None:
     classifiers: list[Classifier] = []
     if settings.llm_model and not settings.offline:  # offline means no network at all, LLM included
         from radar.classification.llm import LlmClassifier  # optional dependency
 
         llm = LlmClassifier(settings.llm_model)
         classifiers.append(CachedClassifier(llm, cache) if cache else llm)
-    gold = load_gold(settings.gold_path)
+    gold = load_gold(settings.gold_path) if with_gold else {}
     if gold:
         classifiers.append(GoldClassifier(gold))  # fallback, and the reference for `radar eval`
     return ChainClassifier(*classifiers) if classifiers else None

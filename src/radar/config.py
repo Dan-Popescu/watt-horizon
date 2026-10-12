@@ -43,7 +43,13 @@ class Settings:
 
     @property
     def gold_path(self) -> Path:
+        """Category labels per filing (classification gold)."""
         return self.data_dir / "gold_labels.jsonl"
+
+    @property
+    def field_gold_path(self) -> Path:
+        """Expected field values per filing (extraction gold)."""
+        return self.data_dir / "gold_fields.jsonl"
 
 
 def _flag(name: str, default: bool) -> bool:
