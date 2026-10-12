@@ -23,7 +23,7 @@ from radar.classification.gold import load_gold
 from radar.config import Settings, load_settings
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers
-from radar.pipeline.evaluate import evaluate
+from radar.pipeline.evaluate import audit_privacy, evaluate
 from radar.pipeline.run import link_and_build, process_filings
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
 from radar.sources.regions import get_region
@@ -143,7 +143,8 @@ def cmd_run(args: argparse.Namespace, s: Settings) -> Any:
 def cmd_eval(_: argparse.Namespace, s: Settings) -> Any:
     with Database(s.db_path) as db:
         result = evaluate(db.filings(), load_gold(s.gold_path))
-        return {**asdict(result), "screening_recall": result.screening_recall}
+        leaks = audit_privacy(db, BlobStore(s.blobs_dir))
+        return {**asdict(result), "screening_recall": result.screening_recall, "privacy_leaks": leaks}
 
 
 def cmd_stats(_: argparse.Namespace, s: Settings) -> Any:

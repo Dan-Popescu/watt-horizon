@@ -9,6 +9,7 @@ from radar.domain.departments import code_from_postcode
 from radar.domain.enums import Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
 from radar.domain.models import Classification, DocumentRecord, Filing, Location, Power
 from radar.domain.power import estimate_power
+from radar.domain.privacy import PersonScrubber
 from radar.domain.text import squash
 from radar.extraction.cerfa import extract_cerfa
 from radar.extraction.decision import extract_decision
@@ -36,7 +37,9 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
     if not documents:
         raise ValueError(f"filing {key} has no documents")
     source, region, number = documents[0].source, *key.split(":", 2)[1:]
-    form, decision, texts, unread = Facts(), Facts(), [], []
+    form, decision, unread = Facts(), Facts(), []
+    texts: list[str] = []
+    form_fields: list[dict[str, str]] = []
 
     for doc in documents:
         data = services.blobs.get(doc.id)
@@ -44,6 +47,7 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
         if content.unread_scanned_pages and content.is_mostly_scanned:
             unread.append(doc.id)
         texts.append(content.text)
+        form_fields.append(content.fields)
         if doc.role is DocumentRole.FORM:
             form.fill_from(extract_cerfa(doc.id, content))
         elif doc.role is DocumentRole.DECISION:
@@ -56,9 +60,17 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
         facts.evidence.pop("substation", None)
         facts.set("substation", decision.substation, decision.evidence.get("substation"))
     facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(documents)
-    title = _best_title(documents, facts)
+    # GDPR: from here on, nothing derived from the documents may carry a natural person's name.
+    privacy = PersonScrubber.for_filing(form_fields, [facts.developer, facts.legal_name])
+    texts = [privacy.scrub(t) or "" for t in texts]
+    facts.description = privacy.scrub(facts.description)
+    facts.evidence = {
+        name: ev.model_copy(update={"quote": privacy.scrub(ev.quote)}) for name, ev in facts.evidence.items()
+    }
+    title = privacy.scrub(_best_title(documents, facts)) or ""
 
     classification = _classify(key, number, title, facts, texts, services.classifier, bool(unread))
+    classification = classification.model_copy(update={"quote": privacy.scrub(classification.quote) or ""})
     validation = validate(facts, services.lookups)
     gps_ok = any(c.name == "gps" and c.status is CheckStatus.OK for c in validation.checks)
     needs_review = (

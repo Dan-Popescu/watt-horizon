@@ -3,8 +3,12 @@
 from dataclasses import dataclass, field
 
 from radar.classification.gold import GoldLabel
-from radar.domain.enums import TARGET_CATEGORIES, Category
+from radar.domain.enums import TARGET_CATEGORIES, Category, DocumentRole
 from radar.domain.models import Filing
+from radar.domain.privacy import PersonScrubber
+from radar.reading.pdf import read_pdf
+from radar.store.blobs import BlobStore
+from radar.store.db import Database
 
 TRACKED_FIELDS: tuple[str, ...] = ("developer", "siret", "commune", "filed_on", "power", "substation", "gps")
 
@@ -70,3 +74,20 @@ def has_field(filing: Filing, name: str) -> bool:
         "gps": filing.location.precision == "exact" or None,
     }
     return values[name] not in (None, "")
+
+
+def audit_privacy(db: Database, blobs: BlobStore) -> list[str]:
+    """Stored texts that still contain person data: names from form person fields, civility names, e-mails, phones.
+    Expected result: an empty list."""
+    leaks: list[str] = []
+    for filing in db.filings():
+        forms = [read_pdf(blobs.get(d.id)).fields for d in db.documents(filing.key) if d.role is DocumentRole.FORM]
+        audit = PersonScrubber.for_filing(forms, [filing.developer, filing.legal_name])
+        texts = {
+            "title": filing.title,
+            "description": filing.project_description or "",
+            "classification": filing.classification.quote,
+            **{f"evidence:{name}": ev.quote for name, ev in filing.evidence.items()},
+        }
+        leaks += [f"{filing.key} {where}" for where, text in texts.items() if audit.leaks(text)]
+    return leaks

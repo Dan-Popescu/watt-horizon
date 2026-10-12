@@ -151,7 +151,8 @@ def _complete_from_text(doc: str, text: str, facts: Facts) -> None:
     if not text:
         return
     if facts.siret is None and (m := find_siret(text)):
-        facts.set("siret", m[1], Evidence(document_id=doc, locator="text", quote=excerpt(text, m.start(1), m.end(1))))
+        # Quote the number alone: in flattened forms it sits next to the representative's name.
+        facts.set("siret", m[1], Evidence(document_id=doc, locator="text", quote=m[1]))
     if facts.filed_on is None and (m := re.search(r"\b(\d{2}) (\d{2}) (20\d{2}) (20\d{2})[_-](\d{3,4})\b", text)):
         with contextlib.suppress(ValueError):
             facts.set(
