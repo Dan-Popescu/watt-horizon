@@ -21,6 +21,9 @@ uv run radar changes --since 2026-10-01   # change log (new / changed / removed 
 uv run radar export csv|geojson           # files in <data>/exports/
 uv run radar digest --since 2026-10-05    # weekly alert e-mail (HTML or --format text)
 uv run radar health [--strict]            # collector health (blocked / empty / stale / crashed)
+uv run radar triage                       # review queue: doubtful filings first, with reasons
+uv run radar errors                       # error clusters from corrections, detector precision/recall
+uv run radar cases export|check [--strict] # regression cases from human-verified filings (gold/cases)
 uv run radar mcp                          # MCP server, stdio
 uv run radar update                       # scheduled job: polite collect of recent items + run (network!)
 docker build -t radar-raccordement .      # production image (see compose.yaml); also runs the OCR evaluation
@@ -60,7 +63,10 @@ validation/     Facts + Lookups port -> Checks (GDPR, SIRET, commune, GPS, power
 linking/        linker (related links), resolve (same-project groups), registry (commissioned installations)
 pipeline/       filings (build), corrections (human overrides), run (process / link_and_build), changes (log),
                 projects, health (collectors), importers
-evaluation/     gold (field references), fields, ocr, classification, privacy, report (run-to-run comparison)
+evaluation/     gold (field references), fields, ocr, classification, privacy, stats (Wilson, dev/test split),
+                rigor (strata, calibration, blind, recall estimate), report (run-to-run comparison)
+quality/        flags (doubt detectors, at every build), audit (what to fetch although rejected), triage (review
+                queue), errors (learning from corrections), cases (replayable regression cases)
 net/http.py     PoliteHttp: per-host pacing, retries, SiteBlockedError
 sources/        collectors: dreal, mrae, georisques, registry (companies), energy_registry, press, prefectures
 api/            read queries -> pydantic views (only thing MCP/CLI/web expose); exports, digest, review
@@ -103,16 +109,21 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
 14. **Web UI** (`web/static/index.html`): one file, no build step, escapes every value (`esc`, `safeUrl`).
     `tests/test_web.py` checks its JavaScript with `node --check`.
 
-## Quality loop (how the system improves)
+## Quality loop (how the system improves) — method in `docs/qualite.md`
 
-1. Change an extractor / prompt / engine -> bump its version.
-2. `radar run`, then `radar eval`: read `comparison.regressions`. For each one, open the document and decide:
-   machine wrong -> fix the code (+ test with the verbatim text); reference wrong -> fix `gold/fields.jsonl`.
-3. Humans review in `radar web --review`; each validated or corrected filing becomes a verified reference
-   (`reviewed_references`), counted under `fields_verified` / `labels_verified`. Then `radar review export`.
-4. Drafts (`radar eval --draft-fields`, `verified: false`) only catch regressions; they are not truth.
-5. OCR quality: `radar eval` in the Docker image (Tesseract inside) reports `ocr.mean_word_miss_rate` against
-   `data/transcripts`. Model quality: `radar eval --classifier` (paid) gives accuracy + confusion vs verified labels.
+1. **Detect**: `quality/flags.detect` runs at every build and stores `Filing.flags` (code, severity, field, detail).
+   Collectors also fetch near-miss and ~3 % random rejected items (`quality/audit.decide`, `DocumentRecord.audit`)
+   and record every listed item (`listing_items`) for the recall estimate.
+2. **Prioritise**: `quality/triage` ranks filings: (doubt + 0.5) x stakes + random-audit duty + stale review.
+3. **Correct**: review UI records a `cause` per correction and supports blind entry (`Correction.blind`).
+4. **Learn**: `radar errors` -> clusters (field x outcome x cause x layout x read path) = what to fix first;
+   `unflagged` errors = a detector to write. Fix the rule, add a test with the verbatim text.
+5. **Lock in**: `radar cases export` turns verified dev-split filings into `gold/cases/<number>.json`;
+   `tests/test_gold_cases.py` replays them (fixed fields must pass; open fields are xfail known errors).
+6. **Measure**: `radar eval` (intervals, dev/test, strata, calibration, blind, recall estimate, integrity, cases).
+
+Rules: never look at test-split errors or tune on them (`evaluation/stats.split_of`; reports hide them; they never
+become cases). Drafts (`verified: false`) only catch regressions. OCR quality runs where Tesseract exists (Docker).
 
 ## Recipes
 
@@ -127,6 +138,9 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
 - **New classifier or model**: implement `Classifier`; wrap it in `CachedClassifier` in `wiring.make_classifier`;
   measure with `radar eval --classifier` before switching.
 - **New check**: pure function in `validation/checks.py` returning `Check`; call it in `validator.validate`.
+- **New doubt detector** (when `radar errors` lists unflagged errors): a function in `quality/flags.py` added to
+  `DETECTORS`, a `FLAGS` entry (severity, French label, action), and a test in `tests/test_quality_flags.py`.
+  Then check its precision in `radar errors` (`by_flag`): a detector that is rarely right only adds noise.
 - **New MCP tool / web endpoint**: query in `api/queries.py` -> view in `api/views.py` -> thin wrapper in
   `mcp_server.py` (`READ_ONLY`) and/or a `Route` in `web/app.py` via `endpoint(...)`; test in `tests/`.
 - **Schema change**: append a migration to `store/db.py` (`user_version` increments); never edit old ones.

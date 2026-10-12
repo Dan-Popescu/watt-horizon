@@ -46,7 +46,11 @@ La carte est alors sur http://127.0.0.1:8765. Avec `RADAR_OFFLINE=1`, rien n'est
 - `radar web --review` ouvre la page de **relecture**, en usage interne. Chaque dossier validé ou corrigé devient une référence vérifiée. Les corrections l'emportent sur la machine, et la machine reste mesurée telle quelle.
 - `radar review export` sauvegarde les corrections dans `gold/`, qui est versionné.
 
-Détails : [docs/architecture.md](docs/architecture.md#boucle-qualité).
+- À chaque construction de dossier, des **signalements** repèrent les cas suspects. La file de relecture (`radar triage`) les présente en premier, avec la raison.
+- `radar errors` montre où la machine se trompe le plus. `radar cases` transforme chaque dossier vérifié en test de non-régression.
+- L'onglet **Qualité** de `radar web --review` résume le tout.
+
+Méthode : [docs/qualite.md](docs/qualite.md). Guide d'annotation : [docs/annotation.md](docs/annotation.md).
 
 ## Brancher un agent (MCP)
 
