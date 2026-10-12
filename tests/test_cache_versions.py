@@ -51,18 +51,22 @@ def test_classifier_cache(tmp_path: Path) -> None:
 
 def test_ocr_cache_and_transcripts_win(tmp_path: Path) -> None:
     content = PdfContent(pages=3, fields={}, page_texts=("texte", "", ""), scanned_pages=(2, 3))
-    (tmp_path / "doc.txt").write_text("transcription vérifiée", encoding="utf-8")
+    (tmp_path / "transcribed.txt").write_text("transcription vérifiée", encoding="utf-8")
     engine = CountingOcr()
     chain = ChainOcr(TranscriptOcr(tmp_path), CachedOcr(engine, KeyValueCache(tmp_path / "c.sqlite")))
-    read = chain.complete("doc", b"", content)
-    assert read.ocr_texts == {2: "transcription vérifiée", 3: "texte reconnu"}  # transcript page not overwritten
-    assert read.read_by == "text + transcript (p2) + fake-ocr-1 (p3)"
-    again = chain.complete("doc", b"", content)
-    assert again.ocr_texts == read.ocr_texts and engine.calls == 1  # second read served from cache
+
+    transcribed = chain.complete("transcribed", b"", content)
+    assert transcribed.read_by == "text + transcript (p2-3)" and engine.calls == 0  # the transcript covers all pages
+    assert "transcription vérifiée" in transcribed.text and not transcribed.unread_scanned_pages
+
+    scanned = chain.complete("scanned", b"", content)
+    assert scanned.read_by == "text + fake-ocr-1 (p2-3)"
+    again = chain.complete("scanned", b"", content)
+    assert again.ocr_texts == scanned.ocr_texts and engine.calls == 1  # second read served from cache
 
 
 def test_filing_records_versions_and_reading(loaded_db: Database) -> None:
     filing = loaded_db.filing("dreal_case_by_case:hauts-de-france:2025-4009")
     assert filing is not None
     assert set(filing.versions) == {"extraction", "classification", "ocr"}
-    assert list(filing.reading.values()) == ["transcript (p1)"]  # one scanned page, read from the transcript
+    assert list(filing.reading.values()) == ["transcript (p1)"]  # scanned decision read from its transcript

@@ -190,12 +190,32 @@ FIELD_LABELS_FR = {
 }
 
 
+VALUE_LABELS_FR: dict[str, dict[str, str]] = {
+    "confidence": {"high": "fiable", "medium": "assez fiable", "review": "à vérifier"},
+    "power_status": {"known": "déclarée", "estimated": "estimée", "unknown": "inconnue"},
+    "location_precision": {"exact": "GPS du dossier", "commune": "centre de la commune", "none": "inconnue"},
+    "category": {
+        "bess": "batteries",
+        "bess_hybrid": "batteries + solaire/éolien",
+        "storage_substation": "poste pour batteries",
+        "datacenter": "data center",
+    },
+}
+
+
+def _value_fr(field: str, value: str | None) -> str:
+    return VALUE_LABELS_FR.get(field, {}).get(value or "", value or "—")
+
+
 def _change_summary(c: ProjectChange) -> str:
     if c.kind is ChangeKind.NEW:
         return f"Nouveau projet : {c.name}"
     if c.kind is ChangeKind.REMOVED:
         return f"Retiré (n'est plus un projet suivi) : {c.name}"
-    parts = [f"{FIELD_LABELS_FR.get(f.field, f.field)} {f.before or '—'} → {f.after or '—'}" for f in c.fields]
+    parts = [
+        f"{FIELD_LABELS_FR.get(f.field, f.field)} {_value_fr(f.field, f.before)} → {_value_fr(f.field, f.after)}"
+        for f in c.fields
+    ]
     return f"{c.name} : " + " ; ".join(parts)
 
 

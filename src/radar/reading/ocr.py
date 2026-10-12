@@ -50,7 +50,8 @@ class NullOcr:
 
 
 class TranscriptOcr:
-    """A transcription file covers the whole document; it is attached to the first unread scanned page."""
+    """A transcription file covers the whole document: its text goes on the first unread scanned page and the
+    other scanned pages are marked as read by the same transcript (empty text, no double counting)."""
 
     label = "transcript"
 
@@ -59,9 +60,11 @@ class TranscriptOcr:
 
     def complete(self, document_id: str, data: bytes, content: PdfContent) -> PdfContent:
         path = self.directory / f"{document_id}.txt"
-        if not content.unread_scanned_pages or not path.exists():
+        pages = content.unread_scanned_pages
+        if not pages or not path.exists():
             return content
-        return _with_pages(content, {content.unread_scanned_pages[0]: path.read_text(encoding="utf-8")}, self.label)
+        texts = dict.fromkeys(pages, "") | {pages[0]: path.read_text(encoding="utf-8")}
+        return _with_pages(content, texts, self.label)
 
 
 @cache
