@@ -37,6 +37,11 @@ docker compose run --rm update
 - Les préfectures ne sont pas collectées par défaut : il faut les ajouter avec `--sources`.
 - Chaque exécution complète le journal des nouveautés.
 
+## Surveillance
+
+- `radar update` renvoie `health_alerts` à la fin de chaque exécution.
+- `radar health --strict` sort en erreur si une source est bloquée, muette depuis 3 passages, plantée ou sans mise à jour depuis 3 jours. On peut le brancher sur une alerte.
+
 ## Sécurité
 
 - Hors localhost, le serveur refuse de démarrer sans `RADAR_API_TOKEN`.
@@ -46,7 +51,7 @@ docker compose run --rm update
 
 ## Sauvegarde
 
-Il suffit de copier le volume `/data` chaque nuit. Une base perdue se reconstruit à partir de `blobs/` avec `radar run`, sans nouvelle collecte.
+Il suffit de copier le volume `/data` chaque nuit. Les corrections humaines s'exportent aussi dans `gold/corrections.jsonl` (`radar review export`), qui est versionné dans git. Une base perdue se reconstruit à partir de `blobs/` avec `radar run`, sans nouvelle collecte.
 
 ## Vérifications automatiques
 

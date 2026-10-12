@@ -36,6 +36,18 @@ La carte est alors sur http://127.0.0.1:8765. Avec `RADAR_OFFLINE=1`, rien n'est
 - **Nouveautés** : ce qui a changé depuis une date, avec l'avant et l'après.
 - **Exports** : CSV pour Excel, GeoJSON pour les logiciels de cartographie, et la configuration MCP à copier.
 
+## Mesurer et améliorer la qualité
+
+- `radar eval` mesure la qualité et la compare à la mesure précédente :
+  - la justesse de chaque champ ;
+  - l'OCR ;
+  - le tri ;
+  - les données personnelles.
+- `radar web --review` ouvre la page de **relecture**, en usage interne. Chaque dossier validé ou corrigé devient une référence vérifiée. Les corrections l'emportent sur la machine, et la machine reste mesurée telle quelle.
+- `radar review export` sauvegarde les corrections dans `gold/`, qui est versionné.
+
+Détails : [docs/architecture.md](docs/architecture.md#boucle-qualité).
+
 ## Brancher un agent (MCP)
 
 Deux façons de se connecter :
