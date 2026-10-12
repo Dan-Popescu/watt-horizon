@@ -174,5 +174,6 @@ class ReviewItem(View):
     reasons: list[str] = Field(default_factory=list, description="why to review it, most important first")
     flags: list[FlagView] = Field(default_factory=list)
     stale_review: bool = False
+    second_review: bool = False  # sampled for a blind second review (double annotation)
     field_confidence: dict[str, float] = Field(default_factory=dict, description="calibrated, per field")
     auto_accepted: list[str] = Field(default_factory=list, description="fields proven reliable enough to skip review")

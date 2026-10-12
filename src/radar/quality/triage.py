@@ -18,12 +18,14 @@ from radar.domain.fields import machine_values
 from radar.domain.models import Correction, Filing
 from radar.evaluation.fields import same
 from radar.pipeline.corrections import VALIDATED, latest
+from radar.quality.agreement import second_review_due
 from radar.quality.flags import FLAGS
 
 POINTS = {Severity.ERROR: 5.0, Severity.WARNING: 2.0, Severity.INFO: 0.5}
 BASE_DOUBT = 0.5
 AUDIT_RANDOM_BONUS = 6.0
 STALE_BONUS = 6.0
+DOUBLE_BONUS = 3.0  # a second review is cheap and measures the references themselves
 RECENT_DAYS = 120
 UNCERTAIN = 0.9  # calibrated field confidence below this adds doubt
 LOW_CONFIDENCE = 0.6  # ... and below this, the field is named in the reasons
@@ -40,6 +42,7 @@ class TriageItem:
     reasons: list[str] = field(default_factory=list)  # French, most important first
     flag_codes: list[str] = field(default_factory=list)
     stale_review: bool = False
+    second_review: bool = False  # sampled for double annotation (quality/agreement.py)
 
 
 def stale_fields(filing: Filing, validation: Correction | None) -> list[str]:
@@ -68,7 +71,8 @@ def triage(
     for f in filings:
         reviewed = latest(by_key.get(f.key, []))
         stale = stale_fields(f, reviewed.get(VALIDATED))
-        if reviewed and not stale:
+        double = bool(reviewed) and not stale and second_review_due(f, by_key.get(f.key, []))
+        if reviewed and not stale and not double:
             continue
         item = TriageItem(f.key, f.number, f.title, 0.0, flag_codes=sorted({g.code for g in f.flags}))
         doubt = BASE_DOUBT
@@ -95,6 +99,10 @@ def triage(
         if any(g.code == "audit_sample" and g.detail == "random" for g in f.flags):
             item.priority += AUDIT_RANDOM_BONUS
             item.reasons.insert(0, "échantillon aléatoire : à étiqueter pour mesurer ce que le tri rate")
+        if double:
+            item.second_review = True
+            item.priority += DOUBLE_BONUS
+            item.reasons.insert(0, "double relecture : à relire à l'aveugle par un autre relecteur (mesure l'accord)")
         if stale:
             item.stale_review = True
             item.priority += STALE_BONUS

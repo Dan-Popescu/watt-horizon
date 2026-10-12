@@ -531,6 +531,8 @@ function isSure(it, name) {
 const CAUSES = { ocr: "lecture / OCR", layout: "mise en page du document", rule: "règle d'extraction",
   classification: "classement", merge: "fusion des documents du dossier", source: "document ambigu ou erroné", other: "autre" };
 const blindMode = () => $("review-blind").checked;
+// A second review (double annotation) is always blind: it measures agreement between reviewers.
+const blindFor = (it) => blindMode() || it.second_review;
 const inQueue = (it) => it.priority > 0;
 
 let reviewSuggestions = [];
@@ -650,7 +652,7 @@ function options(map, current) {
   return Object.entries(map).map(([k, label]) => `<option value="${esc(k)}" ${k === current ? "selected" : ""}>${esc(label)}</option>`).join("");
 }
 function reviewCard(it) {
-  const blind = blindMode();  // blind: empty inputs, no machine value, no quote (unbiased measurement)
+  const blind = blindFor(it);  // blind: empty inputs, no machine value, no quote (unbiased measurement)
   const onlyUncertain = !blind && $("review-uncertain").checked;
   const fields = REVIEW_FIELDS.filter(([name]) => !onlyUncertain || !isSure(it, name)).map(([name, label, type]) => {
     const value = blind ? "" : str(it.values[name]), machine = str(it.machine_values[name]);
@@ -672,7 +674,10 @@ function reviewCard(it) {
   return `<div class="tile rv" data-key="${esc(it.key)}">
     <div class="rv-head">
       <div class="rv-id"><b>${esc(it.number)}</b><span class="tag ${esc(it.confidence)}">${CONFIDENCE[it.confidence] || esc(it.confidence)}</span>
-        ${it.reviewed_at ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}
+        ${it.reviewed_at && !it.second_review ? `<span class="tag high">relu le ${esc(it.reviewed_at.slice(0, 10))}</span>` : ""}
+        ${it.second_review ? (it.corrections.some((c) => c.author === author())
+          ? `<span class="tag review">2e relecture : à faire par un autre relecteur</span>`
+          : `<span class="tag review">2e relecture, à l'aveugle</span>`) : ""}
         ${it.priority > 0 ? `<span class="tag" title="priorité de relecture">priorité ${esc(it.priority.toFixed(1))}</span>` : ""}</div>
       <div class="sub rv-docs">${docs}</div>
     </div>
@@ -765,7 +770,7 @@ async function submitReview(card, withChanges) {
   const who = author() || askAuthor();
   if (!who) return;
   const it = reviewItems.find((x) => x.key === card.dataset.key);
-  const blind = blindMode(), changes = {};
+  const blind = blindFor(it), changes = {};
   // Blind: everything typed is a measurement, stored even when equal to the machine value.
   if (withChanges || blind) card.querySelectorAll("[data-f]").forEach((el) => {
     const name = el.dataset.f, value = el.value.trim();

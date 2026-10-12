@@ -45,7 +45,12 @@ def review_items(db: Database, labels: dict[str, GoldLabel], today: date | None 
         item = _item(db, f, labels.get(f.number), corrections.get(f.key, []))
         if t := queue.get(f.key):
             item = item.model_copy(
-                update={"priority": round(t.priority, 2), "reasons": t.reasons, "stale_review": t.stale_review}
+                update={
+                    "priority": round(t.priority, 2),
+                    "reasons": t.reasons,
+                    "stale_review": t.stale_review,
+                    "second_review": t.second_review,
+                }
             )
         items.append(item)
     return sorted(items, key=lambda i: (-i.priority, i.number))
