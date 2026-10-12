@@ -71,9 +71,11 @@ def build_app(
     with_mcp: bool = True,
     mcp_host: str = "127.0.0.1",
     review: tuple[Rebuild, Callable[[], dict[str, GoldLabel]]] | None = None,
+    quality: Callable[[Database], dict[str, Any]] | None = None,
 ) -> Starlette:
     """`mcp_host`: the host clients use; MCP rejects other Host headers (DNS-rebinding protection).
-    `review`: enables the internal review endpoints (rebuild function, draft gold labels loader)."""
+    `review`: enables the internal review endpoints (rebuild function, draft gold labels loader).
+    `quality`: enables the internal quality dashboard endpoint (/api/quality)."""
     db_path = Path(db_path)
 
     def endpoint(fn: Callable[[Database, Request], Any]) -> Callable[[Request], Response]:
@@ -159,6 +161,11 @@ def build_app(
         review[0](db, key)
         return {"withdrawn": correction_id}
 
+    def quality_view(db: Database, _: Request) -> Any:
+        if quality is None:
+            return _json({"error": "quality dashboard is off (radar web --review)"}, 404)
+        return quality(db)
+
     def index(_: Request) -> Response:
         return FileResponse(STATIC / "index.html", headers=NO_STORE)
 
@@ -174,6 +181,7 @@ def build_app(
         Route("/api/projects/{project_id}", endpoint(project)),
         Route("/api/changes", endpoint(changes)),
         Route("/api/export.{fmt:str}", endpoint(export)),
+        Route("/api/quality", endpoint(quality_view)),
         Route("/api/review", endpoint(review_list)),
         Route("/api/review/{key}/corrections", review_submit, methods=["POST"]),
         Route("/api/review/corrections/{correction_id:int}", endpoint(review_withdraw), methods=["DELETE"]),

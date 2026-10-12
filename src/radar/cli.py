@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from radar.api import digest, exports, queries, review
+from radar.api.quality import quality_overview
 from radar.classification.gold import load_gold
 from radar.config import Settings, load_settings
 from radar.evaluation.classification import evaluate_classifier
@@ -249,7 +250,13 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
             link_and_build(db)
 
         review_mode = (rebuild, lambda: load_gold(s.gold_path))
-    app = build_app(s.db_path, token=s.api_token, mcp_host=args.public_host or args.host, review=review_mode)
+    app = build_app(
+        s.db_path,
+        token=s.api_token,
+        mcp_host=args.public_host or args.host,
+        review=review_mode,
+        quality=(lambda db: quality_overview(db, s.cases_dir)) if args.review else None,
+    )
     print(f"http://{args.host}:{args.port}  (MCP: /mcp)", file=sys.stderr)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return None

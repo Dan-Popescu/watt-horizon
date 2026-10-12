@@ -128,6 +128,9 @@
     <button data-view="review" title="Relecture (mode interne)" aria-label="Relecture" id="review-btn" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     </button>
+    <button data-view="quality" title="Qualité (mode interne)" aria-label="Qualité" id="quality-btn" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>
+    </button>
     <button data-view="about" title="Couverture et limites" aria-label="À propos">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
     </button>
@@ -189,6 +192,15 @@
         </div>
         <div class="sub" style="margin-bottom:10px">Chaque correction l'emporte sur l'extraction automatique et devient une référence vérifiée pour mesurer la qualité (<code>radar eval</code>).</div>
         <div class="grid" id="review-list" style="grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr))"></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-quality">
+      <div class="page">
+        <div class="head" style="padding:0 0 12px">
+          <div><h1>Qualité</h1><div class="sub" id="quality-when">Mesures de la dernière évaluation (<code>radar eval</code>), relecture et erreurs apprises.</div></div>
+        </div>
+        <div class="grid" id="quality"></div>
       </div>
     </section>
 
@@ -542,12 +554,69 @@ async function submitReview(card, withChanges) {
 }
 async function reloadProjects() { state.projects = await api("api/projects"); refresh(); }
 
+// --- Quality dashboard (internal mode) ----------------------------------------------------------------
+const pct = (x) => (x === null || x === undefined ? "—" : Math.round(x * 100) + " %");
+const ci = (c) => (c ? ` <span class="sub">[${pct(c[0])} ; ${pct(c[1])}]</span>` : "");
+const OUTCOMES = { wrong: "faux", missed: "manqué", spurious: "inventé" };
+function tile(title, body) { return `<div class="tile"><h2>${esc(title)}</h2>${body}</div>`; }
+function rateRows(map, label = (k) => k) {
+  const rows = Object.entries(map || {});
+  return rows.length ? `<ul class="plain">${rows.map(([k, v]) => `<li>${esc(label(k))} : <b>${pct(v.rate ?? v.accuracy)}</b>${ci(v.ci95)} <span class="sub">n=${esc(v.n)}</span></li>`).join("")}</ul>`
+    : '<div class="sub">Pas encore de mesure : relisez des dossiers (onglet Relecture).</div>';
+}
+async function loadQuality() {
+  let q;
+  try { q = await api("api/quality"); } catch (e) { $("quality").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
+  const r = q.last_eval;
+  $("quality-when").textContent = r ? `Dernière évaluation : ${r.generated_at.slice(0, 16).replace("T", " ")} UTC` : "Aucune évaluation : lancer « radar eval ».";
+  const tiles = [];
+  if (r) tiles.push(tile("Références", `<ul class="plain">
+      <li>Étiquettes vérifiées : <b>${esc(r.gold.labels_verified)}</b> / ${esc(r.gold.labels)}</li>
+      <li>Fiches par champ vérifiées : <b>${esc(r.gold.fields_verified)}</b> / ${esc(r.gold.fields)}</li>
+      <li>Dossiers relus : <b>${esc(r.gold.reviewed_filings)}</b></li></ul>`));
+  tiles.push(tile("File de relecture", `<div><b>${esc(q.queue.size)}</b> dossiers à relire</div><ul class="plain">${q.queue.by_flag.map((f) =>
+    `<li><span class="dot s-${f.severity === "error" ? "alert" : f.severity === "warning" ? "unknown" : "ok"}" style="display:inline-block"></span> ${esc(f.label)} : <b>${esc(f.count)}</b></li>`).join("")}</ul>`));
+  if (r) {
+    const label = (k) => k.replace("_", " ");
+    tiles.push(tile("Justesse par champ (dev)", rateRows(r.fields_verified.dev, label)));
+    tiles.push(tile("Justesse par champ (test, scores seuls)", rateRows(r.fields_verified.test, label)));
+    tiles.push(tile("Mesure à l'aveugle", rateRows(r.blind, label)));
+    tiles.push(tile("Calibration de la confiance", rateRows(r.calibration, (k) => `confiance « ${CONFIDENCE[k] || k} » : part avec erreur`)));
+    const est = r.screening.recall_estimate;
+    tiles.push(tile("Tri : rappel estimé", est.recall === null ? `<div class="sub">${esc(est.why)}</div>`
+      : `<div><b>${pct(est.recall)}</b>${ci(est.recall_ci95)}</div><div class="sub">${esc(est.targets_found)} cible(s) dans ${esc(est.random_audited_reviewed)} audits aléatoires relus, ${esc(est.rejected_items)} éléments rejetés</div>`));
+    tiles.push(tile("Intégrité", `<ul class="plain"><li>Citations introuvables : <b>${esc(r.integrity.quote_not_found)}</b></li>
+      <li>Fuites de données personnelles : <b>${esc(r.privacy.leaks.length)}</b></li>
+      <li>Dossiers sans catégorie : <b>${pct(r.undecided.share)}</b></li>
+      <li>OCR, mots manquants : <b>${r.ocr.mean_word_miss_rate !== undefined ? pct(r.ocr.mean_word_miss_rate) : "—"}</b></li></ul>`));
+  }
+  const e = q.errors;
+  tiles.push(tile("Erreurs fréquentes", e.clusters.length ? `<ul class="plain">${e.clusters.map((c) =>
+    `<li><b>${esc(c.count)}</b> × ${esc(c.field)} ${esc(OUTCOMES[c.outcome] || c.outcome)} · cause : ${esc(CAUSES[c.cause] || c.cause)} · ${esc(c.form_layout)} / ${esc(c.read)} <span class="sub">${esc(c.examples.join(", "))}</span></li>`).join("")}</ul>`
+    : '<div class="sub">Aucune erreur relevée pour l\'instant.</div>') +
+    (e.test_errors ? `<div class="sub">${esc(e.test_errors)} erreur(s) sur le jeu de test (non détaillées).</div>` : ""));
+  tiles.push(tile("Détecteurs", `<ul class="plain"><li>Précision (signalé = vraie erreur) : <b>${pct(e.flag_precision)}</b></li>
+    <li>Rappel (erreurs signalées à l'avance) : <b>${pct(e.flag_recall)}</b></li></ul>
+    ${e.unflagged.length ? `<div class="sub">Erreurs qu'aucun détecteur n'a vues (à couvrir) : ${esc(e.unflagged.join(", "))}</div>` : ""}`));
+  const regressed = r && r.cases.regressed_cases ? r.cases.regressed_cases : [];
+  tiles.push(tile("Cas de non-régression", `<ul class="plain"><li>Corrigés (doivent rester justes) : <b>${esc(q.cases.fixed)}</b></li>
+    <li>Ouverts (erreurs connues) : <b>${esc(q.cases.open)}</b></li>
+    <li>Régressions : <b class="${regressed.length ? "error" : ""}">${esc(regressed.length)}</b> ${esc(regressed.join(", "))}</li></ul>`));
+  if (q.trend.length) {
+    const keys = Object.keys(q.trend[0]).filter((k) => k !== "at");
+    tiles.push(tile("Évolution", `<div style="overflow:auto"><table style="font-size:12px;border-collapse:collapse"><tr><th style="text-align:left">date</th>${keys.map((k) => `<th style="text-align:left;padding:0 6px">${esc(k)}</th>`).join("")}</tr>${q.trend.map((t) =>
+      `<tr><td>${esc((t.at || "").slice(5, 16).replace("T", " "))}</td>${keys.map((k) => `<td style="padding:0 6px">${esc(t[k] ?? "—")}</td>`).join("")}</tr>`).join("")}</table></div>`));
+  }
+  $("quality").innerHTML = tiles.join("");
+}
+
 function show(view) {
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "view-" + view));
   document.querySelectorAll(".rail [data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
   if (view === "map") map.resize();
   if (view === "changes") loadChanges();
   if (view === "review") loadReview();
+  if (view === "quality") loadQuality();
 }
 document.querySelectorAll(".rail [data-view]").forEach((b) => b.onclick = () => show(b.dataset.view));
 
@@ -569,6 +638,7 @@ async function init() {
     $("dep").innerHTML += deps.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if (recent.length) { $("badge").textContent = recent.length; $("badge").hidden = false; }
     api("api/review").then(() => { $("review-btn").hidden = false; }).catch(() => {});
+    api("api/quality").then(() => { $("quality-btn").hidden = false; }).catch(() => {});
     refresh();
     const deepLink = new URLSearchParams(location.hash.slice(1)).get("p");  // links from alert e-mails: #p=<id>
     if (deepLink) select(deepLink);

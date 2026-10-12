@@ -86,7 +86,7 @@ def recall_estimate(
     out: dict[str, Any] = {"rejected_items": rejected, "random_audited_reviewed": len(audited), "targets_found": found}
     interval = wilson(found, len(audited))
     if not rejected or interval is None:
-        return {**out, "recall": None, "why": "needs collected listings and reviewed random-audit filings"}
+        return {**out, "recall": None, "why": "il faut des listes collectées et des dossiers d'audit aléatoire relus"}
     missed = [rejected * share for share in (found / len(audited), interval[1], interval[0])]
     recall = [kept_targets / (kept_targets + m) if kept_targets + m else None for m in missed]
     return {**out, "kept_targets": kept_targets, "recall": recall[0], "recall_ci95": (recall[1], recall[2])}

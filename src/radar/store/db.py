@@ -80,7 +80,8 @@ class Database:
     def __init__(self, path: Path | str) -> None:
         self.path = path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        # Review edits and the nightly job may write at the same time: wait for the lock instead of failing.
+        self.conn = sqlite3.connect(path, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")

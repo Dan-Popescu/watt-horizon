@@ -78,3 +78,16 @@ def test_page_script_is_valid_javascript(tmp_path: Path) -> None:
         path.write_text(code, encoding="utf-8")
         result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, check=False)
         assert result.returncode == 0, result.stderr
+
+
+def test_quality_dashboard_only_in_review_mode(loaded_db: Database, tmp_path: Path) -> None:
+    from radar.api.quality import quality_overview
+
+    off = TestClient(build_app(loaded_db.path, with_mcp=False), base_url=LOCAL)
+    assert off.get("/api/quality").status_code == 404
+    on = TestClient(
+        build_app(loaded_db.path, with_mcp=False, quality=lambda db: quality_overview(db, tmp_path / "cases")),
+        base_url=LOCAL,
+    )
+    body = on.get("/api/quality").json()
+    assert body["queue"]["size"] >= 1 and body["cases"] == {"open": 0, "fixed": 0} and body["last_eval"] is None
