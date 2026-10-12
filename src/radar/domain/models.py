@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from radar.domain.enums import (
     Category,
+    ChangeKind,
     CheckStatus,
     Confidence,
     DocumentRole,
@@ -146,3 +147,21 @@ class Project(Model):
     confidence: Confidence
     filing_keys: tuple[str, ...]
     signal_keys: tuple[str, ...] = ()
+
+
+class FieldChange(Model):
+    field: str
+    before: str | None
+    after: str | None
+
+
+class ProjectChange(Model):
+    """One entry of the change log written at each project rebuild (what clients are alerted about)."""
+
+    at: datetime
+    kind: ChangeKind
+    project_id: str
+    name: str
+    category: Category
+    department: str | None
+    fields: tuple[FieldChange, ...] = ()

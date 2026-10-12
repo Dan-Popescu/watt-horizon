@@ -1,9 +1,12 @@
 """Whole-database steps used by the CLI: process filings, link, build projects. Each step is idempotent."""
 
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from radar.domain.enums import TARGET_CATEGORIES
 from radar.linking.linker import propose_links
+from radar.pipeline.changes import track_changes
 from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.projects import build_projects
 from radar.store.db import Database, utcnow
@@ -38,10 +41,19 @@ def process_filings(db: Database, services: Services, only: set[str] | None = No
     return report
 
 
-def link_and_build(db: Database) -> dict[str, int]:
+def link_and_build(db: Database, now: datetime | None = None) -> dict[str, object]:
+    """Propose links, rebuild projects and append the change log, in one transaction."""
+    now = now or utcnow()
     filings, signals = db.filings(), db.signals()
     links = propose_links(filings, signals)
-    db.replace_links(links)
-    projects = build_projects(filings, signals, links, now=utcnow())
-    db.replace_projects(projects)
-    return {"links": len(links), "projects": len(projects)}
+    built = build_projects(filings, signals, links, now=now)
+    projects, changes = track_changes(db.projects(), built, now)
+    with db.transaction():
+        db.replace_links(links)
+        db.replace_projects(projects)
+        db.add_changes(changes)
+    return {
+        "links": len(links),
+        "projects": len(projects),
+        "changes": dict(Counter(c.kind.value for c in changes)),
+    }

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from radar.domain.geo import bbox_around
-from radar.domain.models import DocumentRecord, Filing, Link, Project, Signal
+from radar.domain.models import DocumentRecord, Filing, Link, Project, ProjectChange, Signal
 from radar.domain.text import fold
 
 _MIGRATIONS: tuple[str, ...] = (
@@ -42,6 +42,13 @@ _MIGRATIONS: tuple[str, ...] = (
         id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, started_at TEXT NOT NULL,
         finished_at TEXT, stats TEXT NOT NULL DEFAULT '{}'
     );
+    """,
+    """
+    CREATE TABLE project_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+        category TEXT NOT NULL, department TEXT, data TEXT NOT NULL
+    );
+    CREATE INDEX project_changes_at ON project_changes(at);
     """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -150,12 +157,11 @@ class Database:
         ]
 
     def replace_links(self, links: Iterable[Link]) -> None:
-        with self.conn:
-            self.conn.execute("DELETE FROM links")
-            self.conn.executemany(
-                "INSERT OR REPLACE INTO links (a, b, data) VALUES (?, ?, ?)",
-                [(lk.a, lk.b, lk.model_dump_json()) for lk in links],
-            )
+        self.conn.execute("DELETE FROM links")
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO links (a, b, data) VALUES (?, ?, ?)",
+            [(lk.a, lk.b, lk.model_dump_json()) for lk in links],
+        )
 
     def links(self, key: str | None = None) -> list[Link]:
         sql, args = "SELECT data FROM links", cast(tuple[Any, ...], ())
@@ -165,27 +171,26 @@ class Database:
 
     # Projects --------------------------------------------------------------------------------------
     def replace_projects(self, projects: Iterable[Project]) -> None:
-        with self.conn:
-            self.conn.execute("DELETE FROM projects")
-            self.conn.executemany(
-                "INSERT INTO projects (id, category, department, lat, lon, mw, substation_folded, first_seen, updated_at, data) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        p.id,
-                        p.category.value,
-                        p.location.department,
-                        p.location.lat,
-                        p.location.lon,
-                        p.power.mw,
-                        fold(p.substation) or None,
-                        p.first_seen.isoformat() if p.first_seen else None,
-                        p.updated_at.isoformat(),
-                        p.model_dump_json(),
-                    )
-                    for p in projects
-                ],
-            )
+        self.conn.execute("DELETE FROM projects")
+        self.conn.executemany(
+            "INSERT INTO projects (id, category, department, lat, lon, mw, substation_folded, first_seen, updated_at, data) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    p.id,
+                    p.category.value,
+                    p.location.department,
+                    p.location.lat,
+                    p.location.lon,
+                    p.power.mw,
+                    fold(p.substation) or None,
+                    p.first_seen.isoformat() if p.first_seen else None,
+                    p.updated_at.isoformat(),
+                    p.model_dump_json(),
+                )
+                for p in projects
+            ],
+        )
 
     def project(self, project_id: str) -> Project | None:
         row = self.conn.execute("SELECT data FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -230,6 +235,37 @@ class Database:
             for r in self.conn.execute(sql + " ORDER BY mw DESC NULLS LAST", args)
         ]
 
+    # Change log -------------------------------------------------------------------------------------
+    def add_changes(self, changes: Iterable[ProjectChange]) -> None:
+        self.conn.executemany(
+            "INSERT INTO project_changes (at, project_id, kind, category, department, data) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (c.at.isoformat(), c.project_id, c.kind.value, c.category.value, c.department, c.model_dump_json())
+                for c in changes
+            ],
+        )
+
+    def changes(
+        self,
+        *,
+        since: str,
+        categories: Iterable[str] | None = None,
+        department: str | None = None,
+        limit: int = 200,
+    ) -> list[ProjectChange]:
+        """Newest first. `since` is an ISO date or datetime (inclusive)."""
+        where: list[str] = ["at >= ?"]
+        args: list[Any] = [since]
+        if categories is not None:
+            cats = tuple(categories)
+            where.append(f"category IN ({','.join('?' * len(cats))})")
+            args += cats
+        if department:
+            where.append("department = ?")
+            args.append(department)
+        sql = f"SELECT data FROM project_changes WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?"
+        return [ProjectChange.model_validate_json(r["data"]) for r in self.conn.execute(sql, [*args, limit])]
+
     # Runs ------------------------------------------------------------------------------------------
     def start_run(self, kind: str) -> int:
         cur = self.conn.execute("INSERT INTO runs (kind, started_at) VALUES (?, ?)", (kind, utcnow().isoformat()))
@@ -252,5 +288,5 @@ class Database:
     def counts(self) -> dict[str, int]:
         return {
             t: int(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
-            for t in ("documents", "filings", "signals", "links", "projects")
+            for t in ("documents", "filings", "signals", "links", "projects", "project_changes")
         }

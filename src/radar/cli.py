@@ -3,6 +3,7 @@
 radar import files|signals|gold|cache|communes ...   load data already on disk (no network)
 radar collect dreal|mrae|georisques|registry|press|prefectures ...   polite network collection
 radar process | link | run                           build filings, links, projects (idempotent)
+radar changes --since D | export csv|geojson      alerts and files for clients
 radar eval | stats | mcp
 """
 
@@ -15,7 +16,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from radar.api import queries
+from radar.api import exports, queries
 from radar.classification.gold import load_gold
 from radar.config import Settings, load_settings
 from radar.net.http import PoliteHttp, SiteBlockedError
@@ -131,6 +132,26 @@ def cmd_stats(_: argparse.Namespace, s: Settings) -> Any:
         return queries.dataset_info(db)
 
 
+def cmd_changes(args: argparse.Namespace, s: Settings) -> Any:
+    with Database(s.db_path) as db:
+        changes = queries.what_changed(
+            db, args.since, category=args.category, department=args.department, limit=args.limit
+        )
+        return {"since": args.since, "count": len(changes), "changes": changes}
+
+
+def cmd_export(args: argparse.Namespace, s: Settings) -> Any:
+    with Database(s.db_path) as db:
+        projects = queries.list_projects(db, category=args.category, department=args.department)
+    out = Path(args.out) if args.out else s.data_dir / "exports" / f"projets.{args.format}"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if args.format == "csv":
+        out.write_text(exports.to_csv(projects), encoding="utf-8-sig")
+    else:
+        out.write_text(json.dumps(exports.to_geojson(projects), ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"path": str(out), "projects": len(projects)}
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -171,6 +192,15 @@ def build_parser() -> argparse.ArgumentParser:
     proc.add_argument("--only", nargs="*", help="filing keys")
     run = sub.add_parser("run", help="process + link + build projects")
     run.add_argument("--only", nargs="*", help="filing keys")
+    chg = sub.add_parser("changes", help="change log since a date (new / changed / removed projects)")
+    chg.add_argument("--since", required=True, help="ISO date, e.g. 2026-10-01")
+    exp = sub.add_parser("export", help="write projects to CSV (Excel, ';') or GeoJSON (GIS)")
+    exp.add_argument("format", choices=["csv", "geojson"])
+    exp.add_argument("--out", help="default: <data>/exports/projets.<format>")
+    for p in (chg, exp):
+        p.add_argument("--category", help="bess | bess_hybrid | storage_substation | datacenter")
+        p.add_argument("--department", help='code, e.g. "60"')
+    chg.add_argument("--limit", type=int, default=200)
     for name, text in (
         ("link", "propose links, rebuild projects"),
         ("eval", "quality report against the gold set"),
@@ -189,6 +219,8 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "run": cmd_run,
     "eval": cmd_eval,
     "stats": cmd_stats,
+    "changes": cmd_changes,
+    "export": cmd_export,
     "mcp": cmd_mcp,
 }
 

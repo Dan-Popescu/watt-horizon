@@ -83,3 +83,9 @@ class SignalKind(StrEnum):
     COMPANY = "company"  # newly created project company
     ARTICLE = "article"
     INSTALLATION = "installation"  # classified installation (Géorisques)
+
+
+class ChangeKind(StrEnum):
+    NEW = "new"
+    CHANGED = "changed"
+    REMOVED = "removed"  # no longer a target project (reclassified, or its filing disappeared)

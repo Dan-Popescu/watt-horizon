@@ -15,7 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from radar.api import queries
-from radar.api.views import DatasetInfo, ProjectDetail, ProjectSummary, ZoneSummary
+from radar.api.views import ChangeView, DatasetInfo, ProjectDetail, ProjectSummary, ZoneSummary
 from radar.config import load_settings
 from radar.store.db import Database
 
@@ -25,7 +25,7 @@ READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempot
 INSTRUCTIONS = """\
 Database of French grid-connection projects (battery storage, data centers) detected early in public filings.
 Start with `dataset_info` to know coverage and caveats. Locate projects with `search_projects` or `zone_pressure`,
-then call `get_project` for sources, quotes and checks. Always report `power_status` and `confidence` to the user:
+then call `get_project` for sources, quotes and checks. `what_changed` lists what is new since a date. Always report `power_status` and `confidence` to the user:
 'estimated' powers are ranges, 'review' projects are not yet human-checked. Categories: bess, bess_hybrid,
 storage_substation, datacenter. Departments are codes like "59", "2A"."""
 
@@ -94,6 +94,14 @@ def build_server(db_path: Path | str) -> MCPServer:
     def projects_near_substation(substation: str, limit: int = 50) -> list[ProjectSummary]:
         """Projects whose filings name this substation (e.g. "Margot", "Les Hoquins", "400kV")."""
         return run(lambda db: queries.projects_near_substation(db, substation, limit))
+
+    @mcp.tool(annotations=READ_ONLY)
+    def what_changed(
+        since: str, category: str | None = None, department: str | None = None, limit: int = 100
+    ) -> list[ChangeView]:
+        """Change log since an ISO date (e.g. "2026-10-01"), newest first: new projects, changed fields
+        (power, stage, substation…) with before/after values, and projects no longer tracked. Use it for alerts."""
+        return run(lambda db: queries.what_changed(db, since, category=category, department=department, limit=limit))
 
     return mcp
 

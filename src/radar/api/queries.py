@@ -2,20 +2,23 @@
 
 from collections import Counter
 from collections.abc import Iterable
+from datetime import date, datetime
 
 from radar.api.views import (
+    ChangeView,
     CheckView,
     DatasetInfo,
     DocumentView,
     EvidenceView,
+    FieldChangeView,
     ProjectDetail,
     ProjectSummary,
     RelatedView,
     ZoneSummary,
 )
-from radar.domain.enums import TARGET_CATEGORIES, Category
+from radar.domain.enums import TARGET_CATEGORIES, Category, ChangeKind
 from radar.domain.geo import haversine_km
-from radar.domain.models import Project
+from radar.domain.models import Project, ProjectChange
 from radar.store.db import Database
 
 MAX_LIMIT = 200
@@ -85,6 +88,11 @@ def search_projects(
     if near:
         out.sort(key=lambda s: s.distance_km if s.distance_km is not None else 1e9)
     return out[: max(1, min(limit, MAX_LIMIT))]
+
+
+def list_projects(db: Database, *, category: str | None = None, department: str | None = None) -> list[ProjectSummary]:
+    """Every matching project, uncapped (exports)."""
+    return [_summary(p) for p in db.projects(categories=_categories(category), department=department)]
 
 
 def get_project(db: Database, project_id: str) -> ProjectDetail | None:
@@ -158,3 +166,67 @@ def projects_near_substation(db: Database, substation: str, limit: int = 50) -> 
 def dataset_info(db: Database) -> DatasetInfo:
     runs = {kind: info["finished_at"] for kind, info in db.last_runs().items()}
     return DatasetInfo(counts=db.counts(), last_runs=runs, coverage=COVERAGE, caveats=CAVEATS)
+
+
+FIELD_LABELS_FR = {
+    "name": "nom",
+    "category": "catégorie",
+    "developer": "porteur",
+    "commune": "commune",
+    "location_precision": "précision du lieu",
+    "power_mw": "puissance (MW)",
+    "power_mw_min": "puissance min (MW)",
+    "energy_mwh": "énergie (MWh)",
+    "power_status": "statut de la puissance",
+    "substation": "poste",
+    "status": "étape",
+    "confidence": "confiance",
+    "filings": "dossiers",
+    "signals": "signaux liés",
+}
+
+
+def _change_summary(c: ProjectChange) -> str:
+    if c.kind is ChangeKind.NEW:
+        return f"Nouveau projet : {c.name}"
+    if c.kind is ChangeKind.REMOVED:
+        return f"Retiré (n'est plus un projet suivi) : {c.name}"
+    parts = [f"{FIELD_LABELS_FR.get(f.field, f.field)} {f.before or '—'} → {f.after or '—'}" for f in c.fields]
+    return f"{c.name} : " + " ; ".join(parts)
+
+
+def _parse_since(since: str) -> str:
+    """Accept an ISO date or datetime; raise ValueError otherwise."""
+    try:
+        return datetime.fromisoformat(since).isoformat() if "T" in since else date.fromisoformat(since).isoformat()
+    except ValueError:
+        raise ValueError(f"`since` must be an ISO date like 2026-10-01, got {since!r}") from None
+
+
+def what_changed(
+    db: Database,
+    since: str,
+    *,
+    category: str | None = None,
+    department: str | None = None,
+    limit: int = 100,
+) -> list[ChangeView]:
+    rows = db.changes(
+        since=_parse_since(since),
+        categories=_categories(category),
+        department=department,
+        limit=max(1, min(limit, MAX_LIMIT)),
+    )
+    return [
+        ChangeView(
+            at=c.at.isoformat(),
+            kind=c.kind.value,
+            project_id=c.project_id,
+            name=c.name,
+            category=c.category.value,
+            department=c.department,
+            summary=_change_summary(c),
+            fields=[FieldChangeView(field=f.field, before=f.before, after=f.after) for f in c.fields],
+        )
+        for c in rows
+    ]

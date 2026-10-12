@@ -1,13 +1,15 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
 from radar.domain.departments import code_from_name, code_from_postcode
-from radar.domain.enums import PowerStatus
+from radar.domain.enums import Category, ChangeKind, Confidence, PowerStatus
 from radar.domain.geo import haversine_km, in_france, parse_dms, parse_dms_parts
 from radar.domain.ids import normalize_filing_number
+from radar.domain.models import Location, Power, Project
 from radar.domain.power import estimate_power, read_area_ha, read_containers, read_power, storage_duration_ok
 from radar.domain.text import contains_quote, fold
+from radar.pipeline.changes import track_changes
 
 
 @pytest.mark.parametrize(
@@ -100,3 +102,33 @@ def test_text_helpers() -> None:
     assert contains_quote("Le  projet consiste\nà construire", "projet consiste à construire")
     assert not contains_quote("abc", "")
     assert date(2026, 1, 1)  # keep the date import meaningful for future cases
+
+
+def test_track_changes() -> None:
+    t0, t1 = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 2, 1, tzinfo=UTC)
+    base = Project(
+        id="p1",
+        name="Batteries — Méru",
+        category=Category.BESS,
+        developer="X",
+        location=Location(commune="Méru"),
+        power=Power(mw_max=5),
+        substation=None,
+        status="s",
+        first_seen=None,
+        updated_at=t0,
+        confidence=Confidence.HIGH,
+        filing_keys=("k1",),
+    )
+    gone = base.model_copy(update={"id": "p2"})
+    same = base.model_copy(update={"updated_at": t1})  # rebuilt, nothing changed
+    projects, log = track_changes([base, gone], [same], t1)
+    assert projects[0].updated_at == t0 and [(c.kind, c.project_id) for c in log] == [(ChangeKind.REMOVED, "p2")]
+    grown = base.model_copy(update={"power": Power(mw_max=10), "substation": "Margot"})
+    _, log = track_changes([base], [grown], t1)
+    assert [(f.field, f.before, f.after) for f in log[0].fields] == [
+        ("power_mw", "5", "10"),
+        ("substation", None, "Margot"),
+    ]
+    _, log = track_changes([], [base], t1)
+    assert log[0].kind is ChangeKind.NEW and log[0].at == t1

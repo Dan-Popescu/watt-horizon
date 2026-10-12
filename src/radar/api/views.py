@@ -87,3 +87,20 @@ class DatasetInfo(View):
     last_runs: dict[str, str]
     coverage: str
     caveats: list[str]
+
+
+class FieldChangeView(View):
+    field: str
+    before: str | None
+    after: str | None
+
+
+class ChangeView(View):
+    at: str = Field(description="UTC timestamp of the rebuild that detected the change")
+    kind: str = Field(description="new, changed, or removed (no longer a target project)")
+    project_id: str
+    name: str
+    category: str
+    department: str | None
+    summary: str = Field(description="one-line French summary for humans")
+    fields: list[FieldChangeView]
