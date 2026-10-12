@@ -46,7 +46,14 @@ def anyio_backend() -> str:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path, offline=True, llm_model=None, use_tesseract=False, user_agent="radar-tests")
+    return Settings(
+        data_dir=tmp_path,
+        offline=True,
+        llm_model=None,
+        use_tesseract=False,
+        user_agent="radar-tests",
+        gold_dir=tmp_path / "gold",  # never the repository's reference sets
+    )
 
 
 @pytest.fixture

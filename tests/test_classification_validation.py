@@ -109,7 +109,12 @@ def test_linker_rules() -> None:
 
 def test_offline_disables_llm(tmp_path) -> None:  # type: ignore[no-untyped-def]
     settings = Settings(
-        data_dir=tmp_path, offline=True, llm_model="claude-opus-5-5", use_tesseract=False, user_agent="t"
+        data_dir=tmp_path,
+        offline=True,
+        llm_model="claude-opus-5-5",
+        use_tesseract=False,
+        user_agent="t",
+        gold_dir=tmp_path / "gold",
     )
     assert make_classifier(settings) is None  # no LLM offline, and no gold file yet
 

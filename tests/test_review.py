@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from starlette.testclient import TestClient
 
-from radar.api.review import review_items, submit_review
+from radar.api.review import export_corrections, import_corrections, review_items, submit_review
 from radar.classification.gold import GoldClassifier, GoldLabel
 from radar.domain.enums import Category, Confidence, PowerStatus
 from radar.domain.models import Correction
@@ -132,3 +132,12 @@ def test_web_review_mode(loaded_db: Database, services: Services) -> None:
     assert client.delete(f"/api/review/corrections/{substation_fix}").status_code == 200
     assert client.get("/api/projects", params={"category": "bess"}).json()[0]["substation"] == "Les Hoquins"
     assert client.delete(f"/api/review/corrections/{substation_fix}").status_code == 404
+
+
+def test_corrections_export_import_roundtrip(loaded_db: Database, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    submit_review(loaded_db, AUBENTON_KEY, author="Dan", changes={"substation": "Hoquins 2"}, validate=True, now=T0)
+    rows = export_corrections(loaded_db)
+    assert len(rows) == 2 and all("id" not in r for r in rows)
+    fresh = Database(tmp_path / "fresh.sqlite")
+    assert import_corrections(fresh, rows) == 2 and import_corrections(fresh, rows) == 0  # idempotent
+    assert {c.field for c in fresh.corrections()} == {"substation", "validated"}

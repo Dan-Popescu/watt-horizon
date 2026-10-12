@@ -1,0 +1,21 @@
+{"number": "012667", "category": "bess", "note": "47 MW / 94 MWh, poste RTE Margot", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "013263", "category": "bess", "note": "45 MW / 90 MWh, RP-Global", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "010504", "category": "bess", "note": "100 MW / 200 MWh, poste RTE Les Hoquins", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2024-8433", "category": "bess", "note": "AFR59, décision scannée lue en image", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-8646", "category": "bess", "note": "CS 116, batteries + poste HT, 2 ha", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "005358", "category": "bess", "note": "Aluminium Dunkerque x Eclipse, soumis à étude d'impact", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "005554", "category": "bess", "note": "DECADE Energy Assets, 10-20 MW", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "005382", "category": "bess", "note": "DECADE Energy Assets, 5 MW", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-8982", "category": "storage_substation", "note": "poste 33/400 kV pour raccorder 130 MW / 260 MWh de batteries (IB Vogt)", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-4009", "category": "datacenter", "note": "Azur Datacenter, phase 1, décision scannée lue en image", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-9147", "category": "needs_review", "note": "poste HT Neoen ; pages descriptives scannées, finalité inconnue", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "006175", "category": "renewable_substation", "note": "poste privé wpd pour ses parcs éoliens", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "009378", "category": "renewable_substation", "note": "poste Elements pour EnR (stockage cité comme possibilité seulement)", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-8770", "category": "renewable_substation", "note": "poste Chemin de Vailly 2, formulaire scanné", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2024-8532", "category": "renewable_substation", "note": "poste 225/33 kV Chemin de Vailly 1", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-9111", "category": "renewable_substation", "note": "poste pour deux projets agrivoltaïques (48,54 MW)", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-9097", "category": "renewable_substation", "note": "poste privé EE Agrisolaire", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "013439", "category": "public_grid", "note": "rénovation d'un poste Enedis", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2024-8382", "category": "public_grid", "note": "poste SICAE-Oise (distribution)", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2024-8373", "category": "other", "note": "poste d'un industriel (Kuhlmann)", "annotator": "Claude (à confirmer par Dan)"}
+{"number": "2025-2007", "category": "battery_waste", "note": "stockage de batteries usagées au plomb (déchets)", "annotator": "Claude (à confirmer par Dan)"}

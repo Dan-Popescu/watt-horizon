@@ -13,6 +13,7 @@ class Settings:
     use_tesseract: bool
     user_agent: str
     api_token: str | None = None  # if set, `radar web` requires `Authorization: Bearer <token>`
+    gold_dir: Path = Path("gold")  # reference sets and review exports (in the repository, not in data/)
 
     @property
     def db_path(self) -> Path:
@@ -43,13 +44,18 @@ class Settings:
 
     @property
     def gold_path(self) -> Path:
-        """Category labels per filing (classification gold)."""
-        return self.data_dir / "gold_labels.jsonl"
+        """Category labels per filing (classification gold). Versioned in git: human work."""
+        return self.gold_dir / "labels.jsonl"
 
     @property
     def field_gold_path(self) -> Path:
-        """Expected field values per filing (extraction gold)."""
-        return self.data_dir / "gold_fields.jsonl"
+        """Expected field values per filing (extraction gold). Versioned in git."""
+        return self.gold_dir / "fields.jsonl"
+
+    @property
+    def corrections_path(self) -> Path:
+        """Export of human corrections (`radar review export`), so reviews survive a lost database."""
+        return self.gold_dir / "corrections.jsonl"
 
 
 def _flag(name: str, default: bool) -> bool:
@@ -67,4 +73,5 @@ def load_settings() -> Settings:
             "RADAR_USER_AGENT", "radar-raccordement/0.1 (+polite crawler; one request per second per host)"
         ),
         api_token=os.environ.get("RADAR_API_TOKEN") or None,
+        gold_dir=Path(os.environ.get("RADAR_GOLD_DIR", "gold")).resolve(),
     )

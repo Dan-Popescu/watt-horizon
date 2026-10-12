@@ -16,6 +16,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --extra llm --no-install-project
 COPY src ./src
+COPY gold ./gold
 RUN uv sync --frozen --no-dev --extra llm --no-editable
 
 RUN useradd --create-home --uid 10001 radar && mkdir -p /data && chown radar /data

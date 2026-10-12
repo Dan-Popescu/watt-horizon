@@ -103,9 +103,12 @@ def test_regression_detection() -> None:
 def test_eval_command_compares_with_previous_run(
     loaded_db: Database, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    gold_dir = loaded_db.path.parent / "gold"
+    gold_dir.mkdir()
     monkeypatch.setenv("RADAR_DATA_DIR", str(loaded_db.path.parent))
+    monkeypatch.setenv("RADAR_GOLD_DIR", str(gold_dir))
     monkeypatch.setenv("RADAR_OFFLINE", "1")
-    (loaded_db.path.parent / "gold_labels.jsonl").write_text(
+    (gold_dir / "labels.jsonl").write_text(
         json.dumps({"number": AUBENTON, "category": "bess", "verified": True}) + "\n", encoding="utf-8"
     )
     assert main(["eval", "--draft-fields"]) == 0

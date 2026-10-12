@@ -18,7 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from radar.api import digest, exports, queries
+from radar.api import digest, exports, queries, review
 from radar.classification.gold import load_gold
 from radar.config import Settings, load_settings
 from radar.evaluation.classification import evaluate_classifier
@@ -218,7 +218,7 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
 
     if args.host not in {"127.0.0.1", "localhost", "::1"} and not s.api_token:
         return {"error": "Refusing to listen on a public interface without RADAR_API_TOKEN."}
-    review = None
+    review_mode = None
     if args.review:
         services = make_services(s, make_http(s))
 
@@ -226,8 +226,8 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
             process_filings(db, services, only={key})
             link_and_build(db)
 
-        review = (rebuild, lambda: load_gold(s.gold_path))
-    app = build_app(s.db_path, token=s.api_token, mcp_host=args.public_host or args.host, review=review)
+        review_mode = (rebuild, lambda: load_gold(s.gold_path))
+    app = build_app(s.db_path, token=s.api_token, mcp_host=args.public_host or args.host, review=review_mode)
     print(f"http://{args.host}:{args.port}  (MCP: /mcp)", file=sys.stderr)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return None
@@ -242,6 +242,20 @@ def cmd_digest(args: argparse.Namespace, s: Settings) -> Any:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(digest.render_html(d) if args.format == "html" else digest.render_text(d), encoding="utf-8")
     return {"path": str(out), "new_projects": len(d.new_projects), "changes": len(d.changes)}
+
+
+def cmd_review(args: argparse.Namespace, s: Settings) -> Any:
+    """Back up / restore human corrections (gold/corrections.jsonl, versioned). Run `radar run` after an import."""
+    path = Path(args.path) if args.path else s.corrections_path
+    with Database(s.db_path) as db:
+        if args.action == "export":
+            rows = review.export_corrections(db)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [json.dumps(r, ensure_ascii=False) for r in rows]
+            path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8", newline="\n")
+            return {"path": str(path), "corrections": len(rows)}
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return {"path": str(path), "added": review.import_corrections(db, rows), "next": "radar run"}
 
 
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
@@ -316,6 +330,9 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--strict", action="store_true", help="exit 2 if any metric regressed")
     ev.add_argument("--classifier", action="store_true", help="also re-run the model classifier alone (paid)")
     ev.add_argument("--draft-fields", action="store_true", help="add unverified field references from extractions")
+    rev = sub.add_parser("review", help="export/import human corrections (gold/corrections.jsonl)")
+    rev.add_argument("action", choices=["export", "import"])
+    rev.add_argument("--path", help="default: gold/corrections.jsonl")
     web = sub.add_parser("web", help="map UI + JSON API + MCP over HTTP (read-only)")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8765)
@@ -344,6 +361,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "digest": cmd_digest,
     "mcp": cmd_mcp,
     "web": cmd_web,
+    "review": cmd_review,
 }
 
 

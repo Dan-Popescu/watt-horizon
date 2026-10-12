@@ -120,3 +120,21 @@ def submit_review(
         )
     with db.transaction():
         return [db.add_correction(c) for c in rows]
+
+
+def export_corrections(db: Database) -> list[dict[str, object]]:
+    """Active corrections as JSON rows (stable order), for `gold/corrections.jsonl`."""
+    return [c.model_dump(mode="json", exclude={"id"}) for c in db.corrections()]
+
+
+def import_corrections(db: Database, rows: Iterable[dict[str, object]]) -> int:
+    """Insert rows not already present (same filing, field, author and time). Returns the number added."""
+    seen = {(c.filing_key, c.field, c.author, c.created_at) for c in db.corrections()}
+    added = 0
+    with db.transaction():
+        for row in rows:
+            c = Correction.model_validate(row)
+            if (c.filing_key, c.field, c.author, c.created_at) not in seen:
+                db.add_correction(c)
+                added += 1
+    return added
