@@ -7,6 +7,7 @@ from radar.config import Settings
 from radar.extraction.llm import FieldExtractor
 from radar.net.http import PoliteHttp
 from radar.pipeline.filings import Services
+from radar.pipeline.fingerprint import digest, files_fingerprint
 from radar.quality.propagate import Aliases
 from radar.quality.rulebook import Rulebook
 from radar.quality.templates import Registry
@@ -51,15 +52,27 @@ def make_lookups(settings: Settings, http: PoliteHttp | None) -> CompositeLookup
 
 def make_services(settings: Settings, http: PoliteHttp | None) -> Services:
     cache = KeyValueCache(settings.cache_path)
+    ocr = make_ocr(settings.transcripts_dir, use_tesseract=settings.use_tesseract, cache=cache)
+    classifier = make_classifier(settings, cache)
+    extractor = make_extractor(settings, cache)
+    steering = (settings.gold_path, settings.rules_path, settings.aliases_path, settings.templates_path)
+    setup = digest(
+        files_fingerprint([*steering, settings.screen_terms_path, settings.communes_path]),
+        ocr.label,
+        classifier.name if classifier else None,
+        extractor.name if extractor else None,
+        settings.offline,
+    )
     return Services(
         blobs=BlobStore(settings.blobs_dir),
-        ocr=make_ocr(settings.transcripts_dir, use_tesseract=settings.use_tesseract, cache=cache),
-        classifier=make_classifier(settings, cache),
-        extractor=make_extractor(settings, cache),
+        ocr=ocr,
+        classifier=classifier,
+        extractor=extractor,
         aliases=Aliases.load(settings.aliases_path),
         templates=Registry.load(settings.templates_path),
         rules=Rulebook.load(settings.rules_path).effective(),
         labels={n: g.category for n, g in load_gold(settings.gold_path).items() if g.verified},
         screen_terms=ScreenTerms.load(settings.screen_terms_path).pattern(),
+        fingerprint=setup,
         lookups=make_lookups(settings, http),
     )

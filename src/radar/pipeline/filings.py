@@ -63,6 +63,8 @@ class Services:
     labels: dict[str, Category] | None = None  # trusted category labels (verified gold), by filing number
     opinion: BayesModel | None = None  # second-opinion classifier, re-learned by process_filings
     screen_terms: re.Pattern[str] | None = None  # adopted screen terms (gold/screen_terms.json)
+    # Fingerprint of the setup (gold files, OCR, classifiers; see pipeline/fingerprint.py). None: always rebuild.
+    fingerprint: str | None = None
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:

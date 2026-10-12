@@ -12,6 +12,13 @@ from radar.linking.registry import commissioned
 from radar.linking.review import apply_link_decisions
 from radar.pipeline.changes import track_changes
 from radar.pipeline.filings import Services, build_filing
+from radar.pipeline.fingerprint import (
+    code_fingerprint,
+    corrections_fingerprint,
+    digest,
+    filing_fingerprint,
+    git_commit,
+)
 from radar.pipeline.projects import build_projects
 from radar.quality.arbiter import Arbiter, learn
 from radar.quality.confidence import calibrate
@@ -23,6 +30,7 @@ from radar.store.db import Database, utcnow
 @dataclass
 class StepReport:
     processed: int = 0
+    unchanged: int = 0  # skipped: same documents, code, gold files, corrections and learned state as last build
     failed: dict[str, str] = field(default_factory=dict)
     by_category: dict[str, int] = field(default_factory=dict)
     to_review: list[str] = field(default_factory=list)
@@ -34,9 +42,12 @@ def rule_filter(rules: tuple[LearnedRule, ...], arbiter: Arbiter) -> tuple[Learn
     return Rulebook(list(rules)).effective(seen)
 
 
-def process_filings(db: Database, services: Services, only: set[str] | None = None) -> StepReport:
+def process_filings(
+    db: Database, services: Services, only: set[str] | None = None, *, full: bool = False
+) -> StepReport:
     """(Re)build every filing that has documents. One failing filing never stops the others.
-    Source reliabilities and confidence calibration are re-learned from human reviews first, unless given."""
+    Source reliabilities and confidence calibration are re-learned from human reviews first, unless given.
+    Incremental: a filing whose input fingerprint is unchanged is skipped (unless `full` or listed in `only`)."""
     report = StepReport()
     if services.arbiter is None or services.calibration is None or services.opinion is None:
         filings, corrections = db.filings(), db.corrections()
@@ -48,15 +59,25 @@ def process_filings(db: Database, services: Services, only: set[str] | None = No
             rules=rule_filter(services.rules, arbiter),
             opinion=services.opinion or train(trusted_examples(filings, services.labels or {})),
         )
+    state = _state(db, services) if services.fingerprint and only is None and not full else None
     for key in db.filing_keys_with_documents():
         if only is not None and key not in only:
             continue
         try:
             previous = db.filing(key)
-            filing = build_filing(key, db.documents(key), services, db.corrections(key))
+            documents = db.documents(key)
+            fingerprint = filing_fingerprint(state, documents) if state else None
+            if fingerprint and previous and previous.versions.get("input") == fingerprint:
+                report.unchanged += 1
+                continue
+            filing = build_filing(key, documents, services, db.corrections(key))
         except Exception as exc:  # recorded and reported; the run continues
             report.failed[key] = f"{type(exc).__name__}: {exc}"
             continue
+        trace = {"code": code_fingerprint(), **({"git": commit} if (commit := git_commit()) else {})}
+        filing = filing.model_copy(
+            update={"versions": filing.versions | trace | ({"input": fingerprint} if fingerprint else {})}
+        )
         with db.transaction():
             db.upsert_filing(filing)
             if changed := diff_machine(previous, filing):  # recorded so unreviewed changes reach the review queue
@@ -67,6 +88,20 @@ def process_filings(db: Database, services: Services, only: set[str] | None = No
         if filing.confidence.value == "review" and filing.classification.category in TARGET_CATEGORIES:
             report.to_review.append(key)
     return report
+
+
+def _state(db: Database, services: Services) -> str:
+    """Everything shared by all builds: setup, code, corrections and what was learned from them."""
+    opinion = services.opinion
+    return digest(
+        services.fingerprint,
+        code_fingerprint(),
+        corrections_fingerprint(db.corrections()),
+        sorted((list(k), list(v)) for k, v in (services.arbiter.stats if services.arbiter else {}).items()),
+        services.calibration.bins if services.calibration else None,
+        [opinion.docs, opinion.loo_correct, opinion.loo_total, len(opinion.vocabulary)] if opinion else None,
+        [r.id for r in services.rules],
+    )
 
 
 def link_and_build(db: Database, now: datetime | None = None) -> dict[str, object]:

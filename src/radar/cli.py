@@ -159,7 +159,8 @@ def cmd_update(args: argparse.Namespace, s: Settings) -> Any:
 def cmd_process(args: argparse.Namespace, s: Settings) -> Any:
     with Database(s.db_path) as db:
         run_id = db.start_run("process")
-        report = process_filings(db, make_services(s, make_http(s)), only=set(args.only) if args.only else None)
+        only = set(args.only) if args.only else None
+        report = process_filings(db, make_services(s, make_http(s)), only=only, full=getattr(args, "full", False))
         db.finish_run(run_id, asdict(report))
         return report
 
@@ -649,8 +650,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     proc = sub.add_parser("process", help="(re)build filings from stored documents")
     proc.add_argument("--only", nargs="*", help="filing keys")
+    proc.add_argument("--full", action="store_true", help="rebuild every filing (ignore fingerprints)")
     run = sub.add_parser("run", help="process + link + build projects")
     run.add_argument("--only", nargs="*", help="filing keys")
+    run.add_argument("--full", action="store_true", help="rebuild every filing (ignore fingerprints)")
     chg = sub.add_parser("changes", help="change log since a date (new / changed / removed projects)")
     chg.add_argument("--since", required=True, help="ISO date, e.g. 2026-10-01")
     exp = sub.add_parser("export", help="write projects to CSV (Excel, ';') or GeoJSON (GIS)")
