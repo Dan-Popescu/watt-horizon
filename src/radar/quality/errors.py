@@ -6,6 +6,7 @@ precision / recall), and which past errors are now fixed. Pure functions over fi
 - unflagged errors = corrections no doubt detector anticipated: each one suggests a new detector (quality/flags.py).
 - fixed = the machine now gives the value the human typed: the correction can stay (harmless) and becomes a
   regression case (quality/cases.py).
+Test-split filings (evaluation/stats.split_of) are counted but never detailed: nobody tunes rules on them.
 """
 
 from collections import Counter
@@ -16,6 +17,7 @@ from radar.domain.enums import Severity
 from radar.domain.fields import Value, machine_values
 from radar.domain.models import Correction, Filing
 from radar.evaluation.fields import compare
+from radar.evaluation.stats import split_of
 from radar.pipeline.corrections import VALIDATED, latest
 
 
@@ -44,6 +46,7 @@ class ErrorReport:
     flag_recall: float | None = None  # filings with errors that were flagged
     by_flag: dict[str, dict[str, int]] = field(default_factory=dict)  # code -> {flagged, with_errors}
     unflagged: list[str] = field(default_factory=list)  # errors no detector anticipated: write a detector
+    test_errors: int = 0  # errors on test-split filings: counted, never detailed (no tuning on the test split)
 
 
 def _doubtful(filing: Filing) -> bool:
@@ -85,8 +88,11 @@ def analyse(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Err
                     blind=c.blind,
                 )
             )
-        report.errors += errors
         report.with_errors += bool(errors)
+        if split_of(filing.number) == "test":
+            report.test_errors += len(errors)
+            errors = []
+        report.errors += errors
         if _doubtful(filing):
             flagged_reviewed += 1
             flagged_with_errors += bool(errors)

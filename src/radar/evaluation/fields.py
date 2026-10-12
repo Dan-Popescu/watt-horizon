@@ -12,6 +12,7 @@ from radar.domain.fields import Value
 from radar.domain.models import Filing
 from radar.domain.text import fold
 from radar.evaluation.gold import FIELDS, FieldGold, actual_fields
+from radar.evaluation.stats import wilson
 
 Outcome = Literal["correct", "wrong", "missed", "spurious", "absent"]
 
@@ -47,15 +48,18 @@ class FieldScore:
     def accuracy(self) -> float | None:
         return (self.correct + self.absent) / self.total if self.total else None
 
-    def as_dict(self) -> dict[str, object]:
+    def as_dict(self, with_errors: bool = True) -> dict[str, object]:
+        """`with_errors=False` for the test split: scores only, never the cases (no tuning on test)."""
         return {
             "accuracy": round(self.accuracy, 3) if self.accuracy is not None else None,
+            "ci95": wilson(self.correct + self.absent, self.total),
+            "n": self.total,
             "correct": self.correct,
             "wrong": self.wrong,
             "missed": self.missed,
             "spurious": self.spurious,
             "absent": self.absent,
-            "errors": self.errors,
+            **({"errors": self.errors} if with_errors else {}),
         }
 
 

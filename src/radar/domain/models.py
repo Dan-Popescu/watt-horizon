@@ -94,7 +94,8 @@ class Flag(Model):
 
 class MachineOutput(Model):
     classification: Classification
-    values: dict[str, str | float | None]  # see pipeline.corrections.field_values
+    values: dict[str, str | float | None]  # see domain.fields.field_values
+    confidence: str = ""  # machine confidence before any human decision (for calibration)
 
 
 class Filing(Model):

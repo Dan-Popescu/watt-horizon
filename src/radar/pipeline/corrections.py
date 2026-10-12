@@ -44,7 +44,13 @@ _NOTES = PersonScrubber()  # reviewers' notes: civility names, e-mails and phone
 def with_machine(filing: Filing) -> Filing:
     """Freeze the machine output on a freshly built filing (before any correction)."""
     return filing.model_copy(
-        update={"machine": MachineOutput(classification=filing.classification, values=field_values(filing))}
+        update={
+            "machine": MachineOutput(
+                classification=filing.classification,
+                values=field_values(filing),
+                confidence=filing.confidence.value,
+            )
+        }
     )
 
 

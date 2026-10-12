@@ -26,9 +26,10 @@ from radar.evaluation.gold import draft as draft_field_gold
 from radar.evaluation.gold import load_field_gold, write_field_gold
 from radar.evaluation.ocr import evaluate_ocr
 from radar.evaluation.privacy import audit_privacy
-from radar.evaluation.report import build_report
+from radar.evaluation.report import ReportInputs, build_report
 from radar.evaluation.report import compare as compare_reports
 from radar.evaluation.report import metrics as eval_metrics
+from radar.evaluation.stats import split_of
 from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers
@@ -183,7 +184,19 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
             if llm is None:
                 return {"error": "No model classifier: set RADAR_LLM_MODEL (and ANTHROPIC_API_KEY), not offline."}
             classifier = evaluate_classifier(llm, db, services, labels)
-        report = build_report(filings, labels, field_gold, audit_privacy(db, blobs), ocr, classifier)
+        report = build_report(
+            ReportInputs(
+                filings=filings,
+                labels=labels,
+                field_gold=field_gold,
+                corrections=db.corrections(),
+                privacy_leaks=audit_privacy(db, blobs),
+                listing=db.listing_counts(),
+                cases=cases.refresh(s.cases_dir) if s.cases_dir.exists() else None,
+                ocr=ocr,
+                classifier=classifier,
+            )
+        )
         previous = db.last_runs().get("eval", {}).get("stats", {}).get("metrics", {})
         current = eval_metrics(report)
         comparison = compare_reports(previous, current) if previous else {"regressions": [], "improvements": []}
@@ -305,7 +318,7 @@ def cmd_cases(args: argparse.Namespace, s: Settings) -> Any:
         filings = db.filings()
         _, verified = reviewed_references(filings, db.corrections())
         for filing in filings:
-            if filing.number not in verified:
+            if filing.number not in verified or split_of(filing.number) == "test":  # test split: measure only
                 continue
             documents = db.documents(filing.key)
             case = cases.make_case(

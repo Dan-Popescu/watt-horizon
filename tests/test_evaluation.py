@@ -113,7 +113,13 @@ def test_eval_command_compares_with_previous_run(
     )
     assert main(["eval", "--draft-fields"]) == 0
     first = json.loads(capsys.readouterr().out)
-    assert first["gold"] == {"labels": 1, "labels_verified": 1, "fields": 1, "fields_verified": 0}
+    assert first["gold"] == {
+        "labels": 1,
+        "labels_verified": 1,
+        "fields": 1,
+        "fields_verified": 0,
+        "reviewed_filings": 0,
+    }
     assert first["fields_draft"]["power_mw"]["accuracy"] == 1.0 and first["privacy"]["leaks"] == []
     assert main(["eval", "--strict"]) == 0  # nothing changed: no regression
     second = json.loads(capsys.readouterr().out)
