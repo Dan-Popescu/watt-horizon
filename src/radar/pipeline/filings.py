@@ -1,6 +1,7 @@
 """Builds one `Filing` from its documents: read -> extract -> screen/classify -> validate -> confidence."""
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -8,7 +9,7 @@ from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.rules import screen
 from radar.domain.departments import code_from_postcode
 from radar.domain.enums import TARGET_CATEGORIES, Category, CheckStatus, DocumentRole, PowerStatus, ReviewDecision
-from radar.domain.models import Classification, DocumentRecord, Evidence, Filing, Location, Power
+from radar.domain.models import Classification, Correction, DocumentRecord, Evidence, Filing, Location, Power
 from radar.domain.power import estimate_power
 from radar.domain.privacy import PersonScrubber
 from radar.domain.text import contains_quote, squash
@@ -18,6 +19,7 @@ from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
 from radar.extraction.llm import ExtractionInput, FieldExtractor
 from radar.extraction.substation import is_voltage_only
+from radar.pipeline.corrections import apply_corrections, with_machine
 from radar.quality.flags import QualityInput, ReadDocument, detect
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, read_pdf
@@ -74,7 +76,10 @@ def extract_facts(
     return form, decision, facts
 
 
-def build_filing(key: str, documents: list[DocumentRecord], services: Services) -> Filing:
+def build_filing(
+    key: str, documents: list[DocumentRecord], services: Services, corrections: Sequence[Correction] = ()
+) -> Filing:
+    """Machine output (kept in `Filing.machine`) with human corrections applied on top."""
     if not documents:
         raise ValueError(f"filing {key} has no documents")
     source, region, number = documents[0].source, *key.split(":", 2)[1:]
@@ -134,7 +139,7 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
         or classification.quote_verified is False
     )
 
-    return Filing(
+    machine = Filing(
         key=key,
         source=source,
         region=region,
@@ -167,6 +172,8 @@ def build_filing(key: str, documents: list[DocumentRecord], services: Services) 
             **({"extraction_llm": extractor_used} if extractor_used else {}),
         },
     )
+    texts_by_doc = {doc.id: text for doc, text in zip(documents, texts, strict=True)}
+    return apply_corrections(with_machine(machine), corrections, services.lookups, texts_by_doc)
 
 
 def _strata(

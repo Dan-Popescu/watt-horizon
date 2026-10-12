@@ -13,6 +13,7 @@ from radar.domain.fields import Value, field_values
 from radar.domain.models import Classification, Correction, Evidence, Filing, Location, MachineOutput, Power
 from radar.domain.privacy import PersonScrubber
 from radar.evaluation.gold import FieldGold
+from radar.quality.locate import locate
 from radar.validation.lookups import Lookups
 
 VALIDATED = "validated"
@@ -94,7 +95,14 @@ def latest(corrections: Iterable[Correction]) -> dict[str, Correction]:
     return out
 
 
-def apply_corrections(filing: Filing, corrections: Iterable[Correction], lookups: Lookups | None = None) -> Filing:
+def apply_corrections(
+    filing: Filing,
+    corrections: Iterable[Correction],
+    lookups: Lookups | None = None,
+    texts: dict[str, str] | None = None,
+) -> Filing:
+    """`texts` (document id -> scrubbed text): when given, a corrected value found verbatim in a document gets
+    that passage as evidence (locator "correction:<id>:located"), so human values are as traceable as machine ones."""
     by_field = latest(corrections)
     if not by_field:
         return filing
@@ -103,6 +111,10 @@ def apply_corrections(filing: Filing, corrections: Iterable[Correction], lookups
     evidence = dict(base.evidence)
 
     def human(c: Correction) -> Evidence:
+        if texts and (spans := locate(c.field, c.value, texts, limit=1)):
+            s = spans[0]
+            quote = " ".join(f"{s.left[-60:]}{s.text}{s.right[:60]}".split())
+            return Evidence(document_id=s.document_id, locator=f"correction:{c.id}:located", quote=quote)
         note = _NOTES.scrub(c.note) or ""
         return Evidence(document_id="human", locator=f"correction:{c.id}", quote=note or "Vérifié par un relecteur")
 

@@ -9,7 +9,6 @@ from radar.domain.models import Link
 from radar.linking.linker import propose_links
 from radar.linking.registry import commissioned
 from radar.pipeline.changes import track_changes
-from radar.pipeline.corrections import apply_corrections, with_machine
 from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.projects import build_projects
 from radar.store.db import Database, utcnow
@@ -30,8 +29,7 @@ def process_filings(db: Database, services: Services, only: set[str] | None = No
         if only is not None and key not in only:
             continue
         try:
-            machine = with_machine(build_filing(key, db.documents(key), services))
-            filing = apply_corrections(machine, db.corrections(key), services.lookups)
+            filing = build_filing(key, db.documents(key), services, db.corrections(key))
         except Exception as exc:  # recorded and reported; the run continues
             report.failed[key] = f"{type(exc).__name__}: {exc}"
             continue

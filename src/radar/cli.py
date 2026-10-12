@@ -38,7 +38,7 @@ from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
-from radar.quality import cases, errors
+from radar.quality import cases, errors, improve
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
@@ -340,6 +340,21 @@ def cmd_cases(args: argparse.Namespace, s: Settings) -> Any:
     return {"written": written, "dir": str(s.cases_dir)}
 
 
+def cmd_improve(args: argparse.Namespace, s: Settings) -> Any:
+    """Agent-ready tickets from failing regression cases, with validated rule candidates."""
+    found = improve.tickets(cases.load_all(s.cases_dir))
+    if args.field:
+        found = [t for t in found if t.field == args.field]
+    paths = improve.write(found, s.data_dir / "improve")
+    return {
+        "tickets": [
+            {"field": t.field, "failing": len(t.failures), "candidates": len(t.suggestions), "path": str(p)}
+            for t, p in zip(found, paths, strict=True)
+        ],
+        "next": "give a ticket to a coding agent, or fix by hand; then radar cases check --strict",
+    }
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -416,6 +431,8 @@ def build_parser() -> argparse.ArgumentParser:
     cs = sub.add_parser("cases", help="regression cases from human-verified filings (gold/cases)")
     cs.add_argument("action", choices=["export", "check"])
     cs.add_argument("--strict", action="store_true", help="check: exit 2 on any regression")
+    imp = sub.add_parser("improve", help="agent-ready tickets per failing field, with validated rule candidates")
+    imp.add_argument("--field", help="only this field")
     tri = sub.add_parser("triage", help="review queue: what a human should check first, and why")
     tri.add_argument("--limit", type=int, default=20)
     hl = sub.add_parser("health", help="collector health (blocked / empty / stale / crashed sources)")
@@ -456,6 +473,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "triage": cmd_triage,
     "errors": cmd_errors,
     "cases": cmd_cases,
+    "improve": cmd_improve,
 }
 
 
