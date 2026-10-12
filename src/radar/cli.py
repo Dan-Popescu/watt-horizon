@@ -13,6 +13,7 @@ import argparse
 import dataclasses
 import json
 import sys
+import tempfile
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
@@ -41,7 +42,7 @@ from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import Services, read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
-from radar.quality import cases, errors, improve, propagate, robustness, rulebook, shadow
+from radar.quality import cases, corpus, errors, improve, propagate, robustness, rulebook, shadow
 from radar.quality.arbiter import learn
 from radar.quality.drift import drift
 from radar.quality.suggest import suggest
@@ -483,6 +484,72 @@ def cmd_robustness(_: argparse.Namespace, s: Settings) -> Any:
     return {**report.summary(), "fragile": len(report.fragile), "report": str(path)}
 
 
+def cmd_corpus(args: argparse.Namespace, s: Settings) -> Any:
+    """build: redacted real PDFs of the given filings -> tests/corpus (+ snapshot). snapshot: re-record expected.json
+    after checking the diff is intended (the corpus test fails on any difference)."""
+    directory = Path(args.dir)
+    if args.action == "build":
+        written, filings_out, communes_out = [], [], {}
+        reference = ReferenceCommunes(s.communes_path)
+        blobs = BlobStore(s.blobs_dir)
+        with Database(s.db_path) as db:
+            for number in args.numbers or []:
+                filing = next((f for f in db.filings() if f.number == number), None)
+                if filing is None:
+                    return {"error": f"unknown filing {number}"}
+                documents = db.documents(filing.key)
+                if any(d.scanned_pages for d in documents):
+                    return {"error": f"{number}: scanned pages cannot be redacted reliably, choose another filing"}
+                docs_out = []
+                for d in documents:
+                    original = blobs.get(d.id)
+                    redacted = corpus.redact(original)
+                    if leaks := corpus.audit(original, redacted):
+                        return {"error": f"{number}: redaction incomplete ({len(leaks)} leak(s)), not written"}
+                    name = f"{number}--{d.role.value}.pdf"
+                    (directory / "pdfs").mkdir(parents=True, exist_ok=True)
+                    (directory / "pdfs" / name).write_bytes(redacted)
+                    docs_out.append({"filename": name, "role": d.role.value, "title": d.title, "url": d.url})
+                    written.append(name)
+                filings_out.append(
+                    {"number": number, "category": filing.classification.category.value, "documents": docs_out}
+                )
+                info = reference.commune(filing.location.commune or "", filing.location.department)
+                if info is not None:
+                    communes_out[info.insee_code] = dataclasses.asdict(info)
+        manifest = {"filings": filings_out, "communes": list(communes_out.values())}
+        (directory / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n"
+        )
+        (directory / "README.md").write_text(CORPUS_README, encoding="utf-8", newline="\n")
+    with tempfile.TemporaryDirectory() as work:
+        snapshot = corpus.replay(directory, Path(work))
+    previous = directory / "expected.json"
+    changes = corpus.diff(json.loads(previous.read_text(encoding="utf-8")), snapshot) if previous.exists() else []
+    previous.write_text(
+        json.dumps(snapshot, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+    return {
+        "dir": str(directory),
+        "filings": len(snapshot["filings"]),
+        "projects": snapshot["projects"],
+        "changed": changes,
+    }
+
+
+CORPUS_README = """# Corpus de test (PDF réels caviardés)
+
+Documents publics de la DREAL Hauts-de-France (examens au cas par cas), réutilisés sous Licence Ouverte (Etalab).
+Caviardés avant d'entrer dans le dépôt : champs de personnes vidés, noms de personnes, civilités, courriels,
+téléphones et blocs de signature effacés de la couche texte, toutes les images retirées ; documents scannés exclus.
+
+- `manifest.json` : dossiers, documents, catégorie de référence, communes utiles aux contrôles.
+- `expected.json` : résultat attendu de toute la chaîne, vérifié par `tests/test_corpus.py`.
+
+Mettre à jour après un changement voulu : `uv run radar corpus snapshot`, puis relire le diff de `expected.json`.
+"""
+
+
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
@@ -562,6 +629,10 @@ def build_parser() -> argparse.ArgumentParser:
     imp = sub.add_parser("improve", help="agent-ready tickets per failing field, with validated rule candidates")
     imp.add_argument("--field", help="only this field")
     sub.add_parser("robustness", help="perturb every stored document; list extracted values that move")
+    co = sub.add_parser("corpus", help="redacted real-PDF test corpus (tests/corpus): build, snapshot")
+    co.add_argument("action", choices=["build", "snapshot"])
+    co.add_argument("--numbers", nargs="*", help="build: filing numbers to include (no scanned pages)")
+    co.add_argument("--dir", default="tests/corpus")
     ru = sub.add_parser("rules", help="adopted extraction rules (gold/rules.json): list, adopt, disable")
     ru.add_argument("action", nargs="?", choices=["list", "adopt", "disable"], default="list")
     ru.add_argument("--field", help="adopt: field (developer, siret, commune, power_mw, energy_mwh, ...)")
@@ -620,6 +691,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "shadow": cmd_shadow,
     "templates": cmd_templates,
     "rules": cmd_rules,
+    "corpus": cmd_corpus,
     "robustness": cmd_robustness,
 }
 

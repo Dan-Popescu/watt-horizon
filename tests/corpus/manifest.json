@@ -1,0 +1,163 @@
+{
+ "filings": [
+  {
+   "number": "010504",
+   "category": "bess",
+   "documents": [
+    {
+     "filename": "010504--form.pdf",
+     "role": "form",
+     "title": "Formulaire de demande d’examen au cas par cas, relatif à un projet de centrale de stockage d’énergie par batteries des Hoquins sur la Commune de (…)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/0010504-cerfa.pdf"
+    },
+    {
+     "filename": "010504--decision.pdf",
+     "role": "decision",
+     "title": "Décision de non soumission à la réalisation d’une étude d’impact du projet de centrale de stockage d’énergie par batteries des HOQUINS sur la (…)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/010504kkp_decision.pdf"
+    }
+   ]
+  },
+  {
+   "number": "2025-9111",
+   "category": "renewable_substation",
+   "documents": [
+    {
+     "filename": "2025-9111--form.pdf",
+     "role": "form",
+     "title": "Formulaire de demande d’examen au cas par cas préalable à la réalisation d’une étude d’impact portant sur le projet de création d’un poste source (…)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2025-9111-cerfa.pdf"
+    },
+    {
+     "filename": "2025-9111--decision.pdf",
+     "role": "decision",
+     "title": "Décision de non soumission à la réalisation d’une étude d’impact portant sur le projet de création d’un poste source sur la commune de Couvrelles (02)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2025-9111-decision.pdf"
+    }
+   ]
+  },
+  {
+   "number": "2024-8532",
+   "category": "renewable_substation",
+   "documents": [
+    {
+     "filename": "2024-8532--decision.pdf",
+     "role": "decision",
+     "title": "Décision de non soumission à la réalisation d’une étude d’impact portant sur le projet de création d’un poste électrique 225 000/33 000 volts sur (…)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2024-8532-decision.pdf"
+    },
+    {
+     "filename": "2024-8532--form.pdf",
+     "role": "form",
+     "title": "Formulaire de demande d’examen au cas par cas, relatif à la création d’un poste 225 000/33 000 volts sur la commune de Courcelles-sur-Vesle (02)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2024-8532-cerfa.pdf"
+    }
+   ]
+  },
+  {
+   "number": "2025-8982",
+   "category": "storage_substation",
+   "documents": [
+    {
+     "filename": "2025-8982--decision.pdf",
+     "role": "decision",
+     "title": "Décision de non soumission à la réalisation d’une étude d’impact portant sur le projet de poste électrique sur la commune de La Capelle (02)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2025-8982-decision.pdf"
+    },
+    {
+     "filename": "2025-8982--form.pdf",
+     "role": "form",
+     "title": "Formulaire de demande d’examen au cas par cas préalable à la réalisation d’une étude d’impact portant sur le projet de création d’un poste de (…)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2025-8982-cerfa.pdf"
+    }
+   ]
+  },
+  {
+   "number": "2025-8646",
+   "category": "bess",
+   "documents": [
+    {
+     "filename": "2025-8646--decision.pdf",
+     "role": "decision",
+     "title": "Décision de non soumission à la réalisation d’une étude d’impact portant sur le projet de stockage d’électricité par batteries sur la commune de (…)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2025-8646-decision.pdf"
+    }
+   ]
+  },
+  {
+   "number": "013439",
+   "category": "public_grid",
+   "documents": [
+    {
+     "filename": "013439--form.pdf",
+     "role": "form",
+     "title": "Formulaire de demande d’examen au cas par cas, relatif à la rénovation du Poste Électrique sur la commune de Sequedin (59)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/013439-cerfa.pdf"
+    }
+   ]
+  },
+  {
+   "number": "2024-8339",
+   "category": "unclassified",
+   "documents": [
+    {
+     "filename": "2024-8339--decision.pdf",
+     "role": "decision",
+     "title": "Décision de non soumission à la réalisation d’une étude d’impact du projet de création et de raccordement d’un poste électrique RTE-Enedis sur la (…)",
+     "url": "https://www.hauts-de-france.developpement-durable.gouv.fr/IMG/pdf/2024-8339-decision.pdf"
+    }
+   ]
+  }
+ ],
+ "communes": [
+  {
+   "insee_code": "02031",
+   "name": "Aubenton",
+   "department": "02",
+   "lat": 49.8254,
+   "lon": 4.1928
+  },
+  {
+   "insee_code": "02230",
+   "name": "Couvrelles",
+   "department": "02",
+   "lat": 49.3328,
+   "lon": 3.485
+  },
+  {
+   "insee_code": "02224",
+   "name": "Courcelles-sur-Vesle",
+   "department": "02",
+   "lat": 49.3464,
+   "lon": 3.576
+  },
+  {
+   "insee_code": "02141",
+   "name": "La Capelle",
+   "department": "02",
+   "lat": 49.9705,
+   "lon": 3.9146
+  },
+  {
+   "insee_code": "62156",
+   "name": "Bonningues-lès-Calais",
+   "department": "62",
+   "lat": 50.8947,
+   "lon": 1.7681
+  },
+  {
+   "insee_code": "59566",
+   "name": "Sequedin",
+   "department": "59",
+   "lat": 50.6252,
+   "lon": 2.9887
+  },
+  {
+   "insee_code": "60082",
+   "name": "Bonneuil-les-Eaux",
+   "department": "60",
+   "lat": 49.6818,
+   "lon": 2.2395
+  }
+ ]
+}

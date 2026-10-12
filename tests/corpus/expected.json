@@ -1,0 +1,137 @@
+{
+ "filings": {
+  "010504": {
+   "category": "bess",
+   "flags": [],
+   "read": "text",
+   "values": {
+    "category": "bess",
+    "commune": "Aubenton",
+    "department": "02",
+    "developer": "APAL MW",
+    "energy_mwh": 200.0,
+    "filed_on": "2026-01-05",
+    "power_mw": 100.0,
+    "power_mw_min": 100.0,
+    "review_decision": "not_subject",
+    "siret": "82497277200027",
+    "substation": "Les Hoquins"
+   }
+  },
+  "013439": {
+   "category": "public_grid",
+   "flags": [],
+   "read": "text",
+   "values": {
+    "category": "public_grid",
+    "commune": "Sequedin",
+    "department": "59",
+    "developer": "ENEDIS",
+    "energy_mwh": null,
+    "filed_on": "2026-02-10",
+    "power_mw": null,
+    "power_mw_min": null,
+    "review_decision": "pending",
+    "siret": "44460844202691",
+    "substation": "SEQUEDIN"
+   }
+  },
+  "2024-8339": {
+   "category": "unclassified",
+   "flags": [
+    "category_undecided"
+   ],
+   "read": "text",
+   "values": {
+    "category": "unclassified",
+    "commune": "Bonneuil-les-Eaux",
+    "department": "60",
+    "developer": "Réseau de transport d’électricité (RTE)",
+    "energy_mwh": null,
+    "filed_on": "2024-10-16",
+    "power_mw": null,
+    "power_mw_min": null,
+    "review_decision": "not_subject",
+    "siret": null,
+    "substation": null
+   }
+  },
+  "2024-8532": {
+   "category": "renewable_substation",
+   "flags": [],
+   "read": "text",
+   "values": {
+    "category": "renewable_substation",
+    "commune": "Courcelles-sur-Vesle",
+    "department": "02",
+    "developer": null,
+    "energy_mwh": null,
+    "filed_on": "2024-12-31",
+    "power_mw": null,
+    "power_mw_min": null,
+    "review_decision": "not_subject",
+    "siret": null,
+    "substation": "CHEMIN DE VAILLY"
+   }
+  },
+  "2025-8646": {
+   "category": "bess",
+   "flags": [
+    "missing"
+   ],
+   "read": "text",
+   "values": {
+    "category": "bess",
+    "commune": "Bonningues-lès-Calais",
+    "department": "62",
+    "developer": "CS 116",
+    "energy_mwh": null,
+    "filed_on": "2025-02-18",
+    "power_mw": null,
+    "power_mw_min": null,
+    "review_decision": "not_subject",
+    "siret": null,
+    "substation": "Mandarins"
+   }
+  },
+  "2025-8982": {
+   "category": "storage_substation",
+   "flags": [
+    "form_flattened"
+   ],
+   "read": "text",
+   "values": {
+    "category": "storage_substation",
+    "commune": "La Capelle",
+    "department": "02",
+    "developer": "IB VOGT France",
+    "energy_mwh": 260.0,
+    "filed_on": "2025-07-04",
+    "power_mw": 130.0,
+    "power_mw_min": 130.0,
+    "review_decision": "not_subject",
+    "siret": null,
+    "substation": "La Capelle"
+   }
+  },
+  "2025-9111": {
+   "category": "renewable_substation",
+   "flags": [],
+   "read": "text",
+   "values": {
+    "category": "renewable_substation",
+    "commune": "Couvrelles",
+    "department": "02",
+    "developer": "European Energy",
+    "energy_mwh": null,
+    "filed_on": "2025-08-05",
+    "power_mw": 48.54,
+    "power_mw_min": 48.54,
+    "review_decision": "not_subject",
+    "siret": "93062604900017",
+    "substation": "Le Long-Champ"
+   }
+  }
+ },
+ "projects": 3
+}

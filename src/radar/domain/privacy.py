@@ -82,7 +82,11 @@ class PersonScrubber:
     def leaks(self, text: str) -> list[str]:
         """Person data still present in `text` (used by the privacy audit)."""
         found = [m[0] for m in _EMAIL.finditer(text)] + [m[0] for m in _PHONE.finditer(text)]
-        found += [m["name"].strip() for m in _CIVILITY.finditer(text) if MASK not in m["name"]]
+        found += [
+            m["name"].strip()
+            for m in _CIVILITY.finditer(text)
+            if MASK not in m["name"] and not set(fold(m["name"]).split()) <= _LABELS  # « Monsieur Nom Prénom(s) »
+        ]
         if self._pattern is not None:
             found += [m[0] for m in self._pattern.finditer(text)]
         return found
