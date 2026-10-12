@@ -126,6 +126,11 @@ machine output, corrections apply on top) + `Signal` -> `Link` -> `Project` (a g
     Human link verdicts (`LinkDecision`: same_project / related / unrelated) override grouping at every build.
 14. **Web UI** (`web/static/index.html`): one file, no build step, escapes every value (`esc`, `safeUrl`).
     `tests/test_web.py` checks its JavaScript with `node --check`.
+    Design (Dan's rules): never the browser's native select or checkbox look. Every `<select>` is enhanced
+    automatically into the custom dropdown (`enhanceSelect`; the hidden select stays the source of truth); a
+    checkbox is `<label class="cbx"><input type="checkbox" class="sr-only"><span class="box">…svg…</span>text</label>`
+    (modelled on AKA-MEDIAS `portals-shared/src/ui/Checkbox.tsx`). Stripe-like look: small radii (tokens
+    `--r-sm/--r/--r-lg` = 4/6/8 px), thin borders, light shadows, no purple, quiet motion with reduced-motion support.
 
 ## Quality loop (how the system improves) — method in `docs/qualite.md`
 
