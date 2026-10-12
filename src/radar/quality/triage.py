@@ -16,6 +16,7 @@ from datetime import date
 from radar.domain.enums import TARGET_CATEGORIES, Severity
 from radar.domain.fields import machine_values
 from radar.domain.models import Correction, Filing
+from radar.evaluation.fields import same
 from radar.pipeline.corrections import VALIDATED, latest
 from radar.quality.flags import FLAGS
 
@@ -27,6 +28,7 @@ RECENT_DAYS = 120
 UNCERTAIN = 0.9  # calibrated field confidence below this adds doubt
 LOW_CONFIDENCE = 0.6  # ... and below this, the field is named in the reasons
 UNCERTAINTY_WEIGHT = 2.0
+CHANGED_WEIGHT = 2.0  # per machine value changed by a new version and not reviewed since
 
 
 @dataclass
@@ -52,7 +54,13 @@ def stale_fields(filing: Filing, validation: Correction | None) -> list[str]:
     return sorted(k for k in now if k in snapshot and snapshot[k] != now[k])
 
 
-def triage(filings: Iterable[Filing], corrections: Iterable[Correction], today: date) -> list[TriageItem]:
+def triage(
+    filings: Iterable[Filing],
+    corrections: Iterable[Correction],
+    today: date,
+    machine_changes: dict[str, list[dict[str, object]]] | None = None,
+) -> list[TriageItem]:
+    """`machine_changes` (db.machine_changes()): outputs changed by a new version and not reviewed since."""
     by_key: dict[str, list[Correction]] = {}
     for c in corrections:
         by_key.setdefault(c.filing_key, []).append(c)
@@ -75,6 +83,9 @@ def triage(filings: Iterable[Filing], corrections: Iterable[Correction], today: 
             doubt += sum(UNCERTAIN - c for c in uncertain.values()) * UNCERTAINTY_WEIGHT
             if low := sorted((c, n) for n, c in uncertain.items() if c < LOW_CONFIDENCE):
                 item.reasons.append("champs incertains : " + ", ".join(f"{n} ({c:.0%})" for c, n in low))
+        if changed := changed_since_review(f, (machine_changes or {}).get(f.key, [])):
+            doubt += CHANGED_WEIGHT * len(changed)
+            item.reasons.insert(0, "modifié par une nouvelle version : " + " ; ".join(changed))
         stakes = 1.0
         if f.classification.category in TARGET_CATEGORIES:
             stakes += 1.0 + math.log1p(f.power.mw or 0) / 4
@@ -90,3 +101,21 @@ def triage(filings: Iterable[Filing], corrections: Iterable[Correction], today: 
             item.reasons.insert(0, "valeurs modifiées depuis la relecture : " + ", ".join(stale))
         queue.append(item)
     return sorted(queue, key=lambda i: (-i.priority, i.number))
+
+
+def changed_since_review(filing: Filing, changes: list[dict[str, object]]) -> list[str]:
+    """Human-readable machine changes newer than the filing's last review (all of them if never reviewed)."""
+    reviewed = filing.reviewed_at.isoformat() if filing.reviewed_at else ""
+    current = machine_values(filing)
+    return [
+        f"{c['field']} : {c['before'] if c['before'] is not None else '—'} → {c['after'] if c['after'] is not None else '—'}"
+        for c in changes
+        if str(c["at"]) > reviewed and same_or_none(current.get(str(c["field"])), c["after"])
+    ]
+
+
+def same_or_none(a: object, b: object) -> bool:
+    """The recorded change is still the current value (a later change supersedes it)."""
+    if a in (None, "") or b in (None, ""):
+        return a in (None, "") and b in (None, "")
+    return same(a, b)  # type: ignore[arg-type]

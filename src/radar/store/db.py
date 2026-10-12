@@ -68,6 +68,13 @@ _MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE corrections ADD COLUMN cause TEXT;
     ALTER TABLE corrections ADD COLUMN blind INTEGER NOT NULL DEFAULT 0;
     """,
+    """
+    CREATE TABLE machine_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, filing_key TEXT NOT NULL, field TEXT NOT NULL,
+        before TEXT, after TEXT, version TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX machine_changes_filing ON machine_changes(filing_key);
+    """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -316,6 +323,29 @@ class Database:
             "audit_random": row[2],
             "audit_near_miss": row[3],
         }
+
+    # Machine value changes between builds (code or learning changed an output) ----------------------------
+    def add_machine_changes(self, filing_key: str, changes: Iterable[tuple[str, Any, Any]], version: str) -> None:
+        at = utcnow().isoformat()
+        self.conn.executemany(
+            "INSERT INTO machine_changes (at, filing_key, field, before, after, version) VALUES (?, ?, ?, ?, ?, ?)",
+            [(at, filing_key, name, json.dumps(a), json.dumps(b), version) for name, a, b in changes],
+        )
+
+    def machine_changes(self) -> dict[str, list[dict[str, Any]]]:
+        """filing key -> its recorded changes, oldest first."""
+        out: dict[str, list[dict[str, Any]]] = {}
+        for r in self.conn.execute("SELECT * FROM machine_changes ORDER BY id"):
+            out.setdefault(r["filing_key"], []).append(
+                {
+                    "at": r["at"],
+                    "field": r["field"],
+                    "before": json.loads(r["before"]),
+                    "after": json.loads(r["after"]),
+                    "version": r["version"],
+                }
+            )
+        return out
 
     # Change log -------------------------------------------------------------------------------------
     def add_changes(self, changes: Iterable[ProjectChange]) -> None:

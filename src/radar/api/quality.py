@@ -28,7 +28,7 @@ def quality_overview(db: Database, cases_dir: Path, today: date | None = None) -
     filings, corrections = db.filings(), db.corrections()
     evals = db.runs("eval", limit=TREND_RUNS)
     last = evals[0]["stats"].get("report") if evals else None
-    queue = triage(filings, corrections, today or date.today())
+    queue = triage(filings, corrections, today or date.today(), db.machine_changes())
     reasons = Counter(code for item in queue for code in item.flag_codes)
     errors = analyse(filings, corrections)
     case_status = Counter(status for case in cases.load_all(cases_dir) for status in case.status.values())

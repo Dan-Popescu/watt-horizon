@@ -13,6 +13,7 @@ from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.projects import build_projects
 from radar.quality.arbiter import learn
 from radar.quality.confidence import calibrate
+from radar.quality.shadow import diff_machine
 from radar.store.db import Database, utcnow
 
 
@@ -39,12 +40,15 @@ def process_filings(db: Database, services: Services, only: set[str] | None = No
         if only is not None and key not in only:
             continue
         try:
+            previous = db.filing(key)
             filing = build_filing(key, db.documents(key), services, db.corrections(key))
         except Exception as exc:  # recorded and reported; the run continues
             report.failed[key] = f"{type(exc).__name__}: {exc}"
             continue
         with db.transaction():
             db.upsert_filing(filing)
+            if changed := diff_machine(previous, filing):  # recorded so unreviewed changes reach the review queue
+                db.add_machine_changes(key, changed, filing.versions.get("extraction", ""))
         report.processed += 1
         cat = filing.classification.category.value
         report.by_category[cat] = report.by_category.get(cat, 0) + 1

@@ -29,7 +29,7 @@ def review_items(db: Database, labels: dict[str, GoldLabel], today: date | None 
     for c in all_corrections:
         corrections.setdefault(c.filing_key, []).append(c)
     filings = db.filings()
-    queue = {t.key: t for t in triage(filings, all_corrections, today or date.today())}
+    queue = {t.key: t for t in triage(filings, all_corrections, today or date.today(), db.machine_changes())}
     items = []
     for f in filings:
         item = _item(db, f, labels.get(f.number), corrections.get(f.key, []))

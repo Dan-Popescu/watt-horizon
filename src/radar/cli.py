@@ -38,7 +38,7 @@ from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import read_documents
 from radar.pipeline.health import collector_health
 from radar.pipeline.run import link_and_build, process_filings
-from radar.quality import cases, errors, improve, propagate
+from radar.quality import cases, errors, improve, propagate, shadow
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
 from radar.sources import dreal, georisques, mrae, prefectures, press, registry
@@ -301,7 +301,7 @@ def cmd_health(args: argparse.Namespace, s: Settings) -> Any:
 def cmd_triage(args: argparse.Namespace, s: Settings) -> Any:
     """The review queue: filings to look at first, with reasons (see quality/triage.py)."""
     with Database(s.db_path) as db:
-        queue = triage(db.filings(), db.corrections(), date.today())
+        queue = triage(db.filings(), db.corrections(), date.today(), db.machine_changes())
     return {"queue": len(queue), "items": queue[: args.limit]}
 
 
@@ -362,6 +362,25 @@ def cmd_aliases(_: argparse.Namespace, s: Settings) -> Any:
     merged = propagate.merge(propagate.Aliases.load(s.aliases_path), learned)
     merged.save(s.aliases_path)
     return {"path": str(s.aliases_path), "aliases": {k: len(v) for k, v in merged.table.items()}, "next": "radar run"}
+
+
+def cmd_shadow(args: argparse.Namespace, s: Settings) -> Any:
+    """Dry run of the current code on every stored filing: what would change, judged against verified values."""
+    with Database(s.db_path) as db:
+        report = shadow.shadow(db, make_services(s, make_http(s)), set(args.only) if args.only else None)
+    order = {"breaks": 0, "fixes": 1, "changes-wrong-to-wrong": 2, "unknown": 3, "unchanged-verdict": 4}
+    changes = sorted(report.changes, key=lambda c: (order.get(c.verdict, 9), c.field, c.number))
+    lines = ["# Shadow run: effect of the current code on every filing", "", f"Summary: `{report.summary}`", ""]
+    lines += ["| verdict | case | field | stored | new |", "| --- | --- | --- | --- | --- |"]
+    lines += [f"| {c.verdict} | {c.number} | {c.field} | `{c.before}` | `{c.after}` |" for c in changes]
+    path = s.data_dir / "improve" / "shadow.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8", newline="\n")
+    result: dict[str, Any] = {**report.summary, "report": str(path), "failed": report.failed}
+    breaks = [f"{c.number}:{c.field}" for c in changes if c.verdict == "breaks"]
+    if args.strict and breaks:
+        result["error"] = "the current code breaks verified values: " + ", ".join(breaks)
+    return result
 
 
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
@@ -442,6 +461,9 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--strict", action="store_true", help="check: exit 2 on any regression")
     imp = sub.add_parser("improve", help="agent-ready tickets per failing field, with validated rule candidates")
     imp.add_argument("--field", help="only this field")
+    sh = sub.add_parser("shadow", help="dry run on the whole corpus: changed values, fixes / breaks vs verified")
+    sh.add_argument("--only", nargs="*", help="filing keys")
+    sh.add_argument("--strict", action="store_true", help="exit 2 if a verified value would break")
     al = sub.add_parser("aliases", help="learn verified name spellings from corrections (gold/aliases.json)")
     al.add_argument("action", choices=["export"])
     tri = sub.add_parser("triage", help="review queue: what a human should check first, and why")
@@ -486,6 +508,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "cases": cmd_cases,
     "improve": cmd_improve,
     "aliases": cmd_aliases,
+    "shadow": cmd_shadow,
 }
 
 
