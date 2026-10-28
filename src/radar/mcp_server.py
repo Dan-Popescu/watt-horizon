@@ -32,7 +32,7 @@ storage_substation, datacenter. Departments are codes like "59", "2A"."""
 
 def build_server(db_path: Path | str) -> MCPServer:
     db_path = Path(db_path)
-    mcp = MCPServer("radar-raccordement", instructions=INSTRUCTIONS, version="0.1.0")
+    mcp = MCPServer("watt-horizon", instructions=INSTRUCTIONS, version="0.1.0")
 
     def run(fn: Callable[[Database], T]) -> T:
         if not db_path.exists():

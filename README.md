@@ -1,8 +1,8 @@
-# Radar Raccordement
+# WattHorizon
 
 Repérer tôt les projets qui vont demander un raccordement au réseau électrique (batteries géantes, data centers), à partir de documents publics, avec une preuve pour chaque information.
 
-Statut : POC limité aux Hauts-de-France, échantillon de données gelé au 2026-10-12. Prêt à déployer, pas encore déployé.
+Statut : prototype limité aux Hauts-de-France, échantillon gelé au 2026-10-12. Non déployé ; la précision métier reste à valider. Voir les [priorités de fiabilisation](docs/roadmap.md).
 
 ## Ce que ça fait
 
@@ -14,10 +14,16 @@ Statut : POC limité aux Hauts-de-France, échantillon de données gelé au 2026
 6. **Projets et nouveautés** : regroupement des dossiers et des signaux, puis journal de ce qui change à chaque mise à jour (projet nouveau, puissance modifiée, décision rendue…).
 7. **Accès** : une carte web, des exports CSV et GeoJSON, et MCP pour les agents IA. Tout est en lecture seule.
 
+## Développer en local ou dans Codex Cloud
+
+Le dépôt contient le code, les tests et un petit corpus de PDF caviardés. Les données de travail dans `data/` et les secrets restent locaux. **Les tests fonctionnent sans clé API ni nouvelle collecte.**
+
+Installation et reprise : [docs/developpement.md](docs/developpement.md).
+
 ## Démarrer
 
 ```bash
-uv sync --all-extras
+uv sync --frozen --all-extras
 ```
 
 ```bash
@@ -43,8 +49,8 @@ La carte est alors sur http://127.0.0.1:8765. Avec `RADAR_OFFLINE=1`, rien n'est
   - l'OCR ;
   - le tri ;
   - les données personnelles.
-- `radar web --review` ouvre la page de **relecture**, en usage interne. Chaque dossier validé ou corrigé devient une référence vérifiée. Les corrections l'emportent sur la machine, et la machine reste mesurée telle quelle.
-- `radar review export` sauvegarde les corrections et les décisions sur les liens dans `gold/`, qui est versionné.
+- `radar web --review` ouvre la page de **relecture**, en usage interne. Chaque dossier validé ou corrigé devient une référence vérifiée. Les corrections l'emportent sur la machine ; les limites connues de l'évaluation sont détaillées dans la feuille de route.
+- `radar review export` sauvegarde les corrections et les décisions sur les liens dans `gold/`. Ces exports internes restent locaux dans ce dépôt public ; sauvegarder aussi la base de travail.
 - En relecture, « voir dans le PDF » montre la page d'origine avec la valeur surlignée, et le mode « Liens entre dossiers » fait confirmer ou séparer les projets.
 
 - À chaque construction de dossier, des **signalements** repèrent les cas suspects. La file de relecture (`radar triage`) les présente en premier, avec la raison.
@@ -71,6 +77,9 @@ Les six outils sont en lecture seule :
 | `what_changed` | Nouveautés depuis une date (alertes). |
 
 ## Pour aller plus loin
+
+- [docs/developpement.md](docs/developpement.md) : installation reproductible et travail en local ou dans le Cloud.
+- [docs/roadmap.md](docs/roadmap.md) : défauts connus et prochaines priorités.
 
 - [docs/architecture.md](docs/architecture.md) : architecture et choix techniques.
 - [docs/deploiement.md](docs/deploiement.md) : mise en ligne, tâche quotidienne, sauvegardes.

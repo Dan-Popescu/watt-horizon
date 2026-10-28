@@ -14,6 +14,10 @@ dependencies = [
 [project.optional-dependencies]
 llm = ["anthropic>=1.13,<2"]
 
+[project.urls]
+Repository = "https://github.com/Dan-Popescu/watt-horizon"
+Issues = "https://github.com/Dan-Popescu/watt-horizon/issues"
+
 [project.scripts]
 radar = "radar.cli:main"
 

@@ -51,7 +51,7 @@ relecture humaine (radar web --review)  ──►  références vérifiées  ─
 | Client HTTP poli et surveillance des collecteurs | Une requête par seconde et par site, au plus. `radar health` signale une source bloquée, muette depuis plusieurs passages ou arrêtée. |
 | MCP, API JSON et carte branchés sur `api/queries.py` | Une seule logique de requête pour tout le monde. Le MCP fonctionne en local (stdio) et à distance (HTTP). |
 | Journal des changements | Ce que paie un client, c'est l'alerte : « nouveau projet », « puissance modifiée », « décision rendue ». |
-| Références dans `gold/`, versionnées dans git | Le travail de relecture humaine ne doit jamais se perdre avec une base reconstruite. |
+| Références caviardées versionnées ; base et exports de relecture sauvegardés séparément | Préserver le travail humain sans publier les données internes dans le dépôt public. |
 
 ## État mesuré (2026-10-12, Hauts-de-France, hors ligne)
 

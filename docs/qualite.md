@@ -57,4 +57,4 @@ collecte ─► dossiers + signalements ─► file de relecture ─► correcti
 2. `radar errors` : prendre le groupe d'erreurs le plus gros, corriger la règle et ajouter un test.
 3. `radar cases export`, puis `radar cases check`, puis `radar eval --strict` : aucune régression, des cas ouverts qui passent à « corrigés ».
 4. `radar screen-terms suggest` et `radar rules list` : adopter ce qui est proposé et sûr, écarter le reste.
-5. `radar review export` : les corrections et les décisions sur les liens sont sauvegardées dans `gold/`.
+5. `radar review export` : les corrections et les décisions sur les liens sont sauvegardées localement dans `gold/`. Conserver ces exports et la base dans une sauvegarde privée ; seuls les exemples caviardés vont dans le dépôt public.

@@ -103,7 +103,7 @@ def load_settings() -> Settings:
         llm_model=os.environ.get("RADAR_LLM_MODEL") or None,
         use_tesseract=_flag("RADAR_TESSERACT", True),
         user_agent=os.environ.get(
-            "RADAR_USER_AGENT", "radar-raccordement/0.1 (+polite crawler; one request per second per host)"
+            "RADAR_USER_AGENT", "watt-horizon/0.1 (+polite crawler; one request per second per host)"
         ),
         api_token=os.environ.get("RADAR_API_TOKEN") or None,
         llm_fast_model=os.environ.get("RADAR_LLM_FAST_MODEL") or None,

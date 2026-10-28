@@ -9,3 +9,10 @@ __pycache__/
 dist/
 *.egg-info/
 .env
+
+# Local secrets and internal review exports (public repository)
+.env.*
+!.env.example
+/gold/corrections.jsonl
+/gold/link_decisions.jsonl
+.codex/*.local.*

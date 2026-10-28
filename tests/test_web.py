@@ -21,7 +21,7 @@ def client(loaded_db: Database) -> TestClient:
 
 
 def test_pages_and_api(client: TestClient) -> None:
-    assert "Radar Raccordement" in client.get("/").text
+    assert "WattHorizon" in client.get("/").text
     projects = client.get("/api/projects", params={"category": "bess"}).json()
     assert [p["commune"] for p in projects] == ["Aubenton"]
     assert client.get("/api/projects", params={"min_mw": 500}).json() == []
@@ -65,7 +65,7 @@ def test_mcp_over_http(loaded_db: Database) -> None:
     with TestClient(build_app(loaded_db.path), base_url=LOCAL) as client:  # `with` runs the MCP lifespan
         response = client.post("/mcp", json=init, headers=headers)
         assert response.status_code == 200, response.text
-        assert "radar-raccordement" in response.text
+        assert "watt-horizon" in response.text
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

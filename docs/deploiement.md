@@ -51,7 +51,7 @@ docker compose run --rm update
 
 ## Sauvegarde
 
-Il suffit de copier le volume `/data` chaque nuit. Les corrections humaines s'exportent aussi dans `gold/corrections.jsonl` (`radar review export`), qui est versionné dans git. Une base perdue se reconstruit à partir de `blobs/` avec `radar run`, sans nouvelle collecte.
+Il suffit de copier le volume `/data` chaque nuit. Les corrections humaines s'exportent aussi dans `gold/corrections.jsonl` (`radar review export`), qui reste local et doit être sauvegardé dans un espace privé. Une base perdue se reconstruit à partir de `blobs/` avec `radar run`, sans nouvelle collecte.
 
 ## Vérifications automatiques
 

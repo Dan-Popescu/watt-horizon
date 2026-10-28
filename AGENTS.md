@@ -1,9 +1,16 @@
-# AGENTS.md
+# WattHorizon — agent instructions
 
 Early detection of French grid-connection projects (battery storage "BESS", data centers) from public filings.
 Output: a SQLite dataset of evidence-backed projects, served read-only over MCP (stdio and HTTP), a JSON API and a map;
 a measured quality loop (evaluation + human review) improves it over time.
 Human docs (French): `README.md`, `docs/architecture.md`, `docs/deploiement.md`, `demo/`. This file is the agent contract.
+
+## Repository and handoff
+
+- Public repository: `https://github.com/Dan-Popescu/watt-horizon`. The Python package, CLI and environment prefix remain `radar` / `RADAR_*`.
+- Fresh checkout or Cloud setup: read `docs/developpement.md`; run `bash .codex/setup.sh`. Offline tests use the bundled redacted corpus; local `data/` is not required.
+- Quality work: read `docs/roadmap.md` before claiming production readiness or relying on calibration and evaluation. Its confirmed audit findings are open, not implemented fixes.
+- Public commits contain code and sanitized fixtures only. Keep raw data, secrets and reviewer exports local; back up the database separately.
 
 ## Commands
 
@@ -34,7 +41,7 @@ uv run radar robustness                  # metamorphic check: text perturbations
 uv run radar corpus build|snapshot        # redacted real-PDF corpus (tests/corpus), replayed by the tests
 uv run radar mcp                          # MCP server, stdio
 uv run radar update                       # scheduled job: polite collect of recent items + run (network!)
-docker build -t radar-raccordement .      # production image (see compose.yaml); also runs the OCR evaluation
+docker build -t watt-horizon .      # application image (see compose.yaml)
 ```
 
 Never run `collect`/`update` unless the task explicitly asks for new data: collection hits public sites.
@@ -52,7 +59,7 @@ Definition of done: format + ruff + mypy strict + pytest green, and `radar run` 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `RADAR_DATA_DIR` | `data` | state: `radar.sqlite`, `blobs/`, `transcripts/`, `cache/` (lookups, `derived.sqlite`), `reference/`, `exports/` |
-| `RADAR_GOLD_DIR` | `gold` | versioned references: `labels.jsonl`, `fields.jsonl`, `corrections.jsonl`, `link_decisions.jsonl`, adopted `rules.json` / `screen_terms.json` / `aliases.json` / `templates.json` (human work: in git) |
+| `RADAR_GOLD_DIR` | `gold` | versioned references: `labels.jsonl`, `fields.jsonl`, `corrections.jsonl`, `link_decisions.jsonl`, adopted `rules.json` / `screen_terms.json` / `aliases.json` / `templates.json` (curated references: in git; raw review exports: local) |
 | `RADAR_OFFLINE` | `0` | `1` = no network at all: no HTTP, no LLM; lookups from cache + reference files only |
 | `RADAR_LLM_MODEL` | unset | e.g. `claude-opus-5-5`: enables LLM classification + fallback extraction (extra `llm` + `ANTHROPIC_API_KEY`) |
 | `RADAR_LLM_FAST_MODEL` | unset | e.g. `claude-haiku-5-5`: classify with it first, escalate to the main model when doubtful; also runs the pre-review. Switch on only after `radar eval --classifier` shows no loss |
@@ -63,7 +70,7 @@ Definition of done: format + ruff + mypy strict + pytest green, and `radar run` 
 | `RADAR_API_TOKEN` | unset | `radar web`: require `Authorization: Bearer <token>` on `/api/*` and `/mcp`; mandatory off localhost |
 
 `data/` is git-ignored and rebuildable from `blobs/` (content-addressed raw files are the source of truth), except the
-corrections table: export it (`radar review export`) to keep human work in git.
+corrections table: back up the database and export it (`radar review export`) to private storage. Raw reviewer exports are ignored by this public repository.
 
 ## Data flow (one direction, each layer imports only the ones above it)
 

@@ -25,5 +25,5 @@ jobs:
     needs: check
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t radar-raccordement .
-      - run: docker run --rm radar-raccordement radar --help
+      - run: docker build -t watt-horizon .
+      - run: docker run --rm watt-horizon radar --help

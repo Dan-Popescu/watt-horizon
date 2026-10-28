@@ -103,7 +103,7 @@ def _headline(d: Digest) -> str:
 
 
 def render_text(d: Digest) -> str:
-    lines = [f"Radar Raccordement — {d.scope} — depuis le {_fr_date(d.since)}", _headline(d), ""]
+    lines = [f"WattHorizon — {d.scope} — depuis le {_fr_date(d.since)}", _headline(d), ""]
     for p in d.new_projects:
         s = p.summary
         lines += [
@@ -168,12 +168,12 @@ def render_html(d: Digest) -> str:
     )
     return f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Radar Raccordement — {escape(d.scope)}</title></head>
+<title>WattHorizon — {escape(d.scope)}</title></head>
 <body style="margin:0;background:#eef1f5">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef1f5"><tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:12px;overflow:hidden">
 <tr><td style="padding:22px 16px 6px;font:14px/1.5 Arial,Helvetica,sans-serif;color:#18202c">
-  <div style="font-size:12px;color:#5d6778;text-transform:uppercase;letter-spacing:.05em">Radar Raccordement · {escape(d.scope)}</div>
+  <div style="font-size:12px;color:#5d6778;text-transform:uppercase;letter-spacing:.05em">WattHorizon · {escape(d.scope)}</div>
   <div style="font-size:22px;font-weight:bold;margin:4px 0">Depuis le {escape(_fr_date(d.since))}</div>
   <div style="font-size:15px">{escape(_headline(d))}</div>{cta}
 </td></tr>
