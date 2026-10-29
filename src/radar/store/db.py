@@ -461,21 +461,28 @@ class Database:
         return result
 
     def replace_links(self, links: Iterable[Link]) -> None:
-        rows = [(lk.a, lk.b, lk.model_dump_json()) for lk in links]
-        self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS next_links (a TEXT, b TEXT, PRIMARY KEY(a, b))")
+        """Stage one relation at a time, then publish the complete differential atomically.
+
+        The caller owns the transaction. SQLite stages the full result; Python never
+        retains a second collection of all keys and serialized relations.
+        """
+        self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS next_links (a TEXT, b TEXT, data TEXT, PRIMARY KEY(a, b))")
         self.conn.execute("DELETE FROM next_links")
-        self.conn.executemany("INSERT OR IGNORE INTO next_links VALUES (?, ?)", [(a, b) for a, b, _ in rows])
+        self.conn.executemany(
+            "INSERT INTO next_links (a, b, data) VALUES (?, ?, ?) ON CONFLICT(a, b) DO UPDATE SET data=excluded.data",
+            ((link.a, link.b, link.model_dump_json()) for link in links),
+        )
         before = self.conn.total_changes
         self.conn.execute(
             "DELETE FROM links WHERE NOT EXISTS (SELECT 1 FROM next_links n WHERE n.a=links.a AND n.b=links.b)"
         )
-        self.conn.executemany(
-            "INSERT INTO links (a, b, data) VALUES (?, ?, ?) "
+        self.conn.execute(
+            "INSERT INTO links (a, b, data) SELECT a, b, data FROM next_links WHERE true "
             "ON CONFLICT(a, b) DO UPDATE SET data=excluded.data WHERE links.data <> excluded.data",
-            rows,
         )
         if self.conn.total_changes != before:
             self.conn.execute("UPDATE dataset_state SET links_revision=links_revision+1 WHERE id=1")
+        self.conn.execute("DELETE FROM next_links")
 
     def link_revision(self) -> int:
         return int(self.conn.execute("SELECT links_revision FROM dataset_state WHERE id=1").fetchone()[0])
