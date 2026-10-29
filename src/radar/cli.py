@@ -68,7 +68,7 @@ from radar.quality.suggest import suggest
 from radar.quality.templates import Registry
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
-from radar.sources import dreal, georisques, mrae, prefectures, press, registry
+from radar.sources import coverage, dreal, georisques, mrae, prefectures, press, registry
 from radar.sources.regions import get_region
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
@@ -131,10 +131,27 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
     run_id = db.start_run(f"collect:{source}")
     try:
         if source == "dreal":
-            listings = tuple(args.listing) if args.listing else region.dreal_listings[:2]
+            backfill = bool(getattr(args, "backfill", False))
+            listings = (
+                tuple(args.listing)
+                if args.listing
+                else region.dreal_listings
+                if backfill
+                else region.dreal_listings[:2]
+            )
             terms = ScreenTerms.load(s.screen_terms_path).pattern()
             report = dreal.collect_dreal(
-                http, db, blobs, region, listings, args.max_offset, args.max_items, screen_terms=terms
+                http,
+                db,
+                blobs,
+                region,
+                listings,
+                args.max_offset,
+                args.max_items,
+                screen_terms=terms,
+                backfill=backfill,
+                max_pages=args.max_pages,
+                restart=bool(getattr(args, "restart", False)),
             )
         elif source == "mrae":
             report = mrae.collect_mrae(http, db, blobs, region, args.year, args.max_items)
@@ -156,8 +173,19 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
 
 
 def cmd_collect(args: argparse.Namespace, s: Settings) -> Any:
+    if args.backfill and args.source != "dreal":
+        raise ValueError("--backfill is supported for DREAL only; MRAe uses explicitly configured annual pages")
+    if args.restart and not args.backfill:
+        raise ValueError("--restart requires --backfill")
     with _require_http(s) as http, Database(s.db_path) as db:
         return _collect_one(args.source, args, s, http, db)
+
+
+def cmd_coverage(args: argparse.Namespace, s: Settings) -> Any:
+    with Database(s.db_path) as db:
+        return coverage.inventory(
+            db, get_region(args.region), args.years or coverage.default_years(), stale_days=args.stale_days
+        )
 
 
 UPDATE_SOURCES = ("dreal", "mrae", "registry", "press")  # prefectures: opt-in only (they blocked us once)
@@ -824,11 +852,26 @@ def build_parser() -> argparse.ArgumentParser:
     col.add_argument("source", choices=["dreal", "mrae", "georisques", "registry", "press", "prefectures"])
     col.add_argument("--region", default="hauts-de-france")
     col.add_argument("--listing", action="append", help="DREAL listing page (repeatable); default: two most recent")
+    col.add_argument(
+        "--backfill", action="store_true", help="DREAL: resume bounded historical scan of all configured listings"
+    )
+    col.add_argument(
+        "--restart", action="store_true", help="with --backfill: restart the archive scan to revisit older pages"
+    )
     col.add_argument("--max-offset", type=int, default=400, help="DREAL: last pagination offset (8 articles per page)")
     col.add_argument("--max-items", type=int, default=None)
-    col.add_argument("--max-pages", type=int, default=30, help="prefectures: page budget per site")
+    col.add_argument(
+        "--max-pages", type=int, default=30, help="page budget per prefecture site or DREAL backfill listing"
+    )
     col.add_argument("--year", type=int, default=date.today().year)
     col.add_argument("--since", default=f"{date.today().year - 2}-01-01", help="registry: creation date lower bound")
+
+    cov = sub.add_parser(
+        "coverage", help="offline coverage inventory: configured, missing, partial and stale source scopes"
+    )
+    cov.add_argument("--region", default="hauts-de-france")
+    cov.add_argument("--years", nargs="+", type=int, help="years to inventory; default: current and previous")
+    cov.add_argument("--stale-days", type=int, default=7)
 
     upd = sub.add_parser("update", help="scheduled job: collect recent items (polite), then run")
     upd.add_argument(
@@ -984,6 +1027,7 @@ def build_parser() -> argparse.ArgumentParser:
 COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "import": cmd_import,
     "collect": cmd_collect,
+    "coverage": cmd_coverage,
     "update": cmd_update,
     "process": cmd_process,
     "link": cmd_link,

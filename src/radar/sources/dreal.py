@@ -4,16 +4,19 @@ Lessons: listing titles are truncated « (…) », so screening titles is only a
 pre-2025 archive takes ~30 s per page on the server side, so cap it with `max_offset`.
 """
 
+import hashlib
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from radar.domain.enums import SourceKind
 from radar.domain.ids import normalize_filing_number
-from radar.net.http import PoliteHttp
+from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline.ingest import ingest_pdf
 from radar.quality.audit import decide
 from radar.sources.base import CollectReport
+from radar.sources.coverage import listing_period, load_scope
 from radar.sources.html import links
 from radar.sources.regions import Region
 from radar.store.blobs import BlobStore
@@ -63,41 +66,98 @@ def collect_dreal(
     max_offset: int,
     max_articles: int | None = None,
     screen_terms: re.Pattern[str] | None = None,
+    *,
+    backfill: bool = False,
+    max_pages: int = 30,
+    restart: bool = False,
 ) -> CollectReport:
     """Screen titles (layer 1), download the PDFs of kept articles and of the audit sample, ingest them. Idempotent.
     Every listed item is recorded (`listing_items`) so the screen's recall can be estimated later."""
+    if max_offset < 0 or max_pages <= 0 or (max_articles is not None and max_articles <= 0):
+        raise ValueError("Collection budgets must be positive (max-offset may be zero)")
     report = CollectReport()
     for listing in listings:
-        for article in iter_articles(http, region, listing, max_offset):
-            report.seen += 1
-            kept, audit = decide(article.title, article.url, extra=screen_terms)
-            with db.transaction():
-                db.record_listing_item(article.url, SourceKind.DREAL_CASE_BY_CASE.value, article.title, kept, audit)
-            if not kept and audit is None:
-                continue
-            if max_articles is not None and report.kept + report.audited >= max_articles:
-                return report
-            report.kept += kept
-            report.audited += audit is not None
-            for pdf_url in parse_article_pdfs(http.get_text(article.url), article.url):
-                filename = pdf_url.rsplit("/", 1)[-1]
-                number = normalize_filing_number(filename) or normalize_filing_number(article.title)
-                if number is None:
-                    report.errors.append(f"no filing number: {pdf_url}")
-                    continue
-                data = http.get_bytes(pdf_url)
-                with db.transaction():
-                    ingest_pdf(
-                        db,
-                        blobs,
-                        data=data,
-                        source=SourceKind.DREAL_CASE_BY_CASE,
-                        region=region.slug,
-                        number=number,
-                        url=pdf_url,
-                        title=article.title,
-                        filename=filename,
-                        audit=audit,
-                    )
-                report.documents += 1
+        scope = load_scope(
+            db, "dreal", region.slug, listing_period(listing), listing, "historical" if backfill else "recent"
+        )
+        scope.save(db, "running")
+        try:
+            first = http.get_text(region.dreal_base + listing)
+            signature = hashlib.sha256(
+                "\n".join(a.url for a in parse_listing(first, region.dreal_base)).encode()
+            ).hexdigest()
+            if not backfill or restart or scope.signature != signature:
+                scope.next_offset, scope.pages, scope.completed_at = 0, 0, None
+            scope.signature = signature
+            last = last_offset(first)
+            pages_this_run = 0
+            while scope.next_offset <= last:
+                offset = scope.next_offset
+                if (backfill and pages_this_run >= max_pages) or (not backfill and offset > max_offset):
+                    scope.save(db, "partial", "page_budget")
+                    break
+                page = (
+                    first
+                    if offset == 0
+                    else http.get_text(f"{region.dreal_base}{listing}?{urlencode({'debut_listearticles': offset})}")
+                )
+                articles = parse_listing(page, region.dreal_base)
+                if not articles:
+                    scope.save(db, "partial", "empty_or_unrecognized_listing")
+                    report.errors.append(f"empty or unrecognized listing: {listing} offset {offset}")
+                    break
+                errors_before = len(report.errors)
+                for article in articles:
+                    report.seen += 1
+                    kept, audit = decide(article.title, article.url, extra=screen_terms)
+                    with db.transaction():
+                        db.record_listing_item(
+                            article.url, SourceKind.DREAL_CASE_BY_CASE.value, article.title, kept, audit
+                        )
+                    if not kept and audit is None:
+                        continue
+                    if max_articles is not None and report.kept + report.audited >= max_articles:
+                        scope.save(db, "partial", "item_budget")
+                        return report
+                    report.kept += kept
+                    report.audited += audit is not None
+                    pdfs = parse_article_pdfs(http.get_text(article.url), article.url)
+                    if not pdfs:
+                        report.errors.append(f"no recognized document: {article.url}")
+                    for pdf_url in pdfs:
+                        filename = pdf_url.rsplit("/", 1)[-1]
+                        number = normalize_filing_number(filename) or normalize_filing_number(article.title)
+                        if number is None:
+                            report.errors.append(f"no filing number: {pdf_url}")
+                            continue
+                        data = http.get_bytes(pdf_url)
+                        with db.transaction():
+                            ingest_pdf(
+                                db,
+                                blobs,
+                                data=data,
+                                source=SourceKind.DREAL_CASE_BY_CASE,
+                                region=region.slug,
+                                number=number,
+                                url=pdf_url,
+                                title=article.title,
+                                filename=filename,
+                                audit=audit,
+                            )
+                        report.documents += 1
+                if len(report.errors) != errors_before:
+                    scope.save(db, "partial", "document_errors")
+                    break
+                scope.next_offset += PAGE_SIZE
+                scope.pages += 1
+                pages_this_run += 1
+                scope.save(db, "complete" if scope.next_offset > last else "partial")
+            else:
+                scope.save(db, "complete", refresh_completion=pages_this_run > 0)
+        except SiteBlockedError as exc:
+            scope.save(db, "blocked", str(exc))
+            raise
+        except Exception as exc:
+            scope.save(db, "failed", str(exc))
+            raise
     return report

@@ -208,6 +208,15 @@ _MIGRATIONS: tuple[str, ...] = (
     END;
     """,
 )
+_MIGRATIONS += (
+    """
+    CREATE TABLE collection_coverage (
+        source TEXT NOT NULL, region TEXT NOT NULL, period TEXT NOT NULL, scope TEXT NOT NULL,
+        mode TEXT NOT NULL, data TEXT NOT NULL,
+        PRIMARY KEY(source, region, period, scope, mode)
+    );
+    """,
+)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 
@@ -718,6 +727,19 @@ class Database:
         return {pair: d for pair, d in latest.items() if d.verdict != "undecided"}
 
     # Listing items: every item a collector saw (kept or not), for unbiased screen-recall estimates ---------
+    def save_collection_coverage(self, data: dict[str, Any]) -> None:
+        self.conn.execute(
+            "INSERT INTO collection_coverage(source,region,period,scope,mode,data) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(source,region,period,scope,mode) DO UPDATE SET data=excluded.data",
+            (*[data[k] for k in ("source", "region", "period", "scope", "mode")], json.dumps(data)),
+        )
+
+    def collection_coverage(self, region: str | None = None) -> list[dict[str, Any]]:
+        sql, args = "SELECT data FROM collection_coverage", () if region is None else (region,)
+        if region is not None:
+            sql += " WHERE region=?"
+        return [json.loads(row[0]) for row in self.conn.execute(sql + " ORDER BY source,period,scope,mode", args)]
+
     def record_listing_item(self, url: str, source: str, title: str, kept: bool, audit: str | None) -> None:
         self.conn.execute(
             "INSERT INTO listing_items (url, source, title, kept, audit, first_seen, audit_policy) "

@@ -15,6 +15,7 @@ from radar.domain.ids import sha256
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline.ingest import ingest_pdf
 from radar.sources.base import CollectReport
+from radar.sources.coverage import Coverage, load_scope
 from radar.sources.html import links
 from radar.sources.regions import Region
 from radar.store.blobs import BlobStore
@@ -66,9 +67,14 @@ def crawl_site(http: PoliteHttp, department: str, site_root: str, max_pages: int
 def collect_prefectures(
     http: PoliteHttp, db: Database, blobs: BlobStore, region: Region, max_pages_per_site: int
 ) -> CollectReport:
+    if max_pages_per_site <= 0:
+        raise ValueError("max-pages must be positive")
     report = CollectReport()
+    scope: Coverage | None = None
     try:
         for dep, root in region.prefectures.items():
+            scope = load_scope(db, "prefectures", region.slug, "all", root, "restricted")
+            scope.save(db, "running")
             for c in crawl_site(http, dep, root, max_pages_per_site):
                 report.kept += 1
                 data = http.get_bytes(c.pdf_url, min_interval_s=MIN_INTERVAL_S)
@@ -86,6 +92,13 @@ def collect_prefectures(
                         filename=c.pdf_url.rsplit("/", 1)[-1],
                     )
                 report.documents += 1
+            scope.save(db, "partial", "restricted_navigation_or_page_budget")
     except SiteBlockedError as exc:
+        if scope is not None:
+            scope.save(db, "blocked", str(exc))
         report.stopped = str(exc)  # shared platform: stop for every prefecture, retry another day
+    except Exception as exc:
+        if scope is not None:
+            scope.save(db, "failed", str(exc))
+        raise
     return report

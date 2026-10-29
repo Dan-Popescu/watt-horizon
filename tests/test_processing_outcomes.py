@@ -198,7 +198,7 @@ def test_processing_outcomes_migrate_additively_and_obey_caller_transaction(tmp_
             connection.executescript(migration)
         connection.execute("PRAGMA user_version=12")
     with Database(path) as db:
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 13
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         with pytest.raises(RuntimeError, match="abort"), db.transaction():
             db.note_processing_outcome("case", "running")
             raise RuntimeError("abort")
