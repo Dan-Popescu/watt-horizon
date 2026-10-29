@@ -2,6 +2,11 @@
 
 La lecture structurée des tableaux et le second passage OCR local sont **optionnels** : leur présence ne prouve pas une meilleure précision métier. Ils doivent être comparés sur une campagne humaine vérifiée avant généralisation.
 
+Dans Docker Compose, les services `web` et `update` partagent les mêmes variables et budgets de lecture.
+Les valeurs de `RADAR_PDF_TABLES`, `RADAR_OCR_SECONDARY` et de leurs limites peuvent être renseignées dans
+le fichier privé `.env` ; les deux options restent à `0` par défaut. Les limites générales PDF/OCR sont
+également communes aux traitements et aux aperçus. Recréer le service après une modification de ces variables.
+
 ## Tableaux PDF
 
 `PdfReader(read_tables=True)` reconnaît les tableaux dans le processus PDF isolé déjà soumis à un délai maximal. Les budgets par défaut sont 20 pages tentées, 2 000 lignes et 200 000 caractères de cellules par document ; ils sont configurables. Les pages non traitées ou tronquées restent explicitement signalées dans `table_errors`. Les caches distinguent les politiques et limites de lecture.
