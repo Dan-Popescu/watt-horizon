@@ -15,7 +15,7 @@ La base historique examinée comptait 35 documents, 22 dossiers, 10 projets et a
 - Index de rapprochement, agrégats complets, pagination SQL, rattachements multiples et écritures différentielles.
 - Sauvegarde cohérente WAL, restauration vérifiée, verrou d’écriture et publication de jeux approuvés avec bascule atomique et rollback.
 
-Voir [la spécification de livraison](scalable-quality-pipeline.md) et [l’exploitation](exploitation.md). Les cas denses peuvent produire eux-mêmes un nombre quadratique de liens ; aucun résultat n’est tronqué silencieusement. Le rapprochement conserve des métadonnées proportionnelles aux dossiers et aux liens, et sa capacité réelle reste à mesurer.
+Voir [la spécification de livraison](scalable-quality-pipeline.md) et [l’exploitation](exploitation.md). Les cas denses peuvent produire eux-mêmes un nombre quadratique de liens ; aucun résultat n’est tronqué silencieusement. Les [mesures synthétiques](capacity-measurements-20261029.md) décrivent maintenant des volumes croissants, la pagination complète et le stockage en flux. Le rapprochement conserve des métadonnées proportionnelles aux dossiers et aux liens ; ces mesures locales ne déterminent pas sa capacité réelle en production.
 
 ## Validation métier et exploitation restant à établir
 
@@ -35,7 +35,7 @@ locaux. L'activation réseau du brouillon et les véritables relectures restent 
 1. Annoter des groupes représentatifs des sources, régions, périodes et modalités, avec une part à l’aveugle et une double annotation. Ne pas déduire une validation humaine de la sortie machine.
 2. Mesurer erreurs publiées, faux absents, informations et projets manqués, faux regroupements, coût humain et coût par projet exploitable. Les seuils par défaut de 0,95 et 30 groupes sont des règles sur des observations, pas des garanties statistiques.
 3. Réserver un nouveau test prospectif à des groupes réellement nouveaux, avec un manifeste distinct et une date de première observation réelle. Un ancien test déjà exploité pour régler les règles ne devient pas indépendant par renommage.
-4. Mesurer mémoire, durée, taux de cache, tokens et latence p95 sur des volumes croissants ; choisir l’hébergement, les budgets et la disponibilité avant déploiement. Aucun coût mensuel ni débit de production n’est garanti ici.
+4. Compléter les [mesures de capacité](capacity-measurements-20261029.md) et de [lecture avec cache](mesure-lecture-20261029.md) par des données représentatives, du transport HTTP et des utilisateurs concurrents. Les tokens et les coûts des modèles restent non mesurés sans appels réels autorisés. Choisir l’hébergement, les budgets et la disponibilité avant déploiement ; aucun coût mensuel ni débit de production n’est garanti ici.
 5. Les seconds moteurs OCR, modèles moins chers et nouvelles architectures distribuées restent des décisions à mesurer sur ces références, pas des améliorations supposées.
 
 ## Ordre retenu pour les correctifs

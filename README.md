@@ -72,6 +72,11 @@ du consensus de développement. `radar quality-loop` et le tableau de qualité m
 disponibles. Le [rapport de validation](docs/validation-six-workstreams-20261029.md) distingue les tests, les essais
 locaux et les validations métier restant à effectuer.
 
+Les [mesures de capacité hors ligne](docs/capacity-measurements-20261029.md) et la
+[comparaison des variantes de lecture](docs/mesure-lecture-20261029.md) permettent de reproduire les coûts locaux.
+Le stockage des liens évite désormais une seconde collection complète de JSON en mémoire. Les tableaux et
+le second OCR restent optionnels ; leurs gains métier doivent encore être mesurés sur des références humaines.
+
 ## Brancher un agent (MCP)
 
 Deux façons de se connecter :
