@@ -341,7 +341,10 @@ def discover(
                     and urlparse(target).scheme == "https"
                     and not urlparse(target).query
                     and _html_candidate(target)
-                    and _SECTION.search(f"{target} {label}")
+                    and (
+                        _SECTION.search(f"{target} {label}")
+                        or (source == "mrae" and fold(region.slug) in fold(f"{urlparse(target).path} {label}"))
+                    )
                 ):
                     queue.append(urldefrag(target)[0])
         report["status"] = "partial" if queue or report["link_budget_reached"] else "finished"

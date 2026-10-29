@@ -200,6 +200,20 @@ def test_existing_source_does_not_become_a_pending_candidate(tmp_path: Path) -> 
     assert report["unmatched_years"] == [2024] and report["observed_years"] == [2026]
 
 
+def test_mrae_regional_breadcrumb_can_reveal_older_annual_pages(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.json"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/hauts-de-france-r1.html":
+            return httpx.Response(200, text='<a href="avis-projets-2024-a7.html">Avis rendus sur projets 2024</a>')
+        return httpx.Response(200, text='<a href="hauts-de-france-r1.html">Hauts-de-France</a>')
+
+    with PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http:
+        result = discover(http, path, "hauts-de-france", "mrae", years=(2024,), max_pages=2)
+    assert result["pages"] == 2 and result["new_candidates"] == 1
+    assert load_catalog(path).candidates[0].url == MRAE + "avis-projets-2024-a7.html"
+
+
 def test_adoption_block_is_recorded_without_activating_the_candidate(tmp_path: Path) -> None:
     path = tmp_path / "catalog.json"
 
