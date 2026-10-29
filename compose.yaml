@@ -9,17 +9,42 @@ services:
     volumes: ["radar-data:/data"]
     environment:
       RADAR_API_TOKEN: ${RADAR_API_TOKEN:?set RADAR_API_TOKEN in .env}
+      RADAR_OFFLINE: "1"
+      RADAR_GOLD_DIR: /data/gold
+      RADAR_PUBLISHED_DIR: ${RADAR_PUBLISHED_DIR:-}
     command: ["radar", "web", "--host", "0.0.0.0", "--port", "8765", "--public-host", "${RADAR_PUBLIC_HOST:-localhost}"]
     restart: unless-stopped
+    init: true
+    cpus: ${RADAR_WEB_CPUS:-1.0}
+    mem_limit: ${RADAR_WEB_MEMORY:-512m}
+    pids_limit: 128
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
 
   update:
     image: watt-horizon
     profiles: ["jobs"]
-    volumes: ["radar-data:/data"]
+    volumes: ["radar-data:/data", "radar-backups:/backups"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       RADAR_LLM_MODEL: ${RADAR_LLM_MODEL:-}
+      RADAR_GOLD_DIR: /data/gold
+      RADAR_LLM_DAILY_BUDGET_USD: ${RADAR_LLM_DAILY_BUDGET_USD:-0}
+      RADAR_LLM_CAMPAIGN_BUDGET_USD: ${RADAR_LLM_CAMPAIGN_BUDGET_USD:-0}
+      RADAR_LLM_FILING_BUDGET_USD: ${RADAR_LLM_FILING_BUDGET_USD:-0}
+      RADAR_LLM_PRICING_PATH: ${RADAR_LLM_PRICING_PATH:-/data/llm-pricing.json}
+      RADAR_PDF_WORKERS: ${RADAR_PDF_WORKERS:-2}
+      RADAR_PDF_MAX_BYTES: ${RADAR_PDF_MAX_BYTES:-26214400}
+      RADAR_PDF_MAX_PAGES: ${RADAR_PDF_MAX_PAGES:-300}
+      RADAR_PDF_BATCH_BYTES: ${RADAR_PDF_BATCH_BYTES:-67108864}
+      RADAR_OCR_MAX_PAGES: ${RADAR_OCR_MAX_PAGES:-50}
+      RADAR_OCR_MAX_PIXELS: ${RADAR_OCR_MAX_PIXELS:-20000000}
     command: ["radar", "update"]
+    init: true
+    cpus: ${RADAR_JOB_CPUS:-2.0}
+    mem_limit: ${RADAR_JOB_MEMORY:-2g}
+    pids_limit: 256
 
 volumes:
   radar-data:
+  radar-backups:

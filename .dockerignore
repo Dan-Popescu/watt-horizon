@@ -2,6 +2,10 @@
 .venv
 data
 .env
+.env.*
+gold/corrections.jsonl
+gold/link_decisions.jsonl
+.codex/*.local.*
 **/__pycache__
 .mypy_cache
 .pytest_cache

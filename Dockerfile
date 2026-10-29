@@ -19,9 +19,12 @@ COPY src ./src
 COPY gold ./gold
 RUN uv sync --frozen --no-dev --extra llm --no-editable
 
-RUN useradd --create-home --uid 10001 radar && mkdir -p /data && chown radar /data
+RUN useradd --create-home --uid 10001 radar \
+ && mkdir -p /data/gold /backups \
+ && cp -a /app/gold/. /data/gold/ \
+ && chown -R radar:radar /data /backups
 USER radar
-ENV RADAR_DATA_DIR=/data PYTHONUNBUFFERED=1
+ENV RADAR_DATA_DIR=/data RADAR_GOLD_DIR=/data/gold PYTHONUNBUFFERED=1
 VOLUME ["/data"]
 EXPOSE 8765
 
