@@ -50,6 +50,8 @@ def review_items(db: Database, labels: dict[str, GoldLabel], today: date | None 
                     "reasons": t.reasons,
                     "stale_review": t.stale_review,
                     "second_review": t.second_review,
+                    "pending_fields": t.pending_fields,
+                    "audit_fields": t.audit_fields,
                 }
             )
         items.append(item)

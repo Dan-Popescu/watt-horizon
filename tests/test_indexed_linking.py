@@ -7,6 +7,7 @@ from radar.domain.enums import SignalKind, SourceKind
 from radar.domain.models import Filing, Location, Power, Signal
 from radar.linking.linker import propose_links
 from radar.linking.registry import commissioned
+from radar.linking.resolve import group_filings
 
 
 def filing(key: str, **values: object) -> Filing:
@@ -87,3 +88,12 @@ def test_registry_matching_keeps_strict_rules_and_closest_power() -> None:
         installation("best", "12345", "11", date(2026, 1, 1)),
     ]
     assert commissioned([record], signals)["f"].key == "best"
+
+
+def test_dense_grouping_preserves_every_filing_and_human_separation() -> None:
+    records = [filing(str(i), developer="ALPHA", location=Location(commune="Méru")) for i in range(2000)]
+    groups = group_filings(records)
+    assert len(groups) == 1 and len(groups[0]) == 2000
+    separated = group_filings(records[:3], cannot=[("0", "1")])
+    assert len(separated) == 2
+    assert not any({"0", "1"} <= {item.key for item in group} for group in separated)

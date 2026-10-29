@@ -6,6 +6,7 @@ Inspect:         uv run mcp dev src/radar/mcp_server.py
 Each tool opens its own short-lived database connection (SQLite connections are not shared across threads).
 """
 
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
@@ -15,7 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from radar.api import queries
-from radar.api.views import ChangeView, DatasetInfo, ProjectDetail, ProjectSummary, ZoneSummary
+from radar.api.views import ChangeView, DatasetInfo, ProjectDetail, ProjectPage, ProjectSummary, ZoneSummary
 from radar.config import load_settings
 from radar.store.db import Database
 
@@ -30,18 +31,20 @@ then call `get_project` for sources, quotes and checks. `what_changed` lists wha
 storage_substation, datacenter. Departments are codes like "59", "2A"."""
 
 
-def build_server(db_path: Path | str) -> MCPServer:
-    db_path = Path(db_path)
+def build_server(db_path: Path | str | Callable[[], Path]) -> MCPServer:
     mcp = MCPServer("watt-horizon", instructions=INSTRUCTIONS, version="0.1.0")
 
     def run(fn: Callable[[Database], T]) -> T:
-        if not db_path.exists():
-            raise ToolError(f"No database at {db_path}. Run `radar run` first.")
-        with Database(db_path) as db:
-            try:
+        try:
+            selected_path = Path(db_path() if callable(db_path) else db_path)
+            if not selected_path.exists():
+                raise ToolError("No database available. Run radar run before serving data.")
+            with Database(selected_path, read_only=True) as db:
                 return fn(db)
-            except ValueError as exc:  # invalid category, etc.
-                raise ToolError(str(exc)) from exc
+        except ValueError as exc:  # invalid category, etc.
+            raise ToolError(str(exc)) from exc
+        except (sqlite3.Error, OSError) as exc:
+            raise ToolError("Dataset temporarily unavailable") from exc
 
     @mcp.tool(annotations=READ_ONLY)
     def dataset_info() -> DatasetInfo:
@@ -74,6 +77,38 @@ def build_server(db_path: Path | str) -> MCPServer:
                 min_mw=min_mw,
                 since=since,
                 limit=limit,
+            )
+        )
+
+    @mcp.tool(annotations=READ_ONLY)
+    def project_page(
+        category: str | None = None,
+        department: str | None = None,
+        commune: str | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+        radius_km: float = 20.0,
+        min_mw: float | None = None,
+        since: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ProjectPage:
+        """Page through all matching projects using next_cursor with the same filters. Totals cover every match."""
+        return run(
+            lambda db: queries.project_page(
+                db,
+                category=category,
+                department=department,
+                commune=commune,
+                lat=lat,
+                lon=lon,
+                radius_km=radius_km,
+                min_mw=min_mw,
+                since=since,
+                query=query,
+                limit=limit,
+                cursor=cursor,
             )
         )
 

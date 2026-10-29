@@ -46,7 +46,7 @@ def group_filings(
 
     def union(i: int, j: int) -> None:
         ri, rj = root(i), root(j)
-        if ri == rj or any((x, y) in forbidden for x in members[ri] for y in members[rj]):
+        if ri == rj or (forbidden and any((x, y) in forbidden for x in members[ri] for y in members[rj])):
             return
         parent[ri] = rj
         members[rj] |= members.pop(ri)

@@ -1,6 +1,9 @@
 """Read-only queries over the database. Pure functions of (Database, arguments) -> view models."""
 
-from collections import Counter
+import base64
+import hashlib
+import json
+import math
 from collections.abc import Iterable
 from datetime import date, datetime
 
@@ -12,6 +15,7 @@ from radar.api.views import (
     EvidenceView,
     FieldChangeView,
     ProjectDetail,
+    ProjectPage,
     ProjectSummary,
     RelatedView,
     ZoneSummary,
@@ -19,7 +23,7 @@ from radar.api.views import (
 from radar.domain.enums import TARGET_CATEGORIES, Category, ChangeKind
 from radar.domain.geo import haversine_km
 from radar.domain.models import Project, ProjectChange
-from radar.store.db import Database
+from radar.store.db import Database, ProjectFilters
 
 MAX_LIMIT = 200
 COVERAGE = "Prototype : Hauts-de-France (DREAL cas par cas 2025-2026 + échantillon 2024), signaux registre et presse."
@@ -73,21 +77,106 @@ def search_projects(
     since: str | None = None,
     limit: int = 50,
 ) -> list[ProjectSummary]:
-    near = (lat, lon, radius_km) if lat is not None and lon is not None else None
-    rows = db.projects(categories=_categories(category), department=department, near=near, min_mw=min_mw, since=since)
-    out: list[ProjectSummary] = []
-    for p in rows:
-        if commune and (p.location.commune or "").lower() != commune.lower():
-            continue
-        distance = None
-        if near and p.location.lat is not None and p.location.lon is not None:
-            distance = haversine_km(near[0], near[1], p.location.lat, p.location.lon)
-            if distance > radius_km:
-                continue
-        out.append(_summary(p, distance))
-    if near:
-        out.sort(key=lambda s: s.distance_km if s.distance_km is not None else 1e9)
-    return out[: max(1, min(limit, MAX_LIMIT))]
+    near = _near(lat, lon, radius_km)
+    rows = db.projects(
+        categories=_categories(category),
+        department=department,
+        near=near,
+        min_mw=min_mw,
+        since=_parse_since(since) if since else None,
+        commune=commune,
+        limit=max(1, min(limit, MAX_LIMIT)),
+    )
+    return [_summary(p, _distance(p, near)) for p in rows]
+
+
+def _near(lat: float | None, lon: float | None, radius: float) -> tuple[float, float, float] | None:
+    if lat is None and lon is None:
+        return None
+    if lat is None or lon is None or not all(math.isfinite(v) for v in (lat, lon, radius)):
+        raise ValueError("Latitude, longitude et rayon doivent être des nombres finis")
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180 or radius < 0:
+        raise ValueError("Coordonnées ou rayon hors limites")
+    return lat, lon, radius
+
+
+def _distance(project: Project, near: tuple[float, float, float] | None) -> float | None:
+    if near is None or project.location.lat is None or project.location.lon is None:
+        return None
+    return haversine_km(near[0], near[1], project.location.lat, project.location.lon)
+
+
+def project_page(
+    db: Database,
+    *,
+    category: str | None = None,
+    categories: list[str] | None = None,
+    department: str | None = None,
+    commune: str | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+    radius_km: float = 20.0,
+    min_mw: float | None = None,
+    since: str | None = None,
+    query: str | None = None,
+    bounds: tuple[float, float, float, float] | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+) -> ProjectPage:
+    """Bounded, stable keyset pages; complete totals are independent of the displayed page."""
+    near = _near(lat, lon, radius_km)
+    if min_mw is not None and not math.isfinite(min_mw):
+        raise ValueError("La puissance doit être un nombre fini")
+    if bounds is not None:
+        west, south, east, north = bounds
+        if not all(math.isfinite(v) for v in bounds) or not (
+            -180 <= west <= east <= 180 and -90 <= south <= north <= 90
+        ):
+            raise ValueError("Zone géographique invalide")
+    filters: ProjectFilters = {
+        "categories": sorted({Category(c).value for c in categories})
+        if categories is not None
+        else sorted(_categories(category)),
+        "department": department,
+        "commune": commune,
+        "near": near,
+        "min_mw": min_mw,
+        "since": _parse_since(since) if since else None,
+        "query": query,
+        "bounds": bounds,
+    }
+    identity = hashlib.sha256(
+        json.dumps([filters, db.project_revision(), str(db.path.resolve())], sort_keys=True).encode()
+    ).hexdigest()[:24]
+    after: tuple[float | None, str] | None = None
+    if cursor:
+        try:
+            if len(cursor) > 2048:
+                raise ValueError
+            value, key, previous = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+            if (
+                previous != identity
+                or not isinstance(key, str)
+                or (value is not None and (not isinstance(value, (float, int)) or not math.isfinite(value)))
+            ):
+                raise ValueError
+            if near and value is None:
+                raise ValueError
+            after = value, key
+        except (ValueError, TypeError, UnicodeError) as exc:
+            raise ValueError("Curseur invalide pour ces filtres") from exc
+    size = max(1, min(limit, MAX_LIMIT))
+    rows = db.projects(**filters, limit=size + 1, after=after)
+    more = len(rows) > size
+    shown = rows[:size]
+    next_cursor = None
+    if more and shown:
+        last = shown[-1]
+        rank = _distance(last, near) if near else last.power.mw
+        next_cursor = base64.urlsafe_b64encode(json.dumps([rank, last.id, identity]).encode()).decode()
+    return ProjectPage(
+        items=[_summary(p, _distance(p, near)) for p in shown], next_cursor=next_cursor, **db.project_stats(**filters)
+    )
 
 
 def list_projects(db: Database, *, category: str | None = None, department: str | None = None) -> list[ProjectSummary]:
@@ -103,9 +192,10 @@ def get_project(db: Database, project_id: str) -> ProjectDetail | None:
     if filing is None:
         return None
     docs = {d.id: d for d in db.documents(filing.key)}
-    signals = {s.key: s for s in db.signals()}
+    links = db.links(filing.key)
+    signals = {s.key: s for s in db.signals(lk.b if lk.a == filing.key else lk.a for lk in links)}
     related: list[RelatedView] = []
-    for link in db.links(filing.key):
+    for link in links:
         other = link.b if link.a == filing.key else link.a
         if other in signals:
             s = signals[other]
@@ -150,26 +240,32 @@ def get_project(db: Database, project_id: str) -> ProjectDetail | None:
 
 
 def zone_pressure(db: Database, lat: float, lon: float, radius_km: float = 15.0) -> ZoneSummary:
-    projects = search_projects(db, lat=lat, lon=lon, radius_km=radius_km, limit=MAX_LIMIT)
+    page = project_page(db, lat=lat, lon=lon, radius_km=radius_km, limit=MAX_LIMIT)
     return ZoneSummary(
         lat=lat,
         lon=lon,
         radius_km=radius_km,
-        project_count=len(projects),
-        known_power_mw=round(sum(p.power_mw or 0 for p in projects), 1),
-        projects_without_power=sum(1 for p in projects if p.power_mw is None),
-        by_category=dict(Counter(p.category for p in projects)),
-        projects=projects,
+        project_count=page.total,
+        known_power_mw=page.known_power_mw,
+        projects_without_power=page.projects_without_power,
+        by_category=page.by_category,
+        projects=page.items,
+        next_cursor=page.next_cursor,
     )
 
 
 def projects_near_substation(db: Database, substation: str, limit: int = 50) -> list[ProjectSummary]:
-    return [_summary(p) for p in db.projects(categories=_categories(None), substation=substation)][:limit]
+    return [
+        _summary(p)
+        for p in db.projects(categories=_categories(None), substation=substation, limit=max(1, min(limit, MAX_LIMIT)))
+    ]
 
 
 def dataset_info(db: Database) -> DatasetInfo:
     runs = {kind: info["finished_at"] for kind, info in db.last_runs().items()}
-    return DatasetInfo(counts=db.counts(), last_runs=runs, coverage=COVERAGE, caveats=CAVEATS)
+    return DatasetInfo(
+        counts=db.counts(), last_runs=runs, coverage=COVERAGE, caveats=CAVEATS, departments=db.project_departments()
+    )
 
 
 FIELD_LABELS_FR = {

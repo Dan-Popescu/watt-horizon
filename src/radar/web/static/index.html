@@ -587,7 +587,8 @@ document.querySelectorAll("select").forEach(enhanceSelect);
 
 const isoDaysAgo = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
 
-const state = { projects: [], cats: new Set(Object.keys(CATEGORIES)), dep: "", minMw: null, q: "", selected: null };
+const state = { projects: [], cats: new Set(Object.keys(CATEGORIES)), dep: "", minMw: null, q: "", selected: null,
+  page: null, nextCursor: null, pageParams: "", viewport: false };
 
 // --- API (an optional bearer token is asked once and kept in this browser) -------------------------
 function token() { try { return localStorage.getItem("radar-token"); } catch { return null; } }
@@ -624,12 +625,12 @@ function renderFilters() {
   $("cats").innerHTML = Object.entries(CATEGORIES).map(([k, label]) =>
     `<button class="chip ${state.cats.has(k) ? "" : "off"}" data-cat="${k}"><span class="dot" style="background:${COLORS[k]}"></span>${label}</button>`).join(" ");
   document.querySelectorAll("[data-cat]").forEach((b) => b.onclick = () => {
-    const k = b.dataset.cat; state.cats.has(k) ? state.cats.delete(k) : state.cats.add(k); refresh();
+    const k = b.dataset.cat; state.cats.has(k) ? state.cats.delete(k) : state.cats.add(k); queueProjects(); refresh();
   });
 }
-$("dep").onchange = (e) => { state.dep = e.target.value; refresh(true); };
-$("minmw").oninput = (e) => { state.minMw = e.target.value === "" ? null : Number(e.target.value); refresh(); };
-$("q").oninput = (e) => { state.q = e.target.value; refresh(); };
+$("dep").onchange = (e) => { state.dep = e.target.value; queueProjects(); refresh(); };
+$("minmw").oninput = (e) => { state.minMw = e.target.value === "" ? null : Number(e.target.value); queueProjects(); refresh(); };
+$("q").oninput = (e) => { state.q = e.target.value; queueProjects(); refresh(); };
 
 function exportQuery() {
   const p = new URLSearchParams();
@@ -641,11 +642,12 @@ function exportQuery() {
 // --- KPIs and list ---------------------------------------------------------------------------
 function renderKpis(rows) {
   const known = rows.filter((p) => p.power_mw != null && p.power_status === "known");
+  const totals = state.page;
   const kpis = [
-    [rows.length, "projets"],
-    [num(known.reduce((s, p) => s + p.power_mw, 0)) + " MW", "puissance déclarée"],
-    [rows.filter((p) => p.power_mw == null).length, "sans puissance"],
-    [rows.filter((p) => p.confidence === "review").length, "à vérifier"],
+    [totals ? totals.total : rows.length, "projets"],
+    [num(totals ? totals.declared_power_mw : known.reduce((s, p) => s + p.power_mw, 0)) + " MW", "puissance déclarée"],
+    [totals ? totals.projects_without_power : rows.filter((p) => p.power_mw == null).length, "sans puissance"],
+    [totals ? totals.projects_to_review : rows.filter((p) => p.confidence === "review").length, "à vérifier"],
   ];
   $("kpis").innerHTML = kpis.map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
 }
@@ -660,9 +662,18 @@ function card(p) {
 }
 function renderList(rows) {
   const sorted = [...rows].sort((a, b) => (b.power_mw || 0) - (a.power_mw || 0));
-  $("panel").innerHTML = `<div class="panel-head"><b>${rows.length} projet${rows.length > 1 ? "s" : ""}</b><span class="sub">tri : puissance</span></div>
-    <div class="cards">${sorted.map(card).join("") || '<div class="empty">Aucun projet avec ces filtres.</div>'}</div>`;
+  const total = state.page ? state.page.total : rows.length;
+  $("panel").innerHTML = `<div class="panel-head"><b>${rows.length} affichés sur ${num(total)}</b><span class="sub">${state.viewport ? "zone visible" : "tous les lieux"}</span></div>
+    <div class="panel-head"><button class="btn" id="project-scope">${state.viewport ? "Tous les lieux" : "Limiter à la carte"}</button></div>
+    <div class="cards">${sorted.map(card).join("") || '<div class="empty">Aucun projet avec ces filtres.</div>'}
+      ${state.nextCursor && rows.length < 1000 ? '<button class="btn" id="project-more">Afficher les suivants</button>' : ""}
+      ${state.nextCursor && rows.length >= 1000 ? '<div class="empty">Affinez la zone ou les filtres pour voir les autres projets.</div>' : ""}</div>`;
   document.querySelectorAll(".card[data-id]").forEach((el) => el.onclick = () => select(el.dataset.id));
+  $("project-scope").onclick = () => { state.viewport = !state.viewport; queueProjects(); refresh(); };
+  $("project-more")?.addEventListener("click", (event) => {
+    event.target.disabled = true;
+    reloadProjects(true).catch((error) => { event.target.disabled = false; toast(error.message); });
+  });
 }
 
 // --- Detail ----------------------------------------------------------------------------------
@@ -775,6 +786,10 @@ function addLayers() {
 }
 map.on("load", addLayers);
 map.on("style.load", () => { addLayers(); refresh(); });
+map.on("moveend", (event) => {
+  if (event.originalEvent) state.viewport = true;
+  if (state.viewport) queueProjects();
+});
 
 function fit(rows) {
   const pts = rows.filter((p) => p.lat != null);
@@ -1011,9 +1026,10 @@ function rvFields(it) {
   return RV_FIELDS.map(([name, label, type]) => {
     const current = name === "category" ? it.category : str(it.values[name]);
     const c = it.field_confidence[CONF_OF[name] || name];
-    return { name, label, type, current, value: name in rvDraft ? rvDraft[name] : current, c,
+    const pending = (it.pending_fields || []).includes(name), audit = (it.audit_fields || []).includes(name);
+    return { name, label, type, current, value: name in rvDraft ? rvDraft[name] : current, c, pending, audit,
       machine: name === "category" ? it.machine_category : str(it.machine_values[name]),
-      ev: it.evidence[EVIDENCE_OF[name] || name], sure: name !== "category" && isSure(it, name) && !(name in rvDraft) };
+      ev: it.evidence[EVIDENCE_OF[name] || name], sure: !pending && !audit && name !== "category" && isSure(it, name) && !(name in rvDraft) };
   });
 }
 function rvInput(f, blind) {
@@ -1030,7 +1046,7 @@ function rvRow(f, idx, blind) {
   const conf = blind || f.c === undefined ? "" : `<span class="cdot c-${f.c >= 0.9 ? "high" : f.c >= 0.6 ? "mid" : "low"}" title="confiance ${pct(f.c)}"></span>`;
   const edit = focus && !editing && !blind ? '<button class="btn small ghost" data-edit>modifier</button>' : "";
   return `<div class="fx ${focus ? "focus" : ""} ${f.name in rvDraft ? "edited" : ""}" data-fx="${idx}" data-name="${f.name}">
-    <span class="fx-l">${esc(f.label)}</span><span class="fx-v">${editing ? rvInput(f, blind) : fmt(f.name, f.value) + was}</span><span class="fx-c">${edit}${conf}</span></div>`;
+    <span class="fx-l">${esc(f.label)}${f.audit ? ' <span class="tag review">audit</span>' : f.pending ? ' <span class="sub">à relire</span>' : ""}</span><span class="fx-v">${editing ? rvInput(f, blind) : fmt(f.name, f.value) + was}</span><span class="fx-c">${edit}${conf}</span></div>`;
 }
 function rvCard(it) {
   const blind = blindFor(it), fs = rvFields(it);
@@ -1043,7 +1059,7 @@ function rvCard(it) {
   const drafted = Object.keys(rvDraft).length;
   const tags = [
     it.second_review ? `<span class="tag review">${it.corrections.some((c) => c.author === author()) ? "2e relecture : pour un autre relecteur" : "2e relecture, à l'aveugle"}</span>` : "",
-    it.reviewed_at && !it.second_review ? `<span class="tag high">relu le ${esc(frDate(it.reviewed_at.slice(0, 10)))}</span>` : "",
+    it.reviewed_at && !it.second_review ? `<span class="tag ${it.pending_fields?.length ? "review" : "high"}">${it.pending_fields?.length ? "relecture partielle" : "relu"} le ${esc(frDate(it.reviewed_at.slice(0, 10)))}</span>` : "",
   ].join("");
   const reasons = blind ? [] : it.reasons;
   const docs = it.documents.map((d) => `<a href="${safeUrl(d.url)}" target="_blank" rel="noopener" title="${esc(d.read_by)}">${esc(d.role)}</a>`).join(" · ");
@@ -1272,7 +1288,39 @@ async function renderLinks() {
   });
 }
 
-async function reloadProjects() { state.projects = await api("api/projects"); refresh(); }
+let projectRequest = 0, projectTimer = null;
+function queueProjects() {
+  projectRequest += 1;
+  state.page = null;
+  state.nextCursor = null;
+  clearTimeout(projectTimer);
+  projectTimer = setTimeout(() => reloadProjects().catch((error) => toast(error.message)), 300);
+}
+async function reloadProjects(append = false) {
+  clearTimeout(projectTimer);
+  const request = ++projectRequest;
+  const params = append ? new URLSearchParams(state.pageParams) : new URLSearchParams({ limit: "200", categories: [...state.cats].sort().join(",") });
+  if (append) {
+    if (!state.nextCursor) return;
+    params.set("cursor", state.nextCursor);
+  } else {
+    if (state.dep) params.set("department", state.dep);
+    if (state.minMw != null) params.set("min_mw", state.minMw);
+    if (state.q.trim()) params.set("q", state.q.trim());
+    if (state.viewport) {
+      const b = map.getBounds();
+      const west = Math.max(-180, b.getWest()), east = Math.min(180, b.getEast());
+      if (west <= east) params.set("bbox", [west, Math.max(-90, b.getSouth()), east, Math.min(90, b.getNorth())].join(","));
+    }
+    state.pageParams = params.toString();
+  }
+  const page = await api("api/projects/page?" + params);
+  if (request !== projectRequest) return;
+  state.projects = append ? [...state.projects, ...page.items] : page.items;
+  state.page = page;
+  state.nextCursor = page.next_cursor;
+  refresh();
+}
 
 // --- Quality dashboard (internal mode) ----------------------------------------------------------------
 const pct = (x) => (x === null || x === undefined ? "—" : Math.round(x * 100) + " %");
@@ -1371,8 +1419,8 @@ async function init() {
     setTimeout(() => { e.target.textContent = "Copier la configuration"; }, 2000);
   };
   try {
-    const [info, projects, recent] = await Promise.all([api("api/info"), api("api/projects"), api("api/changes?since=" + isoDaysAgo(7))]);
-    state.projects = projects;
+    const [info, recent] = await Promise.all([api("api/info"), api("api/changes?since=" + isoDaysAgo(7))]);
+    await reloadProjects();
     $("coverage").textContent = info.coverage;
     const COUNT_LABELS = { projects: "projets", filings: "dossiers", documents: "documents", signals: "signaux", links: "rapprochements", project_changes: "changements suivis", corrections: "corrections" };
     const RUN_LABELS = { collect: "collecte", process: "lecture des dossiers", link: "rapprochements", eval: "évaluation" };
@@ -1382,7 +1430,7 @@ async function init() {
       <div class="eyebrow">À savoir</div><ul class="todo">${info.caveats.map((c) => `<li><span>${esc(c)}</span></li>`).join("")}</ul>
       <div class="eyebrow">Dernières mises à jour</div><ul class="todo">${Object.entries(info.last_runs).map(([k, v]) =>
         `<li><span>${esc(RUN_LABELS[k.split(":")[0]] || k)}${k.includes(":") ? " · " + esc(k.split(":")[1]) : ""}</span><span class="sub">${esc(frDate((v || "").slice(0, 10)))} à ${esc((v || "").slice(11, 16))} UTC</span></li>`).join("")}</ul>`;
-    const deps = [...new Set(projects.map((p) => p.department).filter(Boolean))].sort();
+    const deps = info.departments || [];
     regionDeps = deps;
     const inRegion = ["in", ["get", "code"], ["literal", regionDeps]];
     ["region-fill", "region-line"].forEach((id) => map.getLayer(id) && map.setFilter(id, inRegion));

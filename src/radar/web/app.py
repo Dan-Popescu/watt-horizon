@@ -8,6 +8,7 @@ If `token` is set, every route except / and /healthz requires `Authorization: Be
 import contextlib
 import hmac
 import json
+import sqlite3
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -24,14 +25,16 @@ from starlette.staticfiles import StaticFiles
 
 from radar.api import exports, queries
 from radar.api.review import link_items, review_items, submit_link_decision, submit_review
+from radar.api.views import ProjectPage
 from radar.classification.gold import GoldLabel
+from radar.pipeline.operations import ProcessBusyError, operational_status, process_lock
 from radar.pipeline.run import link_and_build
 from radar.quality import pageview, propagate
 from radar.store.db import Database
 
 STATIC = Path(__file__).parent / "static"
 # No project data there; the page asks for the token on the first 401.
-PUBLIC_PATHS = frozenset({"/", "/healthz"})
+PUBLIC_PATHS = frozenset({"/", "/healthz", "/livez"})
 PUBLIC_PREFIX = "/static/"
 NO_STORE = {"Cache-Control": "no-store"}
 
@@ -67,7 +70,7 @@ Rebuild = Callable[[Database, str], None]  # re-process one filing (applies corr
 
 
 def build_app(
-    db_path: Path | str,
+    db_path: Path | str | Callable[[], Path],
     *,
     token: str | None = None,
     with_mcp: bool = True,
@@ -80,15 +83,25 @@ def build_app(
     `review`: enables the internal review endpoints (rebuild function, draft gold labels loader).
     `quality`: enables the internal quality dashboard endpoint (/api/quality).
     `document`: PDF bytes by document id; with `review`, enables the highlighted evidence page (review only)."""
-    db_path = Path(db_path)
 
-    def endpoint(fn: Callable[[Database, Request], Any]) -> Callable[[Request], Response]:
+    def dataset_path() -> Path:
+        return Path(db_path() if callable(db_path) else db_path)
+
+    def endpoint(fn: Callable[[Database, Request], Any], *, write: bool = False) -> Callable[[Request], Response]:
         def handle(request: Request) -> Response:
-            if not db_path.exists():
-                return _json({"error": f"No database at {db_path}. Run `radar run` first."}, 503)
             try:
-                with Database(db_path) as db:
+                selected_path = dataset_path()
+                if not selected_path.exists():
+                    return _json({"error": "Base absente : lancez radar run avant de servir les données"}, 503)
+                with (
+                    process_lock(selected_path.parent) if write else contextlib.nullcontext(),
+                    Database(selected_path, read_only=not write) as db,
+                ):
                     result = fn(db, request)
+            except ProcessBusyError:
+                return _json({"error": "Traitement en cours, réessayez dans quelques instants"}, 503)
+            except (sqlite3.Error, OSError):
+                return _json({"error": "Base temporairement indisponible"}, 503)
             except ValueError as exc:  # bad category, date or number
                 return _json({"error": str(exc)}, 400)
             return result if isinstance(result, Response) else _json(result)
@@ -100,10 +113,38 @@ def build_app(
         return detail if detail is not None else _json({"error": "unknown project_id"}, 404)
 
     def projects(db: Database, request: Request) -> Any:
+        page = project_page(db, request)
+        response = _json(page.items)
+        response.headers["X-Total-Count"] = str(page.total)
+        if page.next_cursor:
+            response.headers["X-Next-Cursor"] = page.next_cursor
+            response.headers["Link"] = f'<{request.url.include_query_params(cursor=page.next_cursor)}>; rel="next"'
+        return response
+
+    def project_page(db: Database, request: Request) -> ProjectPage:
         q = request.query_params
-        rows = queries.list_projects(db, category=q.get("category") or None, department=q.get("department") or None)
-        min_mw = _optional_float(request, "min_mw")
-        return [p for p in rows if min_mw is None or (p.power_mw or 0) >= min_mw]
+        bounds = None
+        if q.get("bbox"):
+            values = tuple(float(value) for value in q["bbox"].split(","))
+            if len(values) != 4:
+                raise ValueError("Zone géographique invalide")
+            bounds = (values[0], values[1], values[2], values[3])
+        return queries.project_page(
+            db,
+            category=q.get("category") or None,
+            categories=q["categories"].split(",") if q.get("categories") else ([] if "categories" in q else None),
+            department=q.get("department") or None,
+            commune=q.get("commune") or None,
+            lat=_optional_float(request, "lat"),
+            lon=_optional_float(request, "lon"),
+            radius_km=float(q.get("radius_km", "20")),
+            min_mw=_optional_float(request, "min_mw"),
+            since=q.get("since") or None,
+            query=q.get("q") or None,
+            bounds=bounds,
+            limit=int(q.get("limit", "200")),
+            cursor=q.get("cursor") or None,
+        )
 
     def changes(db: Database, request: Request) -> Any:
         q = request.query_params
@@ -152,7 +193,7 @@ def build_app(
             review[0](db, key)
             return next(i for i in review_items(db, review[1]()) if i.key == key)
 
-        return await run_in_threadpool(endpoint(write), request)
+        return await run_in_threadpool(endpoint(write, write=True), request)
 
     def review_links(db: Database, _: Request) -> Any:
         if review is None:
@@ -180,7 +221,7 @@ def build_app(
             link_and_build(db)
             return {"a": decision.a, "b": decision.b, "verdict": decision.verdict}
 
-        return await run_in_threadpool(endpoint(write), request)
+        return await run_in_threadpool(endpoint(write, write=True), request)
 
     def review_suggestions(db: Database, _: Request) -> Any:
         if review is None:
@@ -212,7 +253,7 @@ def build_app(
                 review[0](db, key)
             return {"applied": len(keys)}
 
-        return await run_in_threadpool(endpoint(write), request)
+        return await run_in_threadpool(endpoint(write, write=True), request)
 
     def review_withdraw(db: Database, request: Request) -> Any:
         if review is None:
@@ -256,14 +297,22 @@ def build_app(
         return FileResponse(STATIC / "index.html", headers=NO_STORE)
 
     def healthz(_: Request) -> Response:
+        try:
+            with Database(dataset_path(), read_only=True) as db:
+                db.conn.execute("SELECT 1 FROM projects LIMIT 1").fetchone()
+        except (sqlite3.Error, ValueError, OSError):
+            return PlainTextResponse("not ready", status_code=503)
         return PlainTextResponse("ok")
 
     routes: list[Route | Mount] = [
         Route("/", index),
         Route("/healthz", healthz),
+        Route("/livez", lambda _: PlainTextResponse("ok")),
         Mount("/static", app=StaticFiles(directory=STATIC), name="static"),
         Route("/api/info", endpoint(lambda db, _: queries.dataset_info(db))),
+        Route("/api/status", endpoint(lambda db, _request: operational_status(db.path.parent))),
         Route("/api/projects", endpoint(projects)),
+        Route("/api/projects/page", endpoint(project_page)),
         Route("/api/projects/{project_id}", endpoint(project)),
         Route("/api/changes", endpoint(changes)),
         Route("/api/export.{fmt:str}", endpoint(export)),
@@ -275,7 +324,7 @@ def build_app(
         Route("/api/review/suggestions", endpoint(review_suggestions)),
         Route("/api/review/suggestions/apply", review_propagate, methods=["POST"]),
         Route("/api/review/{key}/evidence/{field}.png", endpoint(evidence_page)),
-        Route("/api/review/corrections/{correction_id:int}", endpoint(review_withdraw), methods=["DELETE"]),
+        Route("/api/review/corrections/{correction_id:int}", endpoint(review_withdraw, write=True), methods=["DELETE"]),
     ]
     lifespan = None
     if with_mcp:

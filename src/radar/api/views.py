@@ -28,6 +28,17 @@ class ProjectSummary(View):
     distance_km: float | None = None
 
 
+class ProjectPage(View):
+    items: list[ProjectSummary]
+    next_cursor: str | None
+    total: int
+    known_power_mw: float
+    declared_power_mw: float
+    projects_without_power: int
+    projects_to_review: int
+    by_category: dict[str, int]
+
+
 class EvidenceView(View):
     field: str
     quote: str
@@ -82,6 +93,7 @@ class ZoneSummary(View):
     projects_without_power: int
     by_category: dict[str, int]
     projects: list[ProjectSummary]
+    next_cursor: str | None = None
 
 
 class DatasetInfo(View):
@@ -89,6 +101,7 @@ class DatasetInfo(View):
     last_runs: dict[str, str]
     coverage: str
     caveats: list[str]
+    departments: list[str] = Field(default_factory=list)
 
 
 class FieldChangeView(View):
@@ -177,3 +190,5 @@ class ReviewItem(View):
     second_review: bool = False  # sampled for a blind second review (double annotation)
     field_confidence: dict[str, float] = Field(default_factory=dict, description="calibrated, per field")
     auto_accepted: list[str] = Field(default_factory=list, description="fields proven reliable enough to skip review")
+    pending_fields: list[str] = Field(default_factory=list, description="fields still awaiting human approval")
+    audit_fields: list[str] = Field(default_factory=list, description="auto-accepted fields sampled for human audit")

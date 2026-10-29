@@ -9,9 +9,9 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, Unpack, cast
 
-from radar.domain.geo import bbox_around
+from radar.domain.geo import bbox_around, haversine_km
 from radar.domain.models import Correction, DocumentRecord, Filing, Link, LinkDecision, Project, ProjectChange, Signal
 from radar.domain.text import fold
 
@@ -82,8 +82,45 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX link_decisions_pair ON link_decisions(a, b);
     """,
+    """
+    CREATE TABLE document_attachments (
+        document_id TEXT NOT NULL REFERENCES documents(id), filing_key TEXT NOT NULL, data TEXT NOT NULL,
+        PRIMARY KEY (document_id, filing_key)
+    );
+    CREATE INDEX document_attachments_filing ON document_attachments(filing_key);
+    INSERT INTO document_attachments (document_id, filing_key, data) SELECT id, filing_key, data FROM documents;
+    """,
+    """
+    ALTER TABLE listing_items ADD COLUMN audit_policy INTEGER NOT NULL DEFAULT 1;
+    """,
+    """
+    CREATE INDEX projects_power_id ON projects(mw DESC, id);
+    CREATE INDEX projects_category_power ON projects(category, mw DESC, id);
+    CREATE INDEX links_b ON links(b);
+    """,
+    """
+    CREATE TABLE dataset_state (id INTEGER PRIMARY KEY CHECK(id = 1), projects_revision INTEGER NOT NULL);
+    INSERT INTO dataset_state VALUES (1, 0);
+    """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
+
+
+class ProjectFilters(TypedDict, total=False):
+    categories: Iterable[str] | None
+    department: str | None
+    near: tuple[float, float, float] | None
+    min_mw: float | None
+    substation: str | None
+    since: str | None
+    commune: str | None
+    query: str | None
+    bounds: tuple[float, float, float, float] | None
+
+
+class ProjectQuery(ProjectFilters, total=False):
+    limit: int | None
+    after: tuple[float | None, str] | None
 
 
 def utcnow() -> datetime:
@@ -91,16 +128,34 @@ def utcnow() -> datetime:
 
 
 class Database:
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, read_only: bool = False) -> None:
         self.path = path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
         # Review edits and the nightly job may write at the same time: wait for the lock instead of failing.
-        self.conn = sqlite3.connect(path, timeout=30)
+        self.conn = (
+            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+            if read_only
+            else sqlite3.connect(path, timeout=30)
+        )
         self.conn.row_factory = sqlite3.Row
+        self.conn.create_function("radar_lower", 1, lambda value: str(value or "").lower(), deterministic=True)
+        self.conn.create_function(
+            "radar_distance",
+            4,
+            lambda a, b, c, d: None if c is None or d is None else haversine_km(a, b, c, d),
+            deterministic=True,
+        )
         self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.execute("PRAGMA journal_mode = WAL")
-        self.conn.execute("PRAGMA synchronous = NORMAL")  # safe with WAL; ~5 ms less per commit
-        self._migrate()
+        if read_only:
+            if self.conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                self.conn.close()
+                raise ValueError("Database schema requires migration before serving reads")
+            self.conn.execute("BEGIN")
+        else:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")  # safe with WAL; ~5 ms less per commit
+            self._migrate()
 
     def close(self) -> None:
         self.conn.close()
@@ -127,18 +182,31 @@ class Database:
     def upsert_document(self, doc: DocumentRecord) -> None:
         self.conn.execute(
             "INSERT INTO documents (id, filing_key, source, url, data) VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET filing_key=excluded.filing_key, url=excluded.url, data=excluded.data",
+            "ON CONFLICT(id) DO NOTHING",
             (doc.id, doc.filing_key, doc.source.value, doc.url, doc.model_dump_json()),
+        )
+        self.conn.execute(
+            "INSERT INTO document_attachments (document_id, filing_key, data) VALUES (?, ?, ?) "
+            "ON CONFLICT(document_id, filing_key) DO UPDATE SET data=excluded.data",
+            (doc.id, doc.filing_key, doc.model_dump_json()),
         )
 
     def documents(self, filing_key: str | None = None) -> list[DocumentRecord]:
-        sql, args = "SELECT data FROM documents", cast(tuple[Any, ...], ())
+        """Document contexts, one per filing attachment; physical file counts remain deduplicated."""
+        sql, args = "SELECT data FROM document_attachments", cast(tuple[Any, ...], ())
         if filing_key is not None:
             sql, args = sql + " WHERE filing_key = ?", (filing_key,)
-        return [DocumentRecord.model_validate_json(r["data"]) for r in self.conn.execute(sql + " ORDER BY id", args)]
+        return [
+            DocumentRecord.model_validate_json(r["data"])
+            for r in self.conn.execute(sql + " ORDER BY document_id, filing_key", args)
+        ]
 
     def filing_keys_with_documents(self) -> list[str]:
-        return [r[0] for r in self.conn.execute("SELECT DISTINCT filing_key FROM documents ORDER BY filing_key")]
+        return list(self.iter_filing_keys_with_documents())
+
+    def iter_filing_keys_with_documents(self) -> Iterator[str]:
+        for row in self.conn.execute("SELECT DISTINCT filing_key FROM document_attachments ORDER BY filing_key"):
+            yield row[0]
 
     # Filings ---------------------------------------------------------------------------------------
     def upsert_filing(self, f: Filing) -> None:
@@ -185,16 +253,32 @@ class Database:
             ),
         )
 
-    def signals(self) -> list[Signal]:
-        return [
-            Signal.model_validate_json(r["data"]) for r in self.conn.execute("SELECT data FROM signals ORDER BY key")
-        ]
+    def signals(self, keys: Iterable[str] | None = None) -> list[Signal]:
+        if keys is None:
+            rows = self.conn.execute("SELECT data FROM signals ORDER BY key")
+            return [Signal.model_validate_json(r["data"]) for r in rows]
+        result: list[Signal] = []
+        selected = sorted(set(keys))
+        for start in range(0, len(selected), 500):
+            chunk = selected[start : start + 500]
+            rows = self.conn.execute(
+                f"SELECT data FROM signals WHERE key IN ({','.join('?' * len(chunk))}) ORDER BY key", chunk
+            )
+            result.extend(Signal.model_validate_json(r["data"]) for r in rows)
+        return result
 
     def replace_links(self, links: Iterable[Link]) -> None:
-        self.conn.execute("DELETE FROM links")
+        rows = [(lk.a, lk.b, lk.model_dump_json()) for lk in links]
+        self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS next_links (a TEXT, b TEXT, PRIMARY KEY(a, b))")
+        self.conn.execute("DELETE FROM next_links")
+        self.conn.executemany("INSERT OR IGNORE INTO next_links VALUES (?, ?)", [(a, b) for a, b, _ in rows])
+        self.conn.execute(
+            "DELETE FROM links WHERE NOT EXISTS (SELECT 1 FROM next_links n WHERE n.a=links.a AND n.b=links.b)"
+        )
         self.conn.executemany(
-            "INSERT OR REPLACE INTO links (a, b, data) VALUES (?, ?, ?)",
-            [(lk.a, lk.b, lk.model_dump_json()) for lk in links],
+            "INSERT INTO links (a, b, data) VALUES (?, ?, ?) "
+            "ON CONFLICT(a, b) DO UPDATE SET data=excluded.data WHERE links.data <> excluded.data",
+            rows,
         )
 
     def links(self, key: str | None = None) -> list[Link]:
@@ -205,10 +289,18 @@ class Database:
 
     # Projects --------------------------------------------------------------------------------------
     def replace_projects(self, projects: Iterable[Project]) -> None:
-        self.conn.execute("DELETE FROM projects")
+        projects = list(projects)
+        self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS next_projects (id TEXT PRIMARY KEY)")
+        self.conn.execute("DELETE FROM next_projects")
+        self.conn.executemany("INSERT INTO next_projects VALUES (?)", [(p.id,) for p in projects])
+        before = self.conn.total_changes
+        self.conn.execute("DELETE FROM projects WHERE id NOT IN (SELECT id FROM next_projects)")
         self.conn.executemany(
             "INSERT INTO projects (id, category, department, lat, lon, mw, substation_folded, first_seen, updated_at, data) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+            "category=excluded.category, department=excluded.department, lat=excluded.lat, lon=excluded.lon, "
+            "mw=excluded.mw, substation_folded=excluded.substation_folded, first_seen=excluded.first_seen, "
+            "updated_at=excluded.updated_at, data=excluded.data WHERE projects.data <> excluded.data",
             [
                 (
                     p.id,
@@ -225,12 +317,20 @@ class Database:
                 for p in projects
             ],
         )
+        if self.conn.total_changes != before:
+            self.conn.execute("UPDATE dataset_state SET projects_revision=projects_revision+1 WHERE id=1")
+
+    def project_revision(self) -> int:
+        return int(self.conn.execute("SELECT projects_revision FROM dataset_state WHERE id=1").fetchone()[0])
 
     def project(self, project_id: str) -> Project | None:
         row = self.conn.execute("SELECT data FROM projects WHERE id = ?", (project_id,)).fetchone()
         return Project.model_validate_json(row["data"]) if row else None
 
-    def projects(
+    def projects(self, **filters: Unpack[ProjectQuery]) -> list[Project]:
+        return list(self.iter_projects(**filters))
+
+    def iter_projects(
         self,
         *,
         categories: Iterable[str] | None = None,
@@ -239,34 +339,128 @@ class Database:
         min_mw: float | None = None,
         substation: str | None = None,
         since: str | None = None,
-    ) -> list[Project]:
-        """Coarse SQL filtering; exact distance filtering is left to the caller (see api.queries)."""
+        commune: str | None = None,
+        query: str | None = None,
+        bounds: tuple[float, float, float, float] | None = None,
+        limit: int | None = None,
+        after: tuple[float | None, str] | None = None,
+    ) -> Iterator[Project]:
+        """Exact filtering and keyset ordering happen before bounded JSON deserialization."""
+        where, args = self._project_filter(
+            categories=categories,
+            department=department,
+            near=near,
+            min_mw=min_mw,
+            substation=substation,
+            since=since,
+            commune=commune,
+            query=query,
+            bounds=bounds,
+        )
+        rank = "radar_distance(:center_lat, :center_lon, lat, lon)" if near else "mw"
+        if after is not None:
+            value, key = after
+            args.update(after_value=value, after_id=key)
+            if near:
+                where.append(f"({rank} > :after_value OR ({rank} = :after_value AND id > :after_id))")
+            elif value is None:
+                where.append("(mw IS NULL AND id > :after_id)")
+            else:
+                where.append("(mw < :after_value OR (mw = :after_value AND id > :after_id) OR mw IS NULL)")
+        sql = "SELECT data FROM projects" + (" WHERE " + " AND ".join(where) if where else "")
+        sql += f" ORDER BY {rank} ASC, id ASC" if near else " ORDER BY mw DESC NULLS LAST, id ASC"
+        if limit is not None:
+            sql += " LIMIT :result_limit"
+            args["result_limit"] = max(0, limit)
+        for row in self.conn.execute(sql, args):
+            yield Project.model_validate_json(row["data"])
+
+    def _project_filter(
+        self,
+        *,
+        categories: Iterable[str] | None = None,
+        department: str | None = None,
+        near: tuple[float, float, float] | None = None,
+        min_mw: float | None = None,
+        substation: str | None = None,
+        since: str | None = None,
+        commune: str | None = None,
+        query: str | None = None,
+        bounds: tuple[float, float, float, float] | None = None,
+    ) -> tuple[list[str], dict[str, Any]]:
         where: list[str] = []
-        args: list[Any] = []
+        args: dict[str, Any] = {}
         if categories is not None:
             cats = tuple(categories)
-            where.append(f"category IN ({','.join('?' * len(cats))})")
-            args += cats
+            where.append(f"category IN ({','.join(':cat' + str(i) for i in range(len(cats)))})")
+            args.update({"cat" + str(i): value for i, value in enumerate(cats)})
         if department:
-            where.append("department = ?")
-            args.append(department)
+            where.append("department = :department")
+            args["department"] = department
         if near:
             lat_min, lon_min, lat_max, lon_max = bbox_around(*near)
-            where.append("lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?")
-            args += [lat_min, lat_max, lon_min, lon_max]
+            where.append("lat BETWEEN :lat_min AND :lat_max AND lon BETWEEN :lon_min AND :lon_max")
+            where.append("radar_distance(:center_lat, :center_lon, lat, lon) <= :radius")
+            args.update(
+                lat_min=lat_min,
+                lat_max=lat_max,
+                lon_min=lon_min,
+                lon_max=lon_max,
+                center_lat=near[0],
+                center_lon=near[1],
+                radius=near[2],
+            )
         if min_mw is not None:
-            where.append("mw >= ?")
-            args.append(min_mw)
+            where.append("mw >= :min_mw")
+            args["min_mw"] = min_mw
         if substation:
-            where.append("substation_folded LIKE ?")
-            args.append(f"%{fold(substation)}%")
+            where.append("substation_folded LIKE :substation")
+            args["substation"] = f"%{fold(substation)}%"
         if since:
-            where.append("first_seen >= ?")
-            args.append(since)
-        sql = "SELECT data FROM projects" + (" WHERE " + " AND ".join(where) if where else "")
+            where.append("first_seen >= :since")
+            args["since"] = since
+        if commune:
+            where.append("radar_lower(json_extract(data, '$.location.commune')) = :commune")
+            args["commune"] = commune.lower()
+        if query:
+            fields = ("name", "developer", "location.commune", "substation")
+            where.append(
+                "("
+                + " OR ".join(f"instr(radar_lower(json_extract(data, '$.{field}')), :query) > 0" for field in fields)
+                + ")"
+            )
+            args["query"] = query.strip().lower()
+        if bounds:
+            where.append("lat BETWEEN :south AND :north AND lon BETWEEN :west AND :east")
+            args.update(zip(("west", "south", "east", "north"), bounds, strict=True))
+        return where, args
+
+    def project_stats(self, **filters: Any) -> dict[str, Any]:
+        where, args = self._project_filter(**filters)
+        suffix = " WHERE " + " AND ".join(where) if where else ""
+        row = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(mw), 0), COALESCE(SUM(mw IS NULL), 0), "
+            "COALESCE(SUM(CASE WHEN json_extract(data, '$.power.status') = 'known' THEN mw ELSE 0 END), 0), "
+            "COALESCE(SUM(json_extract(data, '$.confidence') = 'review'), 0) FROM projects" + suffix,
+            args,
+        ).fetchone()
+        return {
+            "total": row[0],
+            "known_power_mw": round(row[1], 1),
+            "projects_without_power": row[2],
+            "declared_power_mw": round(row[3], 1),
+            "projects_to_review": row[4],
+            "by_category": dict(
+                self.conn.execute("SELECT category, COUNT(*) FROM projects" + suffix + " GROUP BY category", args)
+            ),
+        }
+
+    def project_departments(self) -> list[str]:
         return [
-            Project.model_validate_json(r["data"])
-            for r in self.conn.execute(sql + " ORDER BY mw DESC NULLS LAST", args)
+            row[0]
+            for row in self.conn.execute(
+                "SELECT DISTINCT department FROM projects WHERE department IS NOT NULL ORDER BY department"
+            )
         ]
 
     # Human corrections (append-only; withdrawing one sets active = 0) ---------------------------------
@@ -342,8 +536,9 @@ class Database:
     # Listing items: every item a collector saw (kept or not), for unbiased screen-recall estimates ---------
     def record_listing_item(self, url: str, source: str, title: str, kept: bool, audit: str | None) -> None:
         self.conn.execute(
-            "INSERT INTO listing_items (url, source, title, kept, audit, first_seen) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(url) DO UPDATE SET title=excluded.title, kept=excluded.kept, audit=excluded.audit",
+            "INSERT INTO listing_items (url, source, title, kept, audit, first_seen, audit_policy) "
+            "VALUES (?, ?, ?, ?, ?, ?, 2) "
+            "ON CONFLICT(url) DO UPDATE SET title=excluded.title, kept=excluded.kept, audit=excluded.audit, audit_policy=2",
             (url, source, title, int(kept), audit, utcnow().isoformat()),
         )
 
@@ -355,7 +550,8 @@ class Database:
         """seen / kept / rejected / audit_random / audit_near_miss over all sources."""
         row = self.conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(kept), 0), COALESCE(SUM(audit = 'random'), 0), "
-            "COALESCE(SUM(audit LIKE 'near-miss:%'), 0) FROM listing_items"
+            "COALESCE(SUM(audit LIKE 'near-miss:%'), 0), "
+            "COALESCE(SUM(kept = 0 AND audit_policy <> 2), 0) FROM listing_items"
         ).fetchone()
         return {
             "seen": row[0],
@@ -363,6 +559,7 @@ class Database:
             "rejected": row[0] - row[1],
             "audit_random": row[2],
             "audit_near_miss": row[3],
+            "audit_policy_version": 1 if row[4] else 2,
         }
 
     # Machine value changes between builds (code or learning changed an output) ----------------------------
