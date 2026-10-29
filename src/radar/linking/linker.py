@@ -10,7 +10,6 @@ from the national register are matched by the strict rule in `linking/registry.p
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from itertools import combinations
 
 from radar.domain.enums import SourceKind
 from radar.domain.models import Filing, Link, Signal
@@ -75,20 +74,48 @@ def _from_signal(s: Signal) -> _Node:
     return _Node(s.key, s.source, distinctive_words(s.developer), frozenset(fold(c) for c in s.communes if c), "")
 
 
+def _keys(node: _Node) -> Iterable[tuple[str, str]]:
+    yield from (("commune", value) for value in node.communes)
+    yield from (("developer", value) for value in node.developer_words)
+    if node.substation:
+        yield "substation", node.substation
+
+
+def _index(nodes: list[_Node]) -> dict[tuple[str, str], set[int]]:
+    index: dict[tuple[str, str], set[int]] = {}
+    for position, node in enumerate(nodes):
+        for key in _keys(node):
+            index.setdefault(key, set()).add(position)
+    return index
+
+
+def _candidates(node: _Node, index: dict[tuple[str, str], set[int]]) -> list[int]:
+    candidates: set[int] = set()
+    for key in _keys(node):
+        candidates.update(index.get(key, ()))
+    return sorted(candidates)
+
+
+def _link(a: _Node, b: _Node) -> Link:
+    reasons: list[str] = []
+    if shared := a.communes & b.communes:
+        reasons.append("même commune : " + ", ".join(sorted(shared)))
+    if shared := a.developer_words & b.developer_words:
+        reasons.append("même nom de porteur : " + ", ".join(sorted(shared)))
+    if a.substation and a.substation == b.substation:
+        reasons.append(f"même poste visé : {a.substation}")
+    first, second = sorted((a.key, b.key))
+    return Link(a=first, b=second, reasons=tuple(reasons))
+
+
 def propose_links(filings: Iterable[Filing], signals: Iterable[Signal]) -> list[Link]:
+    """Compare only shared-key candidates; retain every dense match and the original stable order."""
     filing_nodes = [_from_filing(f) for f in filings]
     signal_nodes = [_from_signal(s) for s in signals if s.source is not SourceKind.ENERGY_REGISTRY]
-    pairs = [*combinations(filing_nodes, 2), *((f, s) for f in filing_nodes for s in signal_nodes)]
+    filing_index, signal_index = _index(filing_nodes), _index(signal_nodes)
     links: list[Link] = []
-    for a, b in pairs:
-        reasons: list[str] = []
-        if shared := a.communes & b.communes:
-            reasons.append("même commune : " + ", ".join(sorted(shared)))
-        if shared := a.developer_words & b.developer_words:
-            reasons.append("même nom de porteur : " + ", ".join(sorted(shared)))
-        if a.substation and a.substation == b.substation:
-            reasons.append(f"même poste visé : {a.substation}")
-        if reasons:
-            first, second = sorted((a.key, b.key))
-            links.append(Link(a=first, b=second, reasons=tuple(reasons)))
+    for i, node in enumerate(filing_nodes):
+        links.extend(_link(node, filing_nodes[j]) for j in _candidates(node, filing_index) if j > i)
+    for node in filing_nodes:
+        links.extend(_link(node, signal_nodes[j]) for j in _candidates(node, signal_index))
     return links

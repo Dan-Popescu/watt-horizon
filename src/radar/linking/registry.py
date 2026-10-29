@@ -29,10 +29,13 @@ def compatible(filing: Filing, installation: Signal) -> bool:
 
 def commissioned(filings: Iterable[Filing], signals: Iterable[Signal]) -> dict[str, Signal]:
     """filing key -> matching installation in service (the closest in power when several match)."""
-    installations = [s for s in signals if s.source is SourceKind.ENERGY_REGISTRY]
+    installations: dict[str, list[Signal]] = {}
+    for signal in signals:
+        if signal.source is SourceKind.ENERGY_REGISTRY and (insee := signal.payload.get("insee")):
+            installations.setdefault(insee, []).append(signal)
     matches: dict[str, Signal] = {}
     for filing in filings:
-        candidates = [s for s in installations if compatible(filing, s)]
+        candidates = [s for s in installations.get(filing.location.insee_code or "", ()) if compatible(filing, s)]
         if candidates:
             declared = filing.power.mw or 0.0
             matches[filing.key] = min(candidates, key=lambda s: abs(float(s.payload["power_mw"]) - declared))
