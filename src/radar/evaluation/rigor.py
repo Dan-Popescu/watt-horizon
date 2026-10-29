@@ -11,7 +11,7 @@ from radar.domain.models import Correction, Filing
 from radar.evaluation.fields import compare
 from radar.evaluation.gold import FieldGold, actual_fields
 from radar.evaluation.stats import wilson
-from radar.pipeline.corrections import VALIDATED, latest
+from radar.pipeline.corrections import VALIDATED, latest, reviewed_references
 
 STRATA = ("form_layout", "read", "source", "template")
 
@@ -49,6 +49,26 @@ def calibration(filings: Iterable[Filing], numbers_with_errors: set[str], review
     return {level: _rate(k, n) for level, (k, n) in sorted(counts.items())}
 
 
+def reviewed_errors(filings: Iterable[Filing], corrections: Iterable[Correction]) -> tuple[set[str], set[str]]:
+    """Aggregate checked outcomes before hiding held-out examples from diagnostic output."""
+    records = list(filings)
+    labels, references = reviewed_references(records, corrections)
+    reviewed = set(labels) | set(references)
+    wrong = set()
+    for filing in records:
+        reference = references.get(filing.number)
+        actual = actual_fields(filing)
+        if reference and any(
+            compare(value, actual.get(name)) not in {"correct", "absent"} for name, value in reference.expected.items()
+        ):
+            wrong.add(filing.number)
+        label = labels.get(filing.number)
+        category = filing.machine.classification.category if filing.machine else filing.classification.category
+        if label and category != label.category:
+            wrong.add(filing.number)
+    return wrong, reviewed
+
+
 def blind_accuracy(filings: Iterable[Filing], corrections: Iterable[Correction]) -> dict[str, dict[str, Any]]:
     """Machine accuracy per field against values typed blind (the reviewer never saw the machine's)."""
     by_key: dict[str, list[Correction]] = {}
@@ -71,19 +91,28 @@ def recall_estimate(
 ) -> dict[str, Any]:
     """Screen recall from the random audit sample: share of targets among reviewed random-audit filings,
     extrapolated to all rejected items. Needs listing_items (collect runs) and reviewed audit filings."""
-    reviewed = {c.filing_key for c in corrections}
+    labels, _ = reviewed_references(filings, corrections)
     audited = [
         f
         for f in filings
-        if f.key in reviewed and any(g.code == "audit_sample" and g.detail == "random" for g in f.flags)
+        if f.number in labels and any(g.code == "audit_sample" and g.detail == "random" for g in f.flags)
     ]
-    kept_targets = sum(
-        f.classification.category in TARGET_CATEGORIES and not any(g.code == "audit_sample" for g in f.flags)
-        for f in filings
-    )
-    found = sum(f.classification.category in TARGET_CATEGORIES for f in audited)
+    kept = [f for f in filings if not any(g.code == "audit_sample" for g in f.flags)]
+    kept_targets = sum(labels[f.number].category in TARGET_CATEGORIES for f in kept if f.number in labels)
+    found = sum(labels[f.number].category in TARGET_CATEGORIES for f in audited)
     rejected = listing.get("rejected", 0)
-    out: dict[str, Any] = {"rejected_items": rejected, "random_audited_reviewed": len(audited), "targets_found": found}
+    out: dict[str, Any] = {
+        "rejected_items": rejected,
+        "random_audited_reviewed": len(audited),
+        "targets_found": found,
+        "kept_unverified": sum(f.number not in labels for f in kept),
+    }
+    if listing.get("audit_policy_version") != 2:
+        return {**out, "recall": None, "why": "legacy_random_population_not_representative"}
+    if listing.get("audit_random", 0) != len(audited):
+        return {**out, "recall": None, "why": "random_sample_incomplete"}
+    if out["kept_unverified"]:
+        return {**out, "recall": None, "why": "kept_targets_unverified"}
     interval = wilson(found, len(audited))
     if not rejected or interval is None:
         return {**out, "recall": None, "why": "il faut des listes collectées et des dossiers d'audit aléatoire relus"}

@@ -27,7 +27,10 @@ def services(blobs: BlobStore, lookups: StaticLookups) -> Services:
 def test_error_analysis(loaded_db: Database, blobs: BlobStore, lookups: StaticLookups) -> None:
     submit_review(loaded_db, AUBENTON, author="Dan", changes={"power_mw": "120"}, cause="rule", validate=True)
     process_filings(loaded_db, services(blobs, lookups), only={AUBENTON})
-    report = analyse(loaded_db.filings(), loaded_db.corrections())
+    development = [
+        f.model_copy(update={"strata": f.strata | {"evaluation_partition": "dev"}}) for f in loaded_db.filings()
+    ]
+    report = analyse(development, loaded_db.corrections())
     assert report.reviewed == 1 and report.with_errors == 1
     [error] = report.errors
     assert (error.field, error.outcome, error.machine, error.human, error.cause) == (
@@ -49,6 +52,7 @@ def test_cases_replay_and_lifecycle(
     process_filings(loaded_db, svc, only={AUBENTON})
     filing = loaded_db.filing(AUBENTON)
     assert filing is not None
+    filing = filing.model_copy(update={"strata": filing.strata | {"evaluation_partition": "dev"}})
     _, verified = reviewed_references(loaded_db.filings(), loaded_db.corrections())
     documents = loaded_db.documents(AUBENTON)
     case = cases.make_case(filing, documents, read_documents(documents, svc), verified["010504"].expected)

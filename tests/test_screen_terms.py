@@ -25,6 +25,7 @@ def _filing(number: str, category: Category, vocabulary: tuple[str, ...] = (), d
         classification=Classification(category=category, method="human"),
         machine=MachineOutput(classification=machine, values={}),
         vocabulary=vocabulary,
+        strata={"evaluation_partition": "dev"},
     )
 
 

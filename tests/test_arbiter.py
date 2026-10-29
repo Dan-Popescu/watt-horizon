@@ -62,6 +62,7 @@ def _filing(number: str, form_value: str, decision_value: str) -> Filing:
         Filing(
             key=f"d:h:{number}", source=SourceKind.DREAL_CASE_BY_CASE, region="h", number=number, title="t",
             document_ids=(), developer=form_value, classification=Classification(category=Category.BESS, method="gold"),
+            strata={"evaluation_partition": "dev"},
             candidates={"developer": [Candidate(source="form:field", value=form_value), Candidate(source="decision:clause", value=decision_value)]},
         )
     )  # fmt: skip

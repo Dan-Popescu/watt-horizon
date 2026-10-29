@@ -8,6 +8,7 @@ from and says agree / disagree / unsure. It saves review time without ever becom
   least MIN_SEEN fields), the same rule as auto-accepted fields. Until then it changes nothing but the flag.
 """
 
+import dataclasses
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -15,8 +16,9 @@ from typing import TYPE_CHECKING, Any
 
 from radar.domain.fields import Value
 from radar.domain.models import Correction, Filing
-from radar.evaluation.fields import same
-from radar.evaluation.stats import wilson
+from radar.evaluation.fields import compare
+from radar.evaluation.stats import partition_of, wilson
+from radar.pipeline.corrections import approved_values, latest
 from radar.store.cache import KeyValueCache, cache_key
 
 if TYPE_CHECKING:
@@ -162,11 +164,19 @@ class Reliability:
     agree_right: int = 0  # ... and the human kept the value
     disagree_seen: int = 0
     disagree_right: int = 0  # « disagree » and the human did change the value
+    by_field: dict[str, tuple[int, int, int, int]] = dataclasses.field(default_factory=dict)
 
     @property
     def proven(self) -> bool:
+        if self.by_field:
+            return all(self.proven_for(name) for name in self.by_field)
         interval = wilson(self.agree_right, self.agree_seen)
         return self.agree_seen >= MIN_SEEN and interval is not None and interval[0] >= RELIABLE
+
+    def proven_for(self, name: str) -> bool:
+        seen, right, _, _ = self.by_field.get(name, (0, 0, 0, 0))
+        interval = wilson(right, seen)
+        return seen >= MIN_SEEN and interval is not None and interval[0] >= RELIABLE
 
     def as_dict(self) -> dict[str, Any]:
         interval = wilson(self.agree_right, self.agree_seen)
@@ -184,22 +194,27 @@ def reliability(filings: list[Filing], corrections: list[Correction]) -> Reliabi
         by_key.setdefault(c.filing_key, []).append(c)
     out = Reliability()
     for f in filings:
+        if partition_of(f) != "calibration":
+            continue
         reviewed = by_key.get(f.key, [])
         if not reviewed or not f.model_checks or f.machine is None:
             continue
-        corrected = {c.field: c.value for c in reviewed if c.field != "validated"}
-        validated = any(c.field == "validated" for c in reviewed)
+        expected = approved_values(latest(reviewed))
         for name, verdict in f.model_checks.items():
-            if name not in corrected and not validated:
+            if name not in expected:
                 continue  # never looked at by a human
             machine = f.machine.values.get(name)
-            kept = name not in corrected or (
-                corrected[name] is not None and machine is not None and same(corrected[name], machine)
-            )
+            kept = compare(expected[name], machine) in {"correct", "absent"}
+            agree_seen, agree_right, disagree_seen, disagree_right = out.by_field.get(name, (0, 0, 0, 0))
             if verdict == "agree":
                 out.agree_seen += 1
                 out.agree_right += kept
+                agree_seen += 1
+                agree_right += kept
             elif verdict == "disagree":
                 out.disagree_seen += 1
                 out.disagree_right += not kept
+                disagree_seen += 1
+                disagree_right += not kept
+            out.by_field[name] = (agree_seen, agree_right, disagree_seen, disagree_right)
     return out

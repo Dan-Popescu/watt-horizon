@@ -45,7 +45,10 @@ def _filing(number: str, raw: float, machine_power: float) -> Filing:
 
 def test_calibration_learns_from_reviews() -> None:
     at = datetime(2026, 10, 12, tzinfo=UTC)
-    filings = [_filing(str(i), 0.92, 50.0) for i in range(4)]
+    filings = [
+        _filing(str(i), 0.92, 50.0).model_copy(update={"strata": {"evaluation_partition": "calibration"}})
+        for i in range(4)
+    ]
     corrections = [
         Correction(filing_key=f.key, field="power_mw", value=50.0 if i < 3 else 60.0, author="Dan", created_at=at)
         for i, f in enumerate(filings)

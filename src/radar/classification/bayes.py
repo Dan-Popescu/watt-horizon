@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from radar.domain.enums import Category
 from radar.domain.models import Filing
 from radar.domain.text import fold
+from radar.evaluation.stats import partition_of
 
 MAX_CHARS = 40_000
 MIN_LABELS = 30  # below this, no opinion
@@ -132,6 +133,8 @@ def trusted_examples(filings: list[Filing], labels: dict[str, Category]) -> list
     """(vocabulary, category) for filings whose category a human set or verified: the second opinion's training set."""
     out = []
     for f in filings:
+        if partition_of(f) != "dev":
+            continue
         human = f.classification.category if f.classification.method == "human" else None
         label = human or labels.get(f.number)
         if label is not None and f.vocabulary:

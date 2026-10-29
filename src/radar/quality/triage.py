@@ -7,7 +7,6 @@ estimate is biased. Reviewed filings leave the queue, unless the machine output 
 snapshot ("stale review").
 """
 
-import json
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -17,8 +16,9 @@ from radar.domain.enums import TARGET_CATEGORIES, Severity
 from radar.domain.fields import machine_values
 from radar.domain.models import Correction, Filing
 from radar.evaluation.fields import same
-from radar.pipeline.corrections import VALIDATED, latest
-from radar.quality.agreement import second_review_due
+from radar.pipeline.corrections import CORRECTABLE, VALIDATED, approved_values, latest, validation_snapshot
+from radar.quality.agreement import second_review_fields
+from radar.quality.audit import stable_fraction
 from radar.quality.flags import FLAGS
 from radar.quality.model_check import reliability
 
@@ -32,6 +32,7 @@ UNCERTAIN = 0.9  # calibrated field confidence below this adds doubt
 LOW_CONFIDENCE = 0.6  # ... and below this, the field is named in the reasons
 UNCERTAINTY_WEIGHT = 2.0
 CHANGED_WEIGHT = 2.0  # per machine value changed by a new version and not reviewed since
+AUTO_AUDIT_RATE = 0.03
 
 
 @dataclass
@@ -44,16 +45,13 @@ class TriageItem:
     flag_codes: list[str] = field(default_factory=list)
     stale_review: bool = False
     second_review: bool = False  # sampled for double annotation (quality/agreement.py)
+    pending_fields: list[str] = field(default_factory=list)
+    audit_fields: list[str] = field(default_factory=list)
 
 
 def stale_fields(filing: Filing, validation: Correction | None) -> list[str]:
     """Fields whose machine value changed since the human validated the filing."""
-    if validation is None or not isinstance(validation.value, str):
-        return []
-    try:
-        snapshot = json.loads(validation.value)
-    except ValueError:
-        return []
+    snapshot = validation_snapshot(validation)
     now = machine_values(filing)
     return sorted(k for k in now if k in snapshot and snapshot[k] != now[k])
 
@@ -66,7 +64,7 @@ def triage(
 ) -> list[TriageItem]:
     """`machine_changes` (db.machine_changes()): outputs changed by a new version and not reviewed since."""
     filings, corrections = list(filings), list(corrections)
-    model_proven = reliability(filings, corrections).proven  # until proven, the model's « agree » changes nothing
+    model_reliability = reliability(filings, corrections)
     by_key: dict[str, list[Correction]] = {}
     for c in corrections:
         by_key.setdefault(c.filing_key, []).append(c)
@@ -74,10 +72,30 @@ def triage(
     for f in filings:
         reviewed = latest(by_key.get(f.key, []))
         stale = stale_fields(f, reviewed.get(VALIDATED))
-        double = bool(reviewed) and not stale and second_review_due(f, by_key.get(f.key, []))
-        if reviewed and not stale and not double:
+        approved = approved_values(reviewed)
+        audit = (
+            sorted(set(f.auto_accepted) - set(approved))
+            if stable_fraction(f"accepted:{f.key}") < AUTO_AUDIT_RATE
+            else []
+        )
+        pending = sorted(
+            (set(machine_values(f)) & set(CORRECTABLE)) - set(approved) - set(f.auto_accepted) | set(stale) | set(audit)
+        )
+        double_fields = second_review_fields(f, by_key.get(f.key, [])) if reviewed and not pending else []
+        double = bool(double_fields)
+        if double:
+            pending = double_fields
+        if reviewed and not pending and not double:
             continue
-        item = TriageItem(f.key, f.number, f.title, 0.0, flag_codes=sorted({g.code for g in f.flags}))
+        item = TriageItem(
+            f.key,
+            f.number,
+            f.title,
+            0.0,
+            flag_codes=sorted({g.code for g in f.flags}),
+            pending_fields=pending,
+            audit_fields=audit,
+        )
         doubt = BASE_DOUBT
         for g in f.flags:
             doubt += POINTS[g.severity]
@@ -88,8 +106,9 @@ def triage(
                 name: c
                 for name, c in f.field_confidence.items()
                 if c < UNCERTAIN
+                and name not in approved
                 and name not in f.auto_accepted
-                and not (model_proven and f.model_checks.get(name) == "agree")
+                and not (model_reliability.proven_for(name) and f.model_checks.get(name) == "agree")
             }
             doubt += sum(UNCERTAIN - c for c in uncertain.values()) * UNCERTAINTY_WEIGHT
             if low := sorted((c, n) for n, c in uncertain.items() if c < LOW_CONFIDENCE):
@@ -110,10 +129,15 @@ def triage(
             item.second_review = True
             item.priority += DOUBLE_BONUS
             item.reasons.insert(0, "double relecture : à relire à l'aveugle par un autre relecteur (mesure l'accord)")
+        if audit:
+            item.priority += AUDIT_RANDOM_BONUS
+            item.reasons.insert(0, "audit aléatoire des acceptations automatiques : " + ", ".join(audit))
         if stale:
             item.stale_review = True
             item.priority += STALE_BONUS
             item.reasons.insert(0, "valeurs modifiées depuis la relecture : " + ", ".join(stale))
+        elif reviewed and pending and not double:
+            item.reasons.insert(0, "champs restant à vérifier : " + ", ".join(pending))
         queue.append(item)
     return sorted(queue, key=lambda i: (-i.priority, i.number))
 

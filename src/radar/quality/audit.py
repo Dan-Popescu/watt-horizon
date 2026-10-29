@@ -13,6 +13,7 @@ import re
 from radar.classification.rules import screen
 
 AUDIT_RATE = 0.03
+AUDIT_POLICY_VERSION = 2
 NEAR_MISS: dict[str, re.Pattern[str]] = {
     "solar-wind": re.compile(r"(?i)solaire|photovolta|agrivolta|(?:é|e)olien"),
     "industrial-change": re.compile(r"(?i)\b(?:modification|extension|augmentation|r(?:é|e)organisation)\b.*\(…\)"),
@@ -38,8 +39,9 @@ def decide(
     `extra`: adopted screen terms (gold/screen_terms.json)."""
     if screen(title, extra=extra).keep:
         return True, None
-    if reason := near_miss(title):
-        return False, f"near-miss:{reason}"
+    # Sample every rejected item, including near-misses, before targeted error discovery.
     if stable_fraction(key) < rate:
         return False, "random"
+    if reason := near_miss(title):
+        return False, f"near-miss:{reason}"
     return False, None

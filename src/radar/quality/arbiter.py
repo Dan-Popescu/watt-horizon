@@ -10,10 +10,11 @@ More reviews -> better choices, without code changes.
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from radar.domain.fields import Value, field_values
+from radar.domain.fields import Value
 from radar.domain.models import Candidate, Correction, Filing
 from radar.evaluation.fields import compare, same
-from radar.pipeline.corrections import VALIDATED, latest
+from radar.evaluation.stats import partition_of
+from radar.pipeline.corrections import approved_values, latest
 
 ARBITRATED = ("developer", "siret", "commune", "power_mw", "substation", "filed_on", "review_decision")
 DECISION_FIRST = frozenset({"commune", "review_decision"})
@@ -91,13 +92,8 @@ class Arbiter:
 
 
 def verified_values(filing: Filing, decisions: dict[str, Correction]) -> dict[str, Value]:
-    """Human-verified values of a filing: corrected fields take the correction's value; a validation confirms the
-    current values of the other fields."""
-    out: dict[str, Value] = {}
-    if VALIDATED in decisions:
-        out.update(field_values(filing))
-    out.update({name: c.value for name, c in decisions.items() if name != VALIDATED})
-    return out
+    """Human observations, never the current filing values (kept in the interface for callers)."""
+    return approved_values(decisions)
 
 
 def learn(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Arbiter:
@@ -107,6 +103,8 @@ def learn(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Arbit
         by_key.setdefault(c.filing_key, []).append(c)
     stats: dict[tuple[str, str], tuple[int, int]] = {}
     for f in filings:
+        if partition_of(f) != "dev":
+            continue
         decisions = latest(by_key.get(f.key, []))
         if not decisions:
             continue

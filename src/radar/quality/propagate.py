@@ -18,6 +18,7 @@ from radar.domain.fields import Value, machine_values
 from radar.domain.models import Correction, Filing
 from radar.domain.text import fold
 from radar.evaluation.fields import compare
+from radar.evaluation.stats import partition_of
 from radar.pipeline.corrections import VALIDATED, latest
 from radar.quality.flags import same_name
 
@@ -41,6 +42,8 @@ def _errors(filings: list[Filing], corrections: Iterable[Correction]) -> list[tu
         by_key.setdefault(c.filing_key, []).append(c)
     out = []
     for f in filings:
+        if partition_of(f) != "dev":
+            continue
         machine = machine_values(f)
         for name, c in latest(by_key.get(f.key, [])).items():
             if name != VALIDATED and name in machine and compare(c.value, machine[name]) == "wrong":
@@ -56,7 +59,7 @@ def suggestions(filings: Iterable[Filing], corrections: Iterable[Correction]) ->
         key = (c.field, fold(str(wrong)), fold(str(c.value)))
         s = out.setdefault(key, Suggestion(c.field, wrong, c.value, f.number, c.cause))
         for other in items:
-            if other.key in reviewed or other.key in s.keys:
+            if partition_of(other) != "dev" or other.key in reviewed or other.key in s.keys:
                 continue
             if compare(wrong, machine_values(other).get(c.field)) == "correct":
                 s.keys.append(other.key)

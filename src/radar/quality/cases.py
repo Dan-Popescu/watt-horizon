@@ -19,6 +19,7 @@ from radar.domain.fields import Value
 from radar.domain.models import DocumentRecord, Filing
 from radar.domain.privacy import PersonScrubber, is_person_field
 from radar.evaluation.fields import compare
+from radar.evaluation.stats import partition_of
 from radar.pipeline.filings import extract_facts
 from radar.quality.rulebook import LearnedRule
 from radar.reading.pdf import PdfContent
@@ -57,6 +58,8 @@ class Case:
 def make_case(
     filing: Filing, documents: list[DocumentRecord], contents: list[PdfContent], verified: dict[str, Value]
 ) -> Case:
+    if partition_of(filing) != "dev":
+        raise ValueError("Only development filings may become regression cases")
     privacy = PersonScrubber.for_filing([x.fields for x in contents], [filing.developer, filing.legal_name])
     docs = [
         CaseDocument(

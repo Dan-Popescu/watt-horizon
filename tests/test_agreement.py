@@ -42,7 +42,15 @@ def test_sampled_filing_returns_to_the_queue_once() -> None:
     assert second_review_due(f, first)
     item = next(i for i in triage([f], first, date(2026, 10, 12)) if i.key == f.key)
     assert item.second_review and item.reasons[0].startswith("double relecture")
-    second = [*first, _typed(f, "Alex", "category", "bess", T0 + timedelta(1)), _validated(f, "Alex", T0, blind=True)]
+    partial = [*first, _typed(f, "Alex", "category", "bess", T0 + timedelta(1))]
+    assert second_review_due(f, partial)
+    [pending] = triage([f], partial, date(2026, 10, 12))
+    assert set(pending.pending_fields) == {"commune", "developer"}
+    second = [
+        *partial,
+        _typed(f, "Alex", "developer", "Alpha", T0 + timedelta(1)),
+        _typed(f, "Alex", "commune", "Famars", T0 + timedelta(1)),
+    ]
     assert not second_review_due(f, second)
     assert not triage([f], second, date(2026, 10, 12))
     unsampled = _filing(next(n for n in NUMBERS if not sampled(n)))

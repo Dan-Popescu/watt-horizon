@@ -16,6 +16,7 @@ from radar.classification.bayes import STOPWORDS
 from radar.domain.enums import TARGET_CATEGORIES, Category
 from radar.domain.models import DocumentRecord, Filing
 from radar.domain.text import fold
+from radar.evaluation.stats import partition_of
 
 MAX_ADMIT_SHARE = 0.05  # a term admitting more than 5 % of the negatives is too broad
 _STOP = {fold(w) for w in STOPWORDS} | {"de", "du", "la", "le", "et", "en", "au", "un", "commune", "projet"}
@@ -64,6 +65,9 @@ def suggest(
 ) -> list[TermSuggestion]:
     """`documents`: filing key -> documents; `rejected_titles`: (url, title) of listing items the screen rejected.
     `current`: adopted terms pattern; phrases it already matches are skipped."""
+    excluded_urls = {d.url for f in filings if partition_of(f) != "dev" for d in documents.get(f.key, [])}
+    filings = [f for f in filings if partition_of(f) == "dev"]
+    rejected_titles = [(url, title) for url, title in rejected_titles if url not in excluded_urls]
     targets = [f for f in filings if f.classification.category in TARGET_CATEGORIES]
     out: list[TermSuggestion] = []
 

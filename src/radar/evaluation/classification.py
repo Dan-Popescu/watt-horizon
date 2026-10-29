@@ -14,6 +14,7 @@ from radar.classification.rules import screen
 from radar.domain.enums import TARGET_CATEGORIES, Category, DocumentRole
 from radar.domain.models import Classification, Filing
 from radar.domain.privacy import PersonScrubber
+from radar.evaluation.stats import partition_of
 from radar.pipeline.filings import Services, classification_text, decision_first, read_documents
 from radar.store.db import Database
 
@@ -79,10 +80,12 @@ class ClassifierReport:
 def evaluate_classifier(
     classifier: Classifier, db: Database, services: Services, gold: dict[str, GoldLabel]
 ) -> ClassifierReport:
+    if "gold" in classifier.name.split("+"):
+        raise ValueError("A reference classifier cannot be evaluated against its own gold labels")
     report = ClassifierReport(classifier=classifier.name)
     for filing in db.filings():
         label = gold.get(filing.number)
-        if label is None or dropped_by_screen(filing):
+        if label is None or not label.verified or dropped_by_screen(filing):
             continue
         documents = db.documents(filing.key)
         contents = read_documents(documents, services)
@@ -106,7 +109,7 @@ def evaluate_classifier(
             report.no_answer += 1
         elif result.category is label.category:
             report.correct += 1
-        else:
+        elif partition_of(filing) == "dev":
             report.errors.append(f"{filing.number}: attendu {label.category.value}, prédit {predicted}")
         report.quotes_verified += bool(result and result.quote_verified)
     return report

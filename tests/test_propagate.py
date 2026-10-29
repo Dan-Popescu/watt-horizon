@@ -28,6 +28,7 @@ def _filing(number: str, developer: str) -> Filing:
         Filing(
             key=f"d:h:{number}", source=SourceKind.DREAL_CASE_BY_CASE, region="h", number=number, title="t",
             document_ids=(), developer=developer, classification=Classification(category=Category.BESS, method="gold"),
+            strata={"evaluation_partition": "dev"},
         )
     )  # fmt: skip
 

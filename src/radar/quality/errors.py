@@ -17,8 +17,8 @@ from radar.domain.enums import Severity
 from radar.domain.fields import Value, machine_values
 from radar.domain.models import Correction, Filing
 from radar.evaluation.fields import compare
-from radar.evaluation.stats import split_of
-from radar.pipeline.corrections import VALIDATED, latest
+from radar.evaluation.stats import partition_of
+from radar.pipeline.corrections import VALIDATED, approved_values, latest
 
 
 @dataclass(frozen=True)
@@ -66,12 +66,13 @@ def analyse(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Err
         report.reviewed += 1
         machine = machine_values(filing)
         errors = []
-        for name, c in decisions.items():
-            if name == VALIDATED or name not in machine:
+        for name, expected in approved_values(decisions).items():
+            if name not in machine:
                 continue
-            outcome = compare(c.value, machine[name])
+            c = decisions.get(name) or decisions[VALIDATED]
+            outcome = compare(expected, machine[name])
             if outcome in {"correct", "absent"}:
-                if c.cause:  # was an error when corrected, the machine has caught up since
+                if c.cause and partition_of(filing) == "dev":
                     report.fixed.append(f"{filing.number}:{name}")
                 continue
             errors.append(
@@ -80,7 +81,7 @@ def analyse(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Err
                     field=name,
                     outcome=outcome,
                     machine=machine[name],
-                    human=c.value,
+                    human=expected,
                     cause=c.cause or "?",
                     form_layout=filing.strata.get("form_layout", "?"),
                     read=filing.strata.get("read", "?"),
@@ -89,19 +90,20 @@ def analyse(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Err
                 )
             )
         report.with_errors += bool(errors)
-        if split_of(filing.number) == "test":
-            report.test_errors += len(errors)
-            errors = []
-        report.errors += errors
+        # Count every outcome before hiding held-out details.
         if _doubtful(filing):
             flagged_reviewed += 1
             flagged_with_errors += bool(errors)
-        elif errors:
+        elif errors and partition_of(filing) == "dev":
             report.unflagged += [f"{e.number}:{e.field} ({e.outcome})" for e in errors]
         for code in {f.code for f in filing.flags}:
             stats = report.by_flag.setdefault(code, {"flagged": 0, "with_errors": 0})
             stats["flagged"] += 1
             stats["with_errors"] += bool(errors)
+        if partition_of(filing) == "test":
+            report.test_errors += len(errors)
+        if partition_of(filing) == "dev":
+            report.errors += errors
 
     report.flag_precision = flagged_with_errors / flagged_reviewed if flagged_reviewed else None
     report.flag_recall = flagged_with_errors / report.with_errors if report.with_errors else None

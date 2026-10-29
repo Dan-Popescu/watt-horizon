@@ -84,7 +84,10 @@ class FixedClassifier:
 
 
 def test_classifier_evaluation(loaded_db: Database, blobs: BlobStore, lookups: StaticLookups) -> None:
-    gold = {AUBENTON: GoldLabel(AUBENTON, Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)}
+    gold = {
+        AUBENTON: GoldLabel(AUBENTON, Category.BESS, verified=True),
+        "2025-4009": GoldLabel("2025-4009", Category.DATACENTER, verified=True),
+    }
     services = Services(blobs=blobs, ocr=NullOcr(), classifier=None, lookups=lookups)
     report = evaluate_classifier(FixedClassifier(), loaded_db, services, gold)
     assert report.evaluated == 2 and report.correct == 1 and report.accuracy == 0.5

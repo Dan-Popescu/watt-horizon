@@ -4,6 +4,8 @@ Loop: the machine builds a filing -> `machine` keeps its raw output -> correctio
 reviewed filing becomes a verified reference (category label + field values) for `radar eval`.
 """
 
+import json
+import math
 from collections.abc import Iterable
 from datetime import date
 
@@ -95,6 +97,40 @@ def latest(corrections: Iterable[Correction]) -> dict[str, Correction]:
     return out
 
 
+def validation_snapshot(validation: Correction | None) -> dict[str, Value]:
+    """Read the immutable observation recorded at validation, never a rebuilt filing.
+
+    Legacy validations without a usable snapshot approve no implicit values. Explicit
+    corrections remain usable and the review queue asks for the remaining fields.
+    """
+    if validation is None or not isinstance(validation.value, str):
+        return {}
+    try:
+        raw = json.loads(validation.value)
+    except ValueError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    allowed = {*CORRECTABLE, "department"}
+    return {
+        name: value
+        for name, value in raw.items()
+        if name in allowed
+        and (
+            value is None
+            or isinstance(value, str)
+            or (isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value))
+        )
+    }
+
+
+def approved_values(decisions: dict[str, Correction]) -> dict[str, Value]:
+    """Immutable approved snapshot overlaid with explicit, append-only field decisions."""
+    values = validation_snapshot(decisions.get(VALIDATED))
+    values.update({name: c.value for name, c in decisions.items() if name in CORRECTABLE})
+    return values
+
+
 def apply_corrections(
     filing: Filing,
     corrections: Iterable[Correction],
@@ -139,7 +175,14 @@ def apply_corrections(
         update["power"] = _corrected_power(base.power, power)
         evidence["power"] = human(max(power.values(), key=lambda c: c.created_at))
 
-    if VALIDATED in by_field:
+    snapshot = validation_snapshot(by_field.get(VALIDATED))
+    current = base.machine.values if base.machine else field_values(base)
+    complete = (set(current) & set(CORRECTABLE)) <= (set(snapshot) | set(by_field))
+    if (
+        snapshot
+        and complete
+        and all(value == current.get(name) or name in by_field for name, value in snapshot.items())
+    ):
         update["confidence"] = Confidence.HIGH
     return base.model_copy(update={**update, "evidence": evidence})
 
@@ -178,8 +221,7 @@ def _relocate(current: Location, commune: str | None, lookups: Lookups | None) -
 def reviewed_references(
     filings: Iterable[Filing], corrections: Iterable[Correction]
 ) -> tuple[dict[str, GoldLabel], dict[str, FieldGold]]:
-    """Verified references from human review: a validated filing confirms every current value; a corrected
-    field confirms that field. The category label comes from the corrected (or validated) filing."""
+    """Verified references from recorded human observations, independent of later machine output."""
     by_key: dict[str, list[Correction]] = {}
     for c in corrections:
         by_key.setdefault(c.filing_key, []).append(c)
@@ -190,13 +232,12 @@ def reviewed_references(
         if not latest_by_field:
             continue
         reviewer = max(latest_by_field.values(), key=lambda c: c.created_at).author
-        values = field_values(filing)
-        checked = set(values) if VALIDATED in latest_by_field else set(latest_by_field) - {VALIDATED}
-        if "category" in checked:
+        values = approved_values(latest_by_field)
+        if "category" in values:
             labels[filing.number] = GoldLabel(
-                filing.number, filing.classification.category, "", f"review:{reviewer}", verified=True
+                filing.number, Category(str(values["category"])), "", f"review:{reviewer}", verified=True
             )
-        expected = {k: v for k, v in values.items() if k in checked and k != "category"}
+        expected = {k: v for k, v in values.items() if k != "category"}
         if expected:
             fields[filing.number] = FieldGold(filing.number, expected, f"review:{reviewer}", verified=True)
     return labels, fields

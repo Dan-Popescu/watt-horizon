@@ -9,7 +9,6 @@ typed without seeing the machine's or the first reviewer's), by another reviewer
 Agreement per field (with Wilson interval) and Cohen's kappa for the category (agreement beyond chance).
 """
 
-import json
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -18,7 +17,7 @@ from typing import Any
 from radar.domain.models import Correction, Filing
 from radar.evaluation.fields import same
 from radar.evaluation.stats import wilson
-from radar.pipeline.corrections import VALIDATED
+from radar.pipeline.corrections import CORRECTABLE, VALIDATED, approved_values, latest
 from radar.quality.audit import stable_fraction
 
 DOUBLE_RATE = 0.10
@@ -36,24 +35,30 @@ def _by_author(corrections: Iterable[Correction]) -> dict[str, list[Correction]]
 
 
 def second_review_due(filing: Filing, corrections: Iterable[Correction]) -> bool:
-    """Sampled, validated by exactly one reviewer, and no blind second review yet."""
+    """A sampled review remains due until another author typed every sampled field blind."""
+    return bool(second_review_fields(filing, corrections))
+
+
+def second_review_fields(filing: Filing, corrections: Iterable[Correction]) -> list[str]:
+    """Unfinished fields of the independent second annotation, not a whole-filing switch."""
+    if not sampled(filing.number):
+        return []
     authors = _by_author(corrections)
-    validated = [a for a, cs in authors.items() if any(c.field == VALIDATED for c in cs)]
-    return sampled(filing.number) and len(validated) == 1 and len(authors) == 1
+    first = next(((a, cs) for a, cs in authors.items() if any(c.field == VALIDATED for c in cs)), None)
+    if first is None:
+        return []
+    author, decisions = first
+    required = set(approved_values(latest(decisions))) & set(CORRECTABLE)
+    # A blind global "validated" flag snapshots machine output; only explicitly typed
+    # fields establish an independent second observation.
+    covered = {
+        c.field for other, cs in authors.items() if other != author for c in cs if c.blind and c.field != VALIDATED
+    }
+    return sorted(required - covered)
 
 
 def _view(corrections: list[Correction]) -> dict[str, Any]:
-    view: dict[str, Any] = {}
-    for c in corrections:
-        if c.field == VALIDATED and isinstance(c.value, str):
-            try:
-                snapshot = json.loads(c.value)
-            except ValueError:
-                continue
-            view = {**snapshot, **view}  # explicit corrections win over what was validated
-        else:
-            view[c.field] = c.value
-    return view
+    return dict(approved_values(latest(corrections)))
 
 
 @dataclass

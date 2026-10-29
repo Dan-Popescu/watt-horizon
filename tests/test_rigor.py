@@ -59,13 +59,52 @@ def test_recall_estimate_from_random_audit() -> None:
     filings += [_filing("a1", Category.BESS, audit)] + [_filing(f"a{i}", Category.OTHER, audit) for i in range(2, 11)]
     reviewed_at = datetime(2026, 1, 1, tzinfo=UTC)
     corrections = [
-        Correction(filing_key=f.key, field="validated", value=None, author="Dan", created_at=reviewed_at)
+        Correction(
+            filing_key=f.key,
+            field="category",
+            value=f.classification.category.value,
+            author="Dan",
+            created_at=reviewed_at,
+        )
         for f in filings
-        if f.number.startswith("a")
     ]
-    est = rigor.recall_estimate(filings, corrections, {"rejected": 100})
+    population = {"rejected": 100, "audit_random": 10, "audit_policy_version": 2}
+    est = rigor.recall_estimate(filings, corrections, population)
     # 1 target among 10 random audits of 100 rejected -> ~10 missed; 9 kept -> recall ~ 9 / 19
     assert est["targets_found"] == 1 and abs(est["recall"] - 9 / 19) < 1e-9
     low, high = est["recall_ci95"]
     assert low < est["recall"] < high
     assert rigor.recall_estimate(filings, [], {})["recall"] is None
+
+
+def test_recall_does_not_treat_a_partial_correction_as_category_review() -> None:
+    audit = Flag(code="audit_sample", severity=Severity.INFO, detail="random")
+    filing = _filing("partial-audit", Category.BESS, audit)
+    correction = Correction(
+        filing_key=filing.key,
+        field="developer",
+        value="Synthetic company",
+        author="audit",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    result = rigor.recall_estimate(
+        [filing], [correction], {"rejected": 100, "audit_random": 1, "audit_policy_version": 2}
+    )
+    assert result["random_audited_reviewed"] == 0 and result["recall"] is None
+
+
+def test_recall_refuses_legacy_or_incomplete_random_populations() -> None:
+    audit = Flag(code="audit_sample", severity=Severity.INFO, detail="random")
+    filing = _filing("audit-only", Category.OTHER, audit)
+    correction = Correction(
+        filing_key=filing.key,
+        field="category",
+        value="other",
+        author="audit",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert rigor.recall_estimate([filing], [correction], {"rejected": 100})["recall"] is None
+    incomplete = rigor.recall_estimate(
+        [filing], [correction], {"rejected": 100, "audit_random": 2, "audit_policy_version": 2}
+    )
+    assert incomplete["recall"] is None and incomplete["why"] == "random_sample_incomplete"
