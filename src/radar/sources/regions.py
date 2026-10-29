@@ -1,6 +1,7 @@
 """Per-region source configuration. Adding a region = adding one `Region` entry (URLs observed on the sites)."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,7 @@ class Region:
     dreal_listings: tuple[str, ...]  # newest first; « avant-2025 » archives are very slow to page through
     mrae_pages: dict[int, str] = field(default_factory=dict)  # year -> « Avis rendus sur projets » page
     prefectures: dict[str, str] = field(default_factory=dict)  # department -> site root
+    dreal_periods: dict[str, str] = field(default_factory=dict)  # observed listing -> annual/archive period
 
 
 REGIONS: dict[str, Region] = {
@@ -33,8 +35,13 @@ REGIONS: dict[str, Region] = {
 }
 
 
-def get_region(slug: str) -> Region:
+def get_region(slug: str, catalog_path: Path | None = None) -> Region:
+    regions = REGIONS
+    if catalog_path is not None:
+        from radar.sources.catalog import configured_regions
+
+        regions = configured_regions(catalog_path)
     try:
-        return REGIONS[slug]
+        return regions[slug]
     except KeyError:
-        raise ValueError(f"Unknown region {slug!r}. Known: {', '.join(REGIONS)}") from None
+        raise ValueError(f"Unknown region {slug!r}. Known: {', '.join(regions)}") from None

@@ -1,6 +1,7 @@
 """Evidence about enumerated source scopes, distinct from document/project recall."""
 
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -9,7 +10,9 @@ from radar.sources.regions import Region
 from radar.store.db import Database
 
 
-def listing_period(listing: str) -> str:
+def listing_period(listing: str, periods: Mapping[str, str] | None = None) -> str:
+    if periods and listing in periods:
+        return periods[listing]
     match = re.match(r"(avant-)?(\d{4})", listing)
     if match:
         return f"before-{match[2]}" if match[1] else match[2]
@@ -55,10 +58,12 @@ def inventory(
         raise ValueError("stale-days must be positive")
     now = now or datetime.now(UTC)
     configured: list[Coverage] = []
-    covered_years = {listing_period(x) for x in region.dreal_listings}
+    covered_years = {listing_period(x, region.dreal_periods) for x in region.dreal_listings}
     for listing in region.dreal_listings:
         for mode in ("historical", "recent"):
-            configured.append(load_scope(db, "dreal", region.slug, listing_period(listing), listing, mode))
+            configured.append(
+                load_scope(db, "dreal", region.slug, listing_period(listing, region.dreal_periods), listing, mode)
+            )
     for year in years:
         if str(year) not in covered_years and not any(
             x.startswith("before-") and year < int(x.split("-")[1]) for x in covered_years

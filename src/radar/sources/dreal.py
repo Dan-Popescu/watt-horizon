@@ -89,7 +89,12 @@ def collect_dreal(
     report = CollectReport()
     for listing in listings:
         scope = load_scope(
-            db, "dreal", region.slug, listing_period(listing), listing, "historical" if backfill else "recent"
+            db,
+            "dreal",
+            region.slug,
+            listing_period(listing, region.dreal_periods),
+            listing,
+            "historical" if backfill else "recent",
         )
         scope.save(db, "running")
         try:
