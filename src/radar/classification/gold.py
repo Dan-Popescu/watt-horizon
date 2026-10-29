@@ -5,9 +5,10 @@ File format (JSON Lines), one filing per line:
 `verified` is true only once a human confirmed the label (review page or by hand); drafts still serve as fallback.
 """
 
+import hashlib
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from radar.classification.base import ClassificationInput
@@ -60,6 +61,12 @@ class GoldClassifier:
         self.by_number: dict[str, set[str]] = {}
         for key in known_keys:
             self.by_number.setdefault(key.rsplit(":", 1)[-1], set()).add(key)
+        policy = json.dumps(
+            {key: asdict(label) for key, label in self.labels.items()},
+            sort_keys=True,
+            default=str,
+        )
+        self.name = "gold:" + hashlib.sha256(policy.encode()).hexdigest()[:16]
 
     def classify(self, item: ClassificationInput) -> Classification | None:
         label = self.labels.get(item.filing_key)

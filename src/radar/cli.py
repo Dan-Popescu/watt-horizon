@@ -183,6 +183,7 @@ def cmd_process(args: argparse.Namespace, s: Settings) -> Any:
     answers of ended batches are collected first, new requests are submitted last; --wait loops until done."""
     batch = bool(getattr(args, "llm_batch", False)) and bool(s.llm_model) and not s.offline
     with Database(s.db_path) as db:
+        assign_partitions(db, s.partitions_path, s.evaluation_test_after)
         only = set(args.only) if args.only else None
         services = make_services(s, make_http(s), llm="batch" if batch else "live")
         return execute_processing(

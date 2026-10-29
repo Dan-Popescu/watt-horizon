@@ -170,6 +170,8 @@ class CachedOcr:
         original_pages = set(content.ocr_texts)
         if (hit := self.cache.get(self.NAMESPACE, key)) is not None:
             content = _with_pages(content, {int(page): text for page, text in hit.items()}, self.label)
+            if not content.unread_scanned_pages:
+                return content
         done = self.inner.complete(document_id, data, content)
         # Cache successes, never an OCR failure. A partial hit must retry still unread eligible pages.
         new = {p: t for p, t in done.ocr_texts.items() if p not in original_pages}
