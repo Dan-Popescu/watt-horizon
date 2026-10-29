@@ -23,6 +23,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from radar import documentary_cli
 from radar.api import digest, exports, queries, review
 from radar.api.quality import quality_overview
 from radar.classification.gold import load_gold
@@ -76,6 +77,7 @@ from radar.sources.regions import get_region
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
 from radar.store.db import Database
+from radar.store.discovery import DiscoveryStore
 from radar.store.llm_jobs import BudgetLimits
 from radar.store.readiness import candidate_readiness
 from radar.store.snapshots import backup_dataset, restore_dataset
@@ -129,7 +131,7 @@ def cmd_import(args: argparse.Namespace, s: Settings) -> Any:
 
 def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: PoliteHttp, db: Database) -> Any:
     """Run one collector; a site that blocks us ends this source for the run (never retried in a loop)."""
-    region = get_region(args.region)
+    region = get_region(args.region, s.catalog_path)
     blobs = BlobStore(s.blobs_dir)
     run_id = db.start_run(f"collect:{source}")
     dossier_limits = DossierLimits(
@@ -173,7 +175,7 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
         elif source == "press":
             ref = ReferenceCommunes(s.communes_path)
             names = [c.name for dep in region.departments for c in ref.communes_in(dep)]
-            report = press.collect_press(http, db, names)
+            report = press.collect_press(http, db, names, lead_store=DiscoveryStore(db.conn), region=region.slug)
         else:
             report = prefectures.collect_prefectures(
                 http, db, blobs, region, args.max_pages, dossier_limits=dossier_limits
@@ -197,7 +199,10 @@ def cmd_collect(args: argparse.Namespace, s: Settings) -> Any:
 def cmd_coverage(args: argparse.Namespace, s: Settings) -> Any:
     with Database(s.db_path) as db:
         return coverage.inventory(
-            db, get_region(args.region), args.years or coverage.default_years(), stale_days=args.stale_days
+            db,
+            get_region(args.region, s.catalog_path),
+            args.years or coverage.default_years(),
+            stale_days=args.stale_days,
         )
 
 
@@ -396,6 +401,22 @@ def cmd_stats(_: argparse.Namespace, s: Settings) -> Any:
 
 def cmd_campaign(args: argparse.Namespace, s: Settings) -> Any:
     """Private offline annotation packets and paired comparisons; never call a model provider."""
+    if args.action == "serve":
+        import uvicorn
+
+        from radar.web.campaign_app import build_app
+
+        app = build_app(
+            s,
+            Path(args.directory),
+            args.reviewer,
+            args.slot,
+            host=args.host,
+            token=s.api_token,
+            public_host=args.public_host,
+        )
+        uvicorn.run(app, host=args.host, port=args.port)
+        return None
     if args.action == "discovery":
         from radar.evaluation.discovery import evaluate
 
@@ -420,6 +441,18 @@ def cmd_campaign(args: argparse.Namespace, s: Settings) -> Any:
         with Database(s.db_path) as db:
             campaign.check_documents(db, manifest)
     services = make_services(s, None, llm="cached")
+    if args.action == "apply":
+        from radar.quality.campaign_feedback import apply_consensus
+
+        with Database(s.db_path) as db:
+            return apply_consensus(
+                db,
+                manifest,
+                [Path(path) for path in args.annotations],
+                BlobStore(s.blobs_dir),
+                read=lambda key, data: services.ocr.complete(key, data, services.reader.read(key, data)),
+                reviewed_seconds=args.review_seconds,
+            )
     report, references = campaign_review.validate(
         manifest,
         [Path(path) for path in args.annotations],
@@ -901,6 +934,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="radar", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    documentary_cli.add_parsers(sub)
 
     imp = sub.add_parser("import", help="load data already on disk (no network)")
     isub = imp.add_subparsers(dest="what", required=True)
@@ -1088,6 +1122,29 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--baseline", help="publish: approved evaluation reference path")
     annotation = sub.add_parser("campaign", help="private blinded annotation and offline extractor comparisons")
     annotation_actions = annotation.add_subparsers(dest="action", required=True)
+    serve_campaign = annotation_actions.add_parser(
+        "serve",
+        help="private blinded human annotation interface",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n  radar campaign serve data/campaigns/pilot --reviewer lecteur-a --slot a",
+    )
+    serve_campaign.add_argument("directory")
+    serve_campaign.add_argument("--reviewer", required=True)
+    serve_campaign.add_argument("--slot", required=True, choices=["a", "b"])
+    serve_campaign.add_argument("--host", default="127.0.0.1")
+    serve_campaign.add_argument("--port", type=int, default=8766)
+    serve_campaign.add_argument("--public-host", help="required external hostname behind an authenticated proxy")
+    apply_campaign = annotation_actions.add_parser(
+        "apply",
+        help="apply verified development consensus to the quality loop",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n  radar campaign apply data/campaigns/pilot --annotations data/campaigns/pilot/reviews/lecteur-a.jsonl",
+    )
+    apply_campaign.add_argument("directory")
+    apply_campaign.add_argument("--annotations", nargs="+", required=True)
+    apply_campaign.add_argument(
+        "--review-seconds", type=float, help="optional measured review time declared by the operator"
+    )
     prepare = annotation_actions.add_parser(
         "prepare", help="freeze grouped document inventory and blank reviewer packets"
     )
@@ -1126,6 +1183,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
+    "catalog": documentary_cli.catalog_command,
+    "discover": documentary_cli.discovery_command,
+    "quality-loop": documentary_cli.quality_command,
     "import": cmd_import,
     "collect": cmd_collect,
     "coverage": cmd_coverage,
@@ -1177,7 +1237,10 @@ def main(argv: list[str] | None = None) -> int:
             "health",
             "triage",
             "errors",
+            "quality-loop",
         }
+        if args.command == "campaign" and args.action == "serve":
+            mutating = False
         if mutating:
             with process_lock(settings.data_dir):
                 result = COMMANDS[args.command](args, settings)

@@ -157,6 +157,8 @@ def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode =
         max_bytes=settings.pdf_max_bytes,
         max_pixels=settings.ocr_max_pixels,
         document_timeout_s=settings.ocr_timeout_s,
+        secondary_pass=settings.ocr_secondary_pass,
+        secondary_max_pages=settings.ocr_secondary_max_pages,
     )
     models = make_llm(settings, cache, llm)
     classifier = make_classifier(settings, cache, llm=models)
@@ -175,6 +177,12 @@ def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode =
         settings.ocr_max_pixels,
         settings.pdf_timeout_s,
         settings.ocr_timeout_s,
+        settings.pdf_read_tables,
+        settings.pdf_table_max_pages,
+        settings.pdf_table_max_rows,
+        settings.pdf_table_max_chars,
+        settings.ocr_secondary_pass,
+        settings.ocr_secondary_max_pages,
     )
     return Services(
         blobs=BlobStore(settings.blobs_dir),
@@ -195,6 +203,10 @@ def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode =
             max_batch_bytes=settings.pdf_batch_bytes,
             max_memo_bytes=settings.pdf_batch_bytes,
             document_timeout_s=settings.pdf_timeout_s,
+            read_tables=settings.pdf_read_tables,
+            max_table_pages=settings.pdf_table_max_pages,
+            max_table_rows=settings.pdf_table_max_rows,
+            max_table_chars=settings.pdf_table_max_chars,
         ),
         verifier=models.verifier,
         llm_queue=models.queue,

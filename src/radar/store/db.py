@@ -14,6 +14,8 @@ from typing import Any, Literal, TypedDict, Unpack, cast
 from radar.domain.geo import bbox_around, haversine_km
 from radar.domain.models import Correction, DocumentRecord, Filing, Link, LinkDecision, Project, ProjectChange, Signal
 from radar.domain.text import fold
+from radar.store.discovery import DISCOVERY_MIGRATION
+from radar.store.review_history import REVIEW_MIGRATION
 
 _MIGRATIONS: tuple[str, ...] = (
     """
@@ -235,6 +237,7 @@ _MIGRATIONS += (
     CREATE INDEX dossier_edges_url ON dossier_edges(filing_key, root_url, url);
     """,
 )
+_MIGRATIONS += (REVIEW_MIGRATION, DISCOVERY_MIGRATION)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 
@@ -346,6 +349,12 @@ class Database:
             DocumentRecord.model_validate_json(r["data"])
             for r in self.conn.execute(sql + " ORDER BY document_id, filing_key", args)
         ]
+
+    def document_attachment(self, document_id: str, filing_key: str) -> DocumentRecord | None:
+        row = self.conn.execute(
+            "SELECT data FROM document_attachments WHERE document_id=? AND filing_key=?", (document_id, filing_key)
+        ).fetchone()
+        return DocumentRecord.model_validate_json(row[0]) if row else None
 
     def filing_keys_with_documents(self) -> list[str]:
         return list(self.iter_filing_keys_with_documents())

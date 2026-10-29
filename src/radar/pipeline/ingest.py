@@ -39,14 +39,28 @@ def ingest_pdf(
 ) -> DocumentRecord:
     """Idempotent: the same bytes always give the same document id. Caller owns the transaction."""
     digest = blobs.put(data, ".pdf")
+    key = filing_key(source, region, number)
+    existing = db.document_attachment(digest, key)
+    inferred_role = role or guess_role(filename, title)
+    # One PDF may be linked both as a form and as a neutral annex. The neutral
+    # alias adds provenance at the dossier edge; it must not erase a known role.
+    if (
+        role is None
+        and existing is not None
+        and inferred_role is DocumentRole.OTHER
+        and existing.role is not DocumentRole.OTHER
+    ):
+        if existing.url != url:
+            return existing
+        inferred_role = existing.role
     content = read_pdf(data)
     record = DocumentRecord(
         id=digest,
         source=source,
         url=url,
         title=title,
-        role=role or guess_role(filename, title),
-        filing_key=filing_key(source, region, number),
+        role=inferred_role,
+        filing_key=key,
         fetched_at=fetched_at or utcnow(),
         filename=filename,
         pages=content.pages,

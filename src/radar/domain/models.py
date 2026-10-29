@@ -16,6 +16,7 @@ from radar.domain.enums import (
     SignalKind,
     SourceKind,
 )
+from radar.domain.quantity_context import QuantityObservation
 
 
 class Model(BaseModel):
@@ -117,6 +118,7 @@ class MachineOutput(Model):
 class Filing(Model):
     """One administrative filing (e.g. a case-by-case request and its decision), possibly several documents."""
 
+    quantity_observations: tuple[QuantityObservation, ...] = ()
     key: str  # "<source>:<number>", e.g. "dreal_case_by_case:hauts-de-france:2025-8646"
     source: SourceKind
     region: str

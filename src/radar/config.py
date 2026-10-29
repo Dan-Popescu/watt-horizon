@@ -40,6 +40,17 @@ class Settings:
     published_dir: Path | None = None
     evaluation_campaign: str = "default"
     evaluation_test_after: date | None = None
+    source_catalog_path: Path | None = None
+    pdf_read_tables: bool = False
+    pdf_table_max_pages: int = 20
+    pdf_table_max_rows: int = 2000
+    pdf_table_max_chars: int = 200_000
+    ocr_secondary_pass: bool = False
+    ocr_secondary_max_pages: int = 8
+
+    @property
+    def catalog_path(self) -> Path:
+        return self.source_catalog_path or self.data_dir / "sources" / "catalog.json"
 
     @property
     def llm_jobs_path(self) -> Path:
@@ -208,6 +219,13 @@ def load_settings() -> Settings:
         llm_wait_timeout_s=_positive_int("RADAR_LLM_WAIT_TIMEOUT_S", 3600),
         llm_poll_interval_s=_positive_int("RADAR_LLM_POLL_INTERVAL_S", 10),
         published_dir=_optional_path("RADAR_PUBLISHED_DIR"),
+        source_catalog_path=_optional_path("RADAR_SOURCE_CATALOG"),
+        pdf_read_tables=_flag("RADAR_PDF_TABLES", False),
+        pdf_table_max_pages=_positive_int("RADAR_PDF_TABLE_MAX_PAGES", 20),
+        pdf_table_max_rows=_positive_int("RADAR_PDF_TABLE_MAX_ROWS", 2000),
+        pdf_table_max_chars=_positive_int("RADAR_PDF_TABLE_MAX_CHARS", 200_000),
+        ocr_secondary_pass=_flag("RADAR_OCR_SECONDARY", False),
+        ocr_secondary_max_pages=_positive_int("RADAR_OCR_SECONDARY_MAX_PAGES", 8),
         evaluation_campaign=_evaluation_campaign(),
         evaluation_test_after=date.fromisoformat(os.environ["RADAR_EVAL_TEST_AFTER"])
         if os.environ.get("RADAR_EVAL_TEST_AFTER")
