@@ -9,6 +9,7 @@ from radar.domain.models import Correction
 from radar.quality.documentary_metrics import build_quality_loop
 from radar.store.blobs import BlobStore
 from radar.store.db import Database
+from radar.store.discovery import DiscoveryStore
 from tests.test_annotation_campaign import seed
 
 
@@ -114,6 +115,28 @@ def test_quality_overview_exposes_read_only_diagnostics(db: Database, tmp_path: 
     report = quality_overview(db, tmp_path / "cases")
     assert "documentary" in report and not report["documentary"]["quality_measured"]
     assert db.conn.total_changes == before
+
+
+def test_discovery_diagnostics_aggregate_requests_without_lead_or_query_details(db: Database) -> None:
+    store = DiscoveryStore(db.conn)
+    with db.transaction():
+        store.enqueue(
+            key="private-query-key",
+            region="hauts-de-france",
+            query="PRIVATE QUERY",
+            provider="https://html.duckduckgo.com/html/",
+            domains=("example.gouv.fr",),
+            seed_keys=(),
+            reason="manual",
+        )
+        attempt = store.start_attempt("query", "private-query-key")
+        store.record_request(attempt, "private-query-key")
+        store.record_request(attempt, "private-query-key")
+        store.finish_attempt(attempt, "partial", requests=2, duration_s=0.5)
+    result = build_quality_loop(db)["discovery"]
+    assert result["provider_requests"] == 2 and result["provider_cost_usd"] == 0
+    assert result["attempts"][0]["physical_requests"] == 2
+    assert "PRIVATE QUERY" not in json.dumps(result) and "private-query-key" not in json.dumps(result)
 
 
 def test_unpriced_attempt_stays_unknown_and_receipt_scope_is_explicit(db: Database, tmp_path: Path) -> None:

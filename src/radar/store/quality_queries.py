@@ -66,3 +66,24 @@ def dossier_counts(connection: sqlite3.Connection, region: str | None) -> dict[s
     ):
         result.setdefault(row[0], {}).update(outside_scope_edges=row[1], outside_scope_attachments=row[2])
     return result
+
+
+def discovery_attempt_counts(connection: sqlite3.Connection, region: str | None) -> list[dict[str, Any]]:
+    where, args = (" WHERE COALESCE(q.region,l.region)=?", (region,)) if region else ("", ())
+    rows = connection.execute(
+        "SELECT a.kind,a.state,COUNT(*),COALESCE(SUM(a.requests),0),SUM(a.duration_s),COUNT(a.duration_s) "
+        "FROM discovery_attempts a LEFT JOIN discovery_queries q ON a.kind='query' AND q.key=a.object_key "
+        "LEFT JOIN discovery_leads l ON a.kind='resolve' AND l.id=a.object_key" + where + " GROUP BY a.kind,a.state",
+        args,
+    )
+    return [
+        {
+            "kind": row[0],
+            "state": row[1],
+            "attempts": row[2],
+            "physical_requests": row[3],
+            "recorded_duration_s": row[4],
+            "attempts_with_duration": row[5],
+        }
+        for row in rows
+    ]

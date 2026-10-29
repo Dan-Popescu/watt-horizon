@@ -20,7 +20,14 @@ from radar.evaluation.partitions import build_manifest
 from radar.evaluation.stats import wilson
 from radar.pipeline.corrections import reviewed_references
 from radar.store.db import Database
-from radar.store.quality_queries import coverage_scopes, dossier_counts, listing_counts, random_audit_items
+from radar.store.discovery import DiscoveryStore
+from radar.store.quality_queries import (
+    coverage_scopes,
+    discovery_attempt_counts,
+    dossier_counts,
+    listing_counts,
+    random_audit_items,
+)
 from radar.store.review_history import ReviewHistory
 
 SOURCE_NAMES = {
@@ -233,6 +240,22 @@ def build_quality_loop(db: Database, *, jobs_path: Path | None = None, region: s
     cost["unit_cost_scope"] = "cumulative journal usage / fully human-annotated target groups; not a cloud invoice"
     receipts = ReviewHistory(db.conn).summary()
     receipts["scope"] = "all_regions; reviewer-declared duration, not measured active attention"
+    discovery_status = DiscoveryStore(db.conn).status(region, limit=1)
+    discovery = {
+        name: discovery_status[name]
+        for name in (
+            "queries",
+            "leads",
+            "provider_requests",
+            "provider_pages",
+            "provider_results",
+            "model_calls",
+            "provider_cost_usd",
+            "cost_scope",
+        )
+    }
+    discovery["attempts"] = discovery_attempt_counts(db.conn, region)
+    discovery["request_scope"] = "persisted physical request admissions, including redirects and retries"
     runs = db.runs("collect:", limit=100)
     durations = [(run["finished_at"] - run["started_at"]).total_seconds() for run in runs if run["finished_at"]]
     evaluation = db.runs("eval", limit=1)
@@ -259,6 +282,7 @@ def build_quality_loop(db: Database, *, jobs_path: Path | None = None, region: s
         "reading": _reading(records),
         "model_cost": cost,
         "human_feedback": receipts,
+        "discovery": discovery,
         "human_complete_target_groups": complete_n,
         "latest_evaluation_gate": gate,
         "quality_measured": bool(cells),

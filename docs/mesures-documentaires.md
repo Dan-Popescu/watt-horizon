@@ -31,3 +31,8 @@ décrit le coût cumulé du journal rapporté à ces groupes, pas le coût margi
 Les reçus d'application des campagnes comptent les observations réellement importées. Le temps éventuellement
 déclaré par le relecteur est explicitement distinct d'une mesure de son attention active. Sans donnée, les durées,
 coûts et justesses restent indisponibles.
+
+Les requêtes de recherche et pistes sont également agrégées par état, avec les requêtes physiques admises
+(redirections et reprises comprises) et les durées effectivement enregistrées. Aucune requête, URL de piste ou
+identité de dossier du test n'est exposée dans ce résumé. L'accès public au moteur par défaut n'a pas de frais de
+fournisseur configurés ; les frais d'un point d'accès personnalisé restent inconnus. Cela ne chiffre pas le calcul cloud.
