@@ -7,6 +7,7 @@ from radar.domain.models import Correction
 from radar.evaluation.campaign import load_campaign, prepare
 from radar.pipeline.corrections import reviewed_references
 from radar.quality.campaign_feedback import apply_consensus
+from radar.quality.errors import analyse
 from radar.store.blobs import BlobStore
 from radar.store.db import Database, utcnow
 from radar.store.review_history import ReviewHistory
@@ -73,3 +74,24 @@ def test_double_review_pending_or_drafts_never_create_corrections(
     path.write_text(json.dumps(row))
     assert apply_consensus(db, campaign, [path], blobs)["applied"] == 0
     assert db.corrections() == []
+
+
+def test_applied_human_observation_exposes_machine_error_without_overwriting_prediction(
+    db: Database,
+    blobs: BlobStore,
+    tmp_path: Path,
+) -> None:
+    original = seed(db, blobs)
+    # Deliberately incorrect synthetic machine output; the source still states 0.05 MW.
+    broken = original.model_copy(update={"machine": original.machine.model_copy(update={"values": {"power_mw": 1.5}})})
+    with db.transaction():
+        db.upsert_filing(broken)
+        db.note_processing_outcome(broken.key, "complete")
+    directory = tmp_path / "campaign"
+    prepare(db, directory, double_rate=0)
+    result = apply_consensus(db, load_campaign(directory), [packet(directory)], blobs)
+    assert result["applied"] == 1
+    errors = analyse(db.filings(), db.corrections())
+    assert errors.with_errors == 1
+    assert errors.errors[0].machine == 1.5 and errors.errors[0].human == 0.05
+    assert db.filing(broken.key).machine.values["power_mw"] == 1.5
