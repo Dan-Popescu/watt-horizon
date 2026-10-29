@@ -11,12 +11,17 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 from radar.domain.enums import SourceKind
-from radar.domain.ids import normalize_filing_number
 from radar.net.http import PoliteHttp, SiteBlockedError
-from radar.pipeline.ingest import ingest_pdf
 from radar.quality.audit import decide
 from radar.sources.base import CollectReport
 from radar.sources.coverage import listing_period, load_scope
+from radar.sources.dossier import (
+    DEFAULT_DOSSIER_LIMITS,
+    DossierLimits,
+    collect_dossier,
+    dossier_number,
+    is_document_url,
+)
 from radar.sources.html import links
 from radar.sources.regions import Region
 from radar.store.blobs import BlobStore
@@ -46,7 +51,7 @@ def last_offset(page: str) -> int:
 
 
 def parse_article_pdfs(page: str, article_url: str) -> list[str]:
-    return sorted({url for url, _, _ in links(page, article_url) if url.lower().endswith(".pdf")})
+    return sorted({url for url, _, _ in links(page, article_url) if is_document_url(url)})
 
 
 def iter_articles(http: PoliteHttp, region: Region, listing: str, max_offset: int) -> Iterator[Article]:
@@ -70,6 +75,7 @@ def collect_dreal(
     backfill: bool = False,
     max_pages: int = 30,
     restart: bool = False,
+    dossier_limits: DossierLimits = DEFAULT_DOSSIER_LIMITS,
 ) -> CollectReport:
     """Screen titles (layer 1), download the PDFs of kept articles and of the audit sample, ingest them. Idempotent.
     Every listed item is recorded (`listing_items`) so the screen's recall can be estimated later."""
@@ -121,30 +127,27 @@ def collect_dreal(
                         return report
                     report.kept += kept
                     report.audited += audit is not None
-                    pdfs = parse_article_pdfs(http.get_text(article.url), article.url)
-                    if not pdfs:
-                        report.errors.append(f"no recognized document: {article.url}")
-                    for pdf_url in pdfs:
-                        filename = pdf_url.rsplit("/", 1)[-1]
-                        number = normalize_filing_number(filename) or normalize_filing_number(article.title)
-                        if number is None:
-                            report.errors.append(f"no filing number: {pdf_url}")
-                            continue
-                        data = http.get_bytes(pdf_url)
-                        with db.transaction():
-                            ingest_pdf(
-                                db,
-                                blobs,
-                                data=data,
-                                source=SourceKind.DREAL_CASE_BY_CASE,
-                                region=region.slug,
-                                number=number,
-                                url=pdf_url,
-                                title=article.title,
-                                filename=filename,
-                                audit=audit,
-                            )
-                        report.documents += 1
+                    page = http.get_text(article.url)
+                    number = dossier_number(
+                        db, SourceKind.DREAL_CASE_BY_CASE, region.slug, article.url, article.title, page
+                    )
+                    dossier = collect_dossier(
+                        http,
+                        db,
+                        blobs,
+                        source=SourceKind.DREAL_CASE_BY_CASE,
+                        region=region.slug,
+                        number=number,
+                        root_url=article.url,
+                        title=article.title,
+                        audit=audit,
+                        initial_page=page,
+                        limits=dossier_limits,
+                    )
+                    report.documents += dossier.documents
+                    report.errors.extend(dossier.errors)
+                    if dossier.state != "complete" and not dossier.errors:
+                        report.errors.append(f"incomplete dossier: {article.url}")
                 if len(report.errors) != errors_before:
                     scope.save(db, "partial", "document_errors")
                     break

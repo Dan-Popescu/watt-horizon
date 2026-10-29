@@ -69,6 +69,7 @@ from radar.quality.templates import Registry
 from radar.quality.triage import triage
 from radar.reading.ocr import TesseractOcr
 from radar.sources import coverage, dreal, georisques, mrae, prefectures, press, registry
+from radar.sources.dossier import DossierLimits
 from radar.sources.regions import get_region
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
@@ -129,6 +130,11 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
     region = get_region(args.region)
     blobs = BlobStore(s.blobs_dir)
     run_id = db.start_run(f"collect:{source}")
+    dossier_limits = DossierLimits(
+        pages=getattr(args, "dossier_pages", 8),
+        documents=getattr(args, "dossier_documents", 24),
+        depth=getattr(args, "dossier_depth", 2),
+    )
     try:
         if source == "dreal":
             backfill = bool(getattr(args, "backfill", False))
@@ -152,9 +158,12 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
                 backfill=backfill,
                 max_pages=args.max_pages,
                 restart=bool(getattr(args, "restart", False)),
+                dossier_limits=dossier_limits,
             )
         elif source == "mrae":
-            report = mrae.collect_mrae(http, db, blobs, region, args.year, args.max_items)
+            report = mrae.collect_mrae(
+                http, db, blobs, region, args.year, args.max_items, dossier_limits=dossier_limits
+            )
         elif source == "georisques":
             report = georisques.collect_georisques(http, db, region.departments)
         elif source == "registry":
@@ -164,7 +173,9 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
             names = [c.name for dep in region.departments for c in ref.communes_in(dep)]
             report = press.collect_press(http, db, names)
         else:
-            report = prefectures.collect_prefectures(http, db, blobs, region, args.max_pages)
+            report = prefectures.collect_prefectures(
+                http, db, blobs, region, args.max_pages, dossier_limits=dossier_limits
+            )
     except SiteBlockedError as exc:
         db.finish_run(run_id, {"stopped": str(exc)})
         return {"stopped": str(exc), "advice": "Site closed the connection: retry another day, never in a loop."}
@@ -885,6 +896,10 @@ def build_parser() -> argparse.ArgumentParser:
     upd.add_argument("--year", type=int, default=date.today().year)
     upd.add_argument("--since", default=(date.today() - timedelta(days=90)).isoformat())
     upd.add_argument("--only", nargs="*", help=argparse.SUPPRESS)
+    for collection in (col, upd):
+        collection.add_argument("--dossier-pages", type=int, default=8, help="HTML page budget per selected dossier")
+        collection.add_argument("--dossier-documents", type=int, default=24, help="PDF budget per selected dossier")
+        collection.add_argument("--dossier-depth", type=int, default=2, help="attachment-link depth per dossier")
 
     proc = sub.add_parser("process", help="(re)build filings from stored documents")
     proc.add_argument("--only", nargs="*", help="filing keys")

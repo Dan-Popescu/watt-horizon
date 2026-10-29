@@ -217,6 +217,20 @@ _MIGRATIONS += (
     );
     """,
 )
+_MIGRATIONS += (
+    """
+    CREATE TABLE dossier_scans (
+        filing_key TEXT NOT NULL, root_url TEXT NOT NULL, data TEXT NOT NULL,
+        PRIMARY KEY(filing_key, root_url)
+    );
+    CREATE TABLE dossier_edges (
+        filing_key TEXT NOT NULL, root_url TEXT NOT NULL, parent_url TEXT NOT NULL,
+        url TEXT NOT NULL, state TEXT NOT NULL, document_id TEXT, updated_at TEXT NOT NULL,
+        PRIMARY KEY(filing_key, root_url, parent_url, url)
+    );
+    CREATE INDEX dossier_edges_filing ON dossier_edges(filing_key);
+    """,
+)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 
@@ -739,6 +753,38 @@ class Database:
         if region is not None:
             sql += " WHERE region=?"
         return [json.loads(row[0]) for row in self.conn.execute(sql + " ORDER BY source,period,scope,mode", args)]
+
+    def save_dossier_scan(self, key: str, root_url: str, data: dict[str, Any]) -> None:
+        self.conn.execute(
+            "INSERT INTO dossier_scans VALUES (?,?,?) ON CONFLICT(filing_key,root_url) "
+            "DO UPDATE SET data=excluded.data",
+            (key, root_url, json.dumps(data, ensure_ascii=False)),
+        )
+
+    def dossier_scans(self, key: str | None = None) -> list[dict[str, Any]]:
+        sql, args = "SELECT filing_key,root_url,data FROM dossier_scans", () if key is None else (key,)
+        if key is not None:
+            sql += " WHERE filing_key=?"
+        return [{"filing_key": r[0], "root_url": r[1], **json.loads(r[2])} for r in self.conn.execute(sql, args)]
+
+    def record_dossier_edge(
+        self, key: str, root_url: str, parent_url: str, url: str, state: str, document_id: str | None = None
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO dossier_edges VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(filing_key,root_url,parent_url,url) DO UPDATE SET "
+            "state=excluded.state,document_id=excluded.document_id,updated_at=excluded.updated_at",
+            (key, root_url, parent_url, url, state, document_id, utcnow().isoformat()),
+        )
+
+    def dossier_edges(self, key: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.conn.execute("SELECT * FROM dossier_edges WHERE filing_key=?", (key,))]
+
+    def settle_dossier_url(self, key: str, root_url: str, url: str, state: str, document_id: str | None = None) -> None:
+        self.conn.execute(
+            "UPDATE dossier_edges SET state=?,document_id=?,updated_at=? WHERE filing_key=? AND root_url=? AND url=?",
+            (state, document_id, utcnow().isoformat(), key, root_url, url),
+        )
 
     def record_listing_item(self, url: str, source: str, title: str, kept: bool, audit: str | None) -> None:
         self.conn.execute(

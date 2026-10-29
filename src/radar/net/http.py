@@ -49,6 +49,7 @@ class PoliteHttp:
         sleep: Callable[[float], None] = time.sleep,
         max_response_bytes: int = 32 * 1024 * 1024,
         max_response_seconds: float = 60.0,
+        global_interval_s: float = 0.0,
     ) -> None:
         if (
             max_response_bytes <= 0
@@ -59,6 +60,8 @@ class PoliteHttp:
             or timeout_s <= 0
             or not math.isfinite(default_interval_s)
             or default_interval_s < 0
+            or not math.isfinite(global_interval_s)
+            or global_interval_s < 0
         ):
             raise ValueError("HTTP limits must be positive and pacing cannot be negative")
         ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -70,6 +73,8 @@ class PoliteHttp:
             transport=transport,
         )
         self.default_interval_s = default_interval_s
+        self.global_interval_s = global_interval_s
+        self._last_global_request: float | None = None
         self.retries = retries
         self.timeout_s = timeout_s
         self.max_response_bytes = max_response_bytes
@@ -102,11 +107,15 @@ class PoliteHttp:
 
     def _pace(self, host: str, interval: float, deadline: float, url: str) -> None:
         last = self._last_request.get(host)
-        if last is not None:
-            wait = last + interval - self._clock()
-            if wait > 0:
-                self._sleep_within(wait, deadline, url)
+        now = self._clock()
+        wait = max(
+            last + interval - now if last is not None else 0,
+            self._last_global_request + self.global_interval_s - now if self._last_global_request is not None else 0,
+        )
+        if wait > 0:
+            self._sleep_within(wait, deadline, url)
         self._last_request[host] = self._clock()
+        self._last_global_request = self._clock()
 
     def _body(self, response: httpx.Response, deadline: float) -> bytes:
         url = str(response.url)
@@ -167,9 +176,15 @@ class PoliteHttp:
             raise httpx.DecodingError("Incomplete compressed HTTP response", request=response.request)
         return bytes(result)
 
-    def _fetch(self, url: str, interval: float, deadline: float, retry_server_error: bool) -> bytes:
+    def _fetch(
+        self, url: str, interval: float, deadline: float, retry_server_error: bool, same_origin_redirects: bool = False
+    ) -> bytes:
         current = url
         for _ in range(21):
+            if same_origin_redirects:
+                original, target = urllib.parse.urlparse(url), urllib.parse.urlparse(current)
+                if (original.scheme, original.netloc.lower()) != (target.scheme, target.netloc.lower()):
+                    raise ValueError("Dossier redirect leaves the selected origin")
             host = urllib.parse.urlparse(current).netloc
             if host in self.blocked_hosts:
                 raise SiteBlockedError(host, "already blocked in this run")
@@ -193,12 +208,12 @@ class PoliteHttp:
                 raise SiteBlockedError(host, f"connection closed ({type(exc).__name__})") from exc
         raise httpx.TooManyRedirects("Exceeded redirect limit", request=httpx.Request("GET", url))
 
-    def get_bytes(self, url: str, min_interval_s: float | None = None) -> bytes:
+    def get_bytes(self, url: str, min_interval_s: float | None = None, *, same_origin_redirects: bool = False) -> bytes:
         deadline = self._clock() + self.max_response_seconds
         interval = self.default_interval_s if min_interval_s is None else min_interval_s
         for attempt in range(self.retries + 1):
             try:
-                return self._fetch(url, interval, deadline, attempt < self.retries)
+                return self._fetch(url, interval, deadline, attempt < self.retries, same_origin_redirects)
             except ResponseDeadlineError:
                 raise
             except (httpx.TimeoutException, _RetryResponseError):
