@@ -66,6 +66,12 @@ Les [campagnes aveugles](docs/campagnes-annotation.md) préparent des référenc
 sur les mêmes entrées. Un [inventaire manuel externe](docs/inventaire-reference-decouverte.md) mesure aussi les
 dossiers jamais collectés. Ces outils ne donnent aucun score de précision réel sans références vérifiées.
 
+Les [six chantiers documentaires](docs/six-documentary-workstreams.md) sont raccordés : catalogue de sources,
+recherche web bornée, dossiers complets, tableaux/OCR sélectif, interface privée de relecture et import traçable
+du consensus de développement. `radar quality-loop` et le tableau de qualité montrent les observations réellement
+disponibles. Le [rapport de validation](docs/validation-six-workstreams-20261029.md) distingue les tests, les essais
+locaux et les validations métier restant à effectuer.
+
 ## Brancher un agent (MCP)
 
 Deux façons de se connecter :
