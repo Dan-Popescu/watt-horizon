@@ -35,6 +35,16 @@ def audit_privacy(db: Database, blobs: BlobStore, reader: PdfReader | None = Non
             "classification": filing.classification.quote,
             **{f"evidence:{name}": ev.quote for name, ev in filing.evidence.items()},
             "vocabulary": " ".join(filing.vocabulary),
+            **{
+                f"quantity:{index}:{name}": str(value or "")
+                for index, observation in enumerate(filing.quantity_observations)
+                for name, value in (
+                    ("quote", observation.quote),
+                    ("header", observation.header_quote),
+                    ("phase", observation.phase),
+                    ("scenario", observation.scenario),
+                )
+            },
         }
         leaks += [f"{filing.key} {where}" for where, text in texts.items() if audit.leaks(text)]
     return leaks

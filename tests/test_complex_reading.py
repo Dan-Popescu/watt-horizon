@@ -194,8 +194,10 @@ def test_native_secondary_ocr_reads_a_constructed_scan() -> None:
     if not TesseractOcr.available():
         pytest.skip("Local Tesseract is optional")
     languages = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=5, check=False)
-    if "eng" not in languages.stdout.splitlines():
-        pytest.skip("Constructed scan smoke requires the English language pack")
+    available = languages.stdout.splitlines()
+    language = "eng" if "eng" in available else "fra" if "fra" in available else None
+    if language is None:
+        pytest.skip("Constructed scan smoke requires an English or French language pack")
     with pymupdf.open() as source:
         page = source.new_page(width=320, height=140)
         page.insert_text((20, 40), "Project battery storage", fontsize=18)
@@ -205,7 +207,7 @@ def test_native_secondary_ocr_reads_a_constructed_scan() -> None:
             scanned.new_page(width=320, height=140).insert_image(page.rect, pixmap=pixels)
             data = bytes(scanned.tobytes())
     content = read_pdf(data)
-    engine = SelectiveOcr(FixedOcr("primary", {}), TesseractOcr(language="eng", dpi=400, document_timeout_s=15))
+    engine = SelectiveOcr(FixedOcr("primary", {}), TesseractOcr(language=language, dpi=400, document_timeout_s=15))
     result = engine.complete("scan", data, content)
     assert "30 MW" in result.text and not result.unread_scanned_pages
     assert result.coverage_summary()["ocr_native_pages"] == 1
