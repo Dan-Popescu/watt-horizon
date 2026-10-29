@@ -35,6 +35,14 @@ def test_mrae_opinions_keep_context() -> None:
     assert op.reference == "009102/A P" and "photovoltaïque" in op.context
 
 
+def test_dreal_short_titles_and_query_article_urls_reach_screening() -> None:
+    # Constructed layout: title length is not evidence that a filing is irrelevant.
+    page = '<a href="stockage-a123.html?lang=fr#document">Stockage batteries</a>'
+    [article] = dreal.parse_listing(page, BASE)
+    assert article.title == "Stockage batteries"
+    assert article.url.endswith("stockage-a123.html?lang=fr#document")
+
+
 def test_georisques_rules() -> None:
     dc = georisques.to_signal(
         {

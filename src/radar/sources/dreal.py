@@ -8,7 +8,7 @@ import hashlib
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from radar.domain.enums import SourceKind
 from radar.net.http import PoliteHttp, SiteBlockedError
@@ -41,7 +41,12 @@ class Article:
 def parse_listing(page: str, base_url: str) -> list[Article]:
     seen: dict[str, Article] = {}
     for url, text, _ in links(page, base_url):
-        if _ARTICLE.search(url) and len(text) > 25 and "mentions-legales" not in url and "accessibilite" not in url:
+        if (
+            _ARTICLE.search(urlparse(url).path)
+            and text.strip()
+            and "mentions-legales" not in url
+            and "accessibilite" not in url
+        ):
             seen.setdefault(url, Article(url=url, title=text))
     return list(seen.values())
 
