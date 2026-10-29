@@ -55,6 +55,55 @@ le pic global inclut aussi les contrôles et le second passage. Ce scénario iso
 persistance d'une entrée déjà générable en flux. Il ne réduit pas les allocations de
 `propose_links`, dont l'interface retourne encore une liste complète.
 
+Après le correctif `fe86819`, les [trois mesures du banc](measurements/link-storage-20261029.json)
+stockent 100 000 liens en **0,612 seconde médiane**, avec un pic initial maximal de
+**31,46 Mio**. Le second stockage identique prend 0,581 seconde médiane. Les trois
+contrôles de contenu donnent le même SHA-256 et conservent la révision du jeu.
+
+Un essai minimal, limité aux imports `Link`/`Database` et au premier stockage, avait
+montré le coût des listes JSON avant le correctif. Le même programme a été repris
+après le correctif, séparément du banc enrichi :
+
+| Code du stockage | Répétitions | Durée | Pic RSS |
+| --- | ---: | ---: | ---: |
+| Avant (`40f1291`) | 1 | 1,314 s | 117,945 Mio |
+| Après (`fe86819`) | 3 | 0,661 s médiane | 29,711 Mio maximum |
+
+Les durées après sont 0,660, 0,742 et 0,661 seconde ; leurs pics sont 29,539,
+29,480 et 29,711 Mio. La référence avant ne comporte qu'une répétition : elle ne
+caractérise pas sa variance. La baisse observée concerne la sérialisation et
+l'écriture de liens générés en flux. Elle ne prouve pas une baisse similaire de
+toute la pipeline, et ne supprime pas le cas dense de rapprochement à environ 396 Mio.
+
+Le programme minimal se reproduit ainsi sur la révision à examiner :
+
+```bash
+uv run python - <<'PY'
+import json, resource, tempfile, time
+from pathlib import Path
+from radar.domain.models import Link
+from radar.store.db import Database
+
+started = time.perf_counter()
+with tempfile.TemporaryDirectory(prefix="watt-link-storage-") as directory:
+    with Database(Path(directory) / "radar.sqlite") as db:
+        with db.transaction():
+            db.replace_links(
+                Link(a=f"manual:test:{i:06d}", b="signal:test",
+                     reasons=("Synthetic storage measurement " * 20,))
+                for i in range(100_000)
+            )
+        assert db.conn.execute("SELECT count(*) FROM links").fetchone()[0] == 100_000
+        print(json.dumps({"elapsed_s": time.perf_counter() - started,
+                          "peak_rss_mib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024}))
+PY
+```
+
+Un essai de délai dépassé a aussi été exécuté : scénario de stockage de 500 000 liens,
+délai d'une seconde, code de sortie 2, statut `timeout`, aucun fichier de travail restant.
+Le processus parent possède le répertoire temporaire pour le nettoyer même si le worker
+doit être interrompu avant de pouvoir exécuter ses propres nettoyages.
+
 ## Rapprochement et regroupement
 
 Le cas isolé donne à chaque dossier une commune et un nom de société distincts.

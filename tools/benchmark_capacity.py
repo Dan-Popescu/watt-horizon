@@ -275,11 +275,14 @@ def main() -> int:
     parser.add_argument("--repeats", type=int, default=3, choices=range(1, 6))
     parser.add_argument("--timeout-seconds", type=int, default=60, choices=range(1, 61))
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--scratch-dir", help=argparse.SUPPRESS)
     args = parser.parse_args()
     cases = args.cases or [parse_case(value) for value in DEFAULT_CASES]
     if len(cases) > 12 or (args.worker and len(cases) != 1):
         parser.error("Use at most 12 scenarios; the internal worker requires exactly one")
     if args.worker:
+        if args.scratch_dir is not None:
+            tempfile.tempdir = args.scratch_dir
         kind, count = cases[0]
         try:
             result = worker(kind, count)
@@ -293,13 +296,23 @@ def main() -> int:
         for repetition in range(1, args.repeats + 1):
             started = time.perf_counter()
             try:
-                completed = subprocess.run(
-                    [sys.executable, str(Path(__file__).resolve()), f"{kind}:{count}", "--worker"],
-                    capture_output=True,
-                    text=True,
-                    timeout=args.timeout_seconds,
-                    check=False,
-                )
+                # The parent owns the scratch root so killing a timed-out worker
+                # cannot strand its potentially large temporary SQLite files.
+                with tempfile.TemporaryDirectory(prefix="watt-capacity-worker-") as scratch:
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(Path(__file__).resolve()),
+                            f"{kind}:{count}",
+                            "--worker",
+                            "--scratch-dir",
+                            scratch,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=args.timeout_seconds,
+                        check=False,
+                    )
                 try:
                     result = json.loads(completed.stdout)
                     if not isinstance(result, dict) or completed.returncode != 0 or result.get("status") != "ok":
