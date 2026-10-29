@@ -32,6 +32,7 @@ from radar.extraction.cerfa import extract_cerfa, form_layout
 from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
 from radar.extraction.llm import ExtractionInput, FieldExtractor
+from radar.extraction.observations import MAX_OBSERVATIONS, observe_quantities
 from radar.extraction.substation import is_voltage_only
 from radar.extraction.supporting import extract_supporting
 from radar.pipeline.corrections import apply_corrections, with_machine
@@ -245,6 +246,19 @@ def build_filing(
     facts.evidence = {
         name: ev.model_copy(update={"quote": privacy.scrub(ev.quote)}) for name, ev in facts.evidence.items()
     }
+    observations = tuple(
+        observation.model_copy(
+            update={
+                "quote": privacy.scrub(observation.quote) or "",
+                "header_quote": privacy.scrub(observation.header_quote) or "",
+                "phase": privacy.scrub(observation.phase),
+                "scenario": privacy.scrub(observation.scenario),
+            }
+        )
+        for observation in observe_quantities(
+            (doc.id, content) for doc, content in zip(documents, contents, strict=True)
+        )
+    )
     title = privacy.scrub(_best_title(documents, facts)) or ""
 
     screening = screen(title, facts.description, *texts, extra=services.screen_terms)
@@ -266,37 +280,66 @@ def build_filing(
     templates = {
         doc.id: fingerprint(doc.role, c.field_names, c.text) for doc, c in zip(documents, contents, strict=True)
     }
-    flags = detect(
-        QualityInput(
-            documents=[
-                ReadDocument(
-                    id=doc.id,
-                    role=doc.role,
-                    text=text,
-                    fields=content.fields,
-                    layout=form_layout(content.fields) if doc.role is DocumentRole.FORM else None,
-                    ocr_texts=content.ocr_texts,
-                    ocr_engines=content.ocr_engines,
-                    audit=doc.audit,
-                    template=templates[doc.id],
-                    new_template=services.templates is not None and templates[doc.id] not in services.templates,
-                )
-                for doc, content, text in zip(documents, contents, texts, strict=True)
-            ],
-            form=form,
-            decision=decision,
-            facts=facts,
-            classification=classification,
-            checks=validation.checks,
-            target=classification.category in TARGET_CATEGORIES,
-            kept_by_text=screening.keep,
-            unread=unread,
-            second_opinion=opinion,
+    flags = list(
+        detect(
+            QualityInput(
+                documents=[
+                    ReadDocument(
+                        id=doc.id,
+                        role=doc.role,
+                        text=text,
+                        fields=content.fields,
+                        layout=form_layout(content.fields) if doc.role is DocumentRole.FORM else None,
+                        ocr_texts=content.ocr_texts,
+                        ocr_engines=content.ocr_engines,
+                        audit=doc.audit,
+                        template=templates[doc.id],
+                        new_template=services.templates is not None and templates[doc.id] not in services.templates,
+                    )
+                    for doc, content, text in zip(documents, contents, texts, strict=True)
+                ],
+                form=form,
+                decision=decision,
+                facts=facts,
+                classification=classification,
+                checks=validation.checks,
+                target=classification.category in TARGET_CATEGORIES,
+                kept_by_text=screening.keep,
+                unread=unread,
+                second_opinion=opinion,
+            )
         )
     )
+    for doc, content in zip(documents, contents, strict=True):
+        if content.table_errors or content.ocr_errors:
+            flags.append(
+                flag(
+                    "reading_incomplete",
+                    detail=f"{doc.id[:12]} : {len(content.table_errors)} pages de tableaux, {len(content.ocr_errors)} erreurs OCR",
+                )
+            )
+    contextual = [
+        observation
+        for observation in observations
+        if observation.phase
+        or observation.scenario
+        or observation.basis in {"dc", "c"}
+        or observation.asset in {"connection", "equipment", "mixed"}
+        or observation.state in {"existing", "example"}
+        or not observation.unit_in_cell
+    ]
+    if (contextual or len(observations) >= MAX_OBSERVATIONS) and classification.category in TARGET_CATEGORIES:
+        flags.append(
+            flag(
+                "quantity_context_review",
+                "power",
+                f"{len(contextual)} observations conservées avec leur phase, scénario, actif ou unité",
+            )
+        )
     gps_ok = any(c.name == "gps" and c.status is CheckStatus.OK for c in validation.checks)
     needs_review = (
         bool(unread)
+        or any(content.table_errors or content.ocr_errors for content in contents)
         or classification.category in {Category.NEEDS_REVIEW, Category.UNCLASSIFIED}
         or classification.quote_verified is False
     )
@@ -327,6 +370,7 @@ def build_filing(
         reading=reading,
         flags=flags,
         candidates=extraction.candidates,
+        quantity_observations=observations,
         vocabulary=words,
         second_opinion=SecondOpinion(
             category=opinion.category, probability=round(opinion.probability, 3), clues=opinion.clues
@@ -334,7 +378,22 @@ def build_filing(
         if opinion
         else None,
         strata=_strata(source.value, documents, contents, unread, facts.department)
-        | {"template": "+".join(sorted(set(templates.values())))},
+        | {"template": "+".join(sorted(set(templates.values())))}
+        | {"quantity_observation_limit_reached": str(len(observations) >= MAX_OBSERVATIONS).lower()}
+        | {
+            f"reading_{name}": str(sum(content.coverage_summary()[name] for content in contents))
+            for name in (
+                "pages",
+                "unread_pages",
+                "ocr_attempts",
+                "ocr_native_pages",
+                "ocr_cache_pages",
+                "table_pages_attempted",
+                "tables",
+                "table_rows",
+                "table_errors",
+            )
+        },
         versions={
             "extraction": EXTRACTION_VERSION,
             "classification": classification.method,

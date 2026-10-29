@@ -119,7 +119,7 @@ class TesseractOcr:
         if document_timeout_s <= 0:
             raise ValueError("OCR timeout must be positive")
         self.document_timeout_s = document_timeout_s
-        self.label = f"tesseract-{tesseract_version()}:{language}@{dpi}dpi:pages={max_pages}:pixels={max_pixels}:bytes={max_bytes}:timeout={document_timeout_s:g}"
+        self.label = f"tesseract-v2-{tesseract_version()}:{language}@{dpi}dpi:pages={max_pages}:pixels={max_pixels}:bytes={max_bytes}:timeout={document_timeout_s:g}"
 
     @staticmethod
     def available() -> bool:
@@ -140,6 +140,8 @@ class TesseractOcr:
             return replace(content, ocr_errors=content.ocr_errors | errors)
         workers = min(self.max_workers, max(1, (os.cpu_count() or 2) - 1), len(pages))
         texts: dict[int, str] = {}
+        attempts = dict(content.ocr_attempts)
+        work = content.ocr_work | {"requested_pages": content.ocr_work.get("requested_pages", 0) + len(pages)}
         jobs = ((str(p), (data, p, self.language, self.dpi, self.max_pixels)) for p in pages)
         concurrency = workers if len(pages) >= OCR_PARALLEL_MIN_PAGES else 1
         for number, result in run_bounded(
@@ -149,11 +151,18 @@ class TesseractOcr:
             timeout_s=self.document_timeout_s,
             total_timeout_s=self.document_timeout_s,
         ):
-            if result.error or result.value is None:
+            if result.started:
+                attempts[int(number)] = (*attempts.get(int(number), ()), self.label)
+                work["native_pages"] = work.get("native_pages", 0) + 1
+            if result.error or result.value is None or not result.value.strip():
                 errors[int(number)] = result.error or "OCR worker returned no text"
             else:
                 texts[int(number)] = result.value
-        return _with_pages(replace(content, ocr_errors=content.ocr_errors | errors), texts, self.label)
+        return _with_pages(
+            replace(content, ocr_errors=content.ocr_errors | errors, ocr_attempts=attempts, ocr_work=work),
+            texts,
+            self.label,
+        )
 
 
 class CachedOcr:
@@ -169,7 +178,14 @@ class CachedOcr:
         key = f"{document_id}:{self.label}:{','.join(map(str, content.unread_scanned_pages))}"
         original_pages = set(content.ocr_texts)
         if (hit := self.cache.get(self.NAMESPACE, key)) is not None:
-            content = _with_pages(content, {int(page): text for page, text in hit.items()}, self.label)
+            content = _with_pages(content, {int(page): text for page, text in hit.items() if text.strip()}, self.label)
+            content = replace(
+                content,
+                ocr_work=content.ocr_work
+                | {
+                    "cache_pages": content.ocr_work.get("cache_pages", 0) + len(hit),
+                },
+            )
             if not content.unread_scanned_pages:
                 return content
         done = self.inner.complete(document_id, data, content)
@@ -204,6 +220,9 @@ def make_ocr(
     max_bytes: int = DEFAULT_MAX_BYTES,
     max_pixels: int = OCR_MAX_PIXELS,
     document_timeout_s: float = 60,
+    secondary_pass: bool = False,
+    secondary_max_pages: int = 8,
+    secondary_dpi: int = 400,
 ) -> OcrEngine:
     engines: list[OcrEngine] = []
     if transcripts_dir is not None:
@@ -217,4 +236,19 @@ def make_ocr(
             document_timeout_s=document_timeout_s,
         )
         engines.append(CachedOcr(tesseract, cache) if cache else tesseract)
-    return ChainOcr(*engines) if engines else NullOcr()
+    primary: OcrEngine = ChainOcr(*engines) if engines else NullOcr()
+    if secondary_pass and use_tesseract and TesseractOcr.available():
+        from radar.reading.secondary import SelectiveOcr
+
+        secondary: OcrEngine = TesseractOcr(
+            dpi=secondary_dpi,
+            max_workers=max_workers,
+            max_pages=secondary_max_pages,
+            max_bytes=max_bytes,
+            max_pixels=max_pixels,
+            document_timeout_s=document_timeout_s,
+        )
+        if cache:
+            secondary = CachedOcr(secondary, cache)
+        return SelectiveOcr(primary, secondary, max_pages=secondary_max_pages)
+    return primary

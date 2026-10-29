@@ -30,6 +30,16 @@ FLAGS: dict[str, FlagInfo] = {
     "ocr_noisy": FlagInfo(
         Severity.WARNING, "OCR bruité", "check the OCR text; consider a better engine or a transcript"
     ),
+    "reading_incomplete": FlagInfo(
+        Severity.WARNING,
+        "lecture documentaire incomplète",
+        "inspect unread tables or OCR errors and retry within resource limits",
+    ),
+    "quantity_context_review": FlagInfo(
+        Severity.WARNING,
+        "quantités à contextualiser",
+        "review project phase, scenario, asset and unit basis before accepting a scalar",
+    ),
     "form_layout_unknown": FlagInfo(
         Severity.ERROR,
         "mise en page de formulaire inconnue",

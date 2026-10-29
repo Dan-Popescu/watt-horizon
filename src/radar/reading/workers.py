@@ -6,7 +6,7 @@ stuck PDF parser or OCR call alive after reporting a timeout. Never use executor
 
 import multiprocessing
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 from multiprocessing.connection import Connection, wait
 from multiprocessing.context import SpawnProcess
@@ -18,6 +18,7 @@ from typing import Any
 class WorkResult[T]:
     value: T | None = None
     error: str | None = None
+    started: bool = False  # parent observed a successfully started native worker
 
 
 @dataclass
@@ -128,7 +129,7 @@ def run_bounded[T](
                 if result is not None:
                     running.remove(job)
                     _stop(job)
-                    yield job.key, result
+                    yield job.key, replace(result, started=True)
     finally:
         for job in running:
             _stop(job)

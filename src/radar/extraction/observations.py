@@ -1,0 +1,155 @@
+"""Retain quantity context before deciding whether one scalar project fact is justified."""
+
+import re
+from collections.abc import Iterable
+from typing import TypedDict
+
+from radar.domain.quantities import NUMBER, measurements
+from radar.domain.quantity_context import Asset, ProjectState, QuantityObservation
+from radar.domain.text import fold, squash
+from radar.reading.pdf import PdfContent
+
+MAX_OBSERVATIONS = 200
+_PHASE = re.compile(r"\b(?:phase|tranche)\s+([a-z0-9-]{1,24})\b")
+_SCENARIO = re.compile(r"\b(?:scenario|variante|option)\s+([a-z0-9-]{1,24})\b")
+_NUMBER = re.compile(rf"^\s*({NUMBER})(?:\s*(?:à|a|[-–])\s*({NUMBER}))?\s*$")
+_UNIT = re.compile(r"\b([kMG]?Wh?(?:ac|dc|c)?)\b", re.IGNORECASE)
+
+
+class Context(TypedDict):
+    asset: Asset
+    state: ProjectState
+    phase: str | None
+    scenario: str | None
+
+
+def context(text: str, position: int | None = None) -> Context:
+    normalized = fold(text)
+    state: ProjectState
+    asset: Asset
+    existing = bool(re.search(r"\b(?:existant\w*|actuel\w*|ancien\w*)\b", normalized))
+    proposed = bool(re.search(r"\b(?:projets?|prevu\w*|propose\w*|prevoit|futur\w*)\b", normalized))
+    if existing and proposed:
+        state = "unknown"
+    elif existing:
+        state = "existing"
+    elif re.search(r"\b(?:exemple|hypotheti\w*|voisin\w*)\b", normalized):
+        state = "example"
+    elif proposed:
+        state = "proposed"
+    else:
+        state = "unknown"
+    storage = bool(re.search(r"stockage|batter|\bbess\b", normalized))
+    solar = bool(re.search(r"photovolt|agrivolta|solaire|\beolien", normalized))
+    if position is not None:
+        position = len(fold(text[:position]))
+        anchors: list[tuple[int, Asset]] = []
+        asset_patterns: tuple[tuple[str, Asset], ...] = (
+            (r"stockage|batter|\bbess\b", "storage"),
+            (r"photovolt|agrivolta|solaire|\beolien", "solar"),
+            (r"datacenter|data center|centres? de donnees", "datacenter"),
+            (r"puissance de raccord|capacite de raccord|poste electrique", "connection"),
+            (r"transformateur|onduleur|groupe electrogene", "equipment"),
+        )
+        for pattern, kind in asset_patterns:
+            for hit in re.finditer(pattern, normalized):
+                # Local association retains context; it never sums asset powers.
+                anchors.append((abs(position - hit.end()), kind))
+        asset = min(anchors, key=lambda item: item[0])[1] if anchors else "unknown"
+    elif re.search(r"transformateur|onduleur|groupe electrogene", normalized):
+        asset = "equipment"
+    elif re.search(r"raccordement|puissance de raccord|poste electrique", normalized):
+        asset = "connection"
+    elif storage and solar:
+        asset = "mixed"
+    elif storage:
+        asset = "storage"
+    elif solar:
+        asset = "solar"
+    elif re.search(r"datacenter|data center|centres? de donnees", normalized):
+        asset = "datacenter"
+    else:
+        asset = "unknown"
+    phases, scenarios = set(_PHASE.findall(normalized)), set(_SCENARIO.findall(normalized))
+    return {
+        "state": state,
+        "asset": asset,
+        "phase": next(iter(phases)) if len(phases) == 1 else "multiple" if phases else None,
+        "scenario": next(iter(scenarios)) if len(scenarios) == 1 else "multiple" if scenarios else None,
+    }
+
+
+def observe_quantities(documents: Iterable[tuple[str, PdfContent]]) -> tuple[QuantityObservation, ...]:
+    observations: list[QuantityObservation] = []
+    for document_id, content in documents:
+        for page in range(1, content.pages + 1):
+            text = content.ocr_texts.get(page) or content.page_texts[page - 1]
+            for raw in re.split(r"(?<=[.;])\s+|\n\s*\n", text):
+                quote = squash(raw)
+                if not 0 < len(quote) <= 550:
+                    continue
+                for value in measurements(quote):
+                    observations.append(
+                        QuantityObservation(
+                            document_id=document_id,
+                            page=page,
+                            locator=f"page:{page}",
+                            quote=quote,
+                            low=value.low,
+                            high=value.high,
+                            dimension=value.dimension,
+                            basis=value.basis,
+                            source_kind="text",
+                            **context(quote, value.start),
+                        )
+                    )
+                    if len(observations) >= MAX_OBSERVATIONS:
+                        return tuple(observations)
+        for table in content.tables:
+            if not table.rows:
+                continue
+            headers = table.rows[0]
+            header_quote = squash(" ".join(headers))
+            if len(header_quote) > 550:
+                continue
+            for row_index, row in enumerate(table.rows[1:], start=2):
+                quote = squash(" ".join(row))
+                if not 0 < len(quote) <= 550:
+                    continue
+                contextual = context(quote)
+                for header, cell in zip(headers, row, strict=False):
+                    if fold(header).strip() in {"phase", "tranche"} and cell.strip():
+                        contextual["phase"] = fold(cell)[:40]
+                    if fold(header).strip() in {"scenario", "variante", "option"} and cell.strip():
+                        contextual["scenario"] = fold(cell)[:40]
+                for column, cell in enumerate(row):
+                    inline = measurements(cell)
+                    unit_in_cell = bool(inline)
+                    if not inline and column < len(headers) and (number := _NUMBER.fullmatch(cell)):
+                        units = _UNIT.findall(headers[column])
+                        if len(units) == 1:
+                            # This normalization is recorded explicitly as a header-based
+                            # observation; it is never promoted as a scalar project fact.
+                            inline = measurements(
+                                f"{number[1]}" + (f" à {number[2]}" if number[2] else "") + " " + units[0]
+                            )
+                    for value in inline:
+                        observations.append(
+                            QuantityObservation(
+                                document_id=document_id,
+                                page=table.page,
+                                locator=f"table:{table.index}:row:{row_index}:column:{column + 1}",
+                                quote=quote,
+                                header_quote=header_quote,
+                                low=value.low,
+                                high=value.high,
+                                dimension=value.dimension,
+                                basis=value.basis,
+                                source_kind="table",
+                                unit_in_cell=unit_in_cell,
+                                **contextual,
+                            )
+                        )
+                        if len(observations) >= MAX_OBSERVATIONS:
+                            return tuple(observations)
+    return tuple(observations)
