@@ -300,6 +300,40 @@ def test_national_mrae_needs_region_evidence_even_with_explicit_adapter(
     assert store.status(region.slug)["leads"] == {"unconfirmed": 1}
 
 
+@pytest.mark.parametrize("annual", [False, True])
+def test_national_navigation_and_annual_lists_cannot_create_a_regional_case(
+    annual: bool,
+    db: Database,
+    store: DiscoveryStore,
+    blobs: BlobStore,
+) -> None:
+    region = replace(get_region("hauts-de-france"), mrae_pages={2026: "https://official.test/annual"})
+    url = "https://official.test/annual" if annual else "https://official.test/project"
+    with db.transaction():
+        store.add_lead(
+            region=region.slug,
+            url=url,
+            title="Hauts-de-France search snippet",
+            snippet="",
+            origin="search",
+            source_url=PROVIDER,
+        )
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        title = "Avis rendus en Hauts-de-France" if annual else "Projet de stockage en Bretagne"
+        return httpx.Response(
+            200,
+            text=f'<h1>{title}</h1><nav>Hauts-de-France</nav><a href="/a.pdf">Avis A</a><a href="/b.pdf">Avis B</a>',
+        )
+
+    with PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http:
+        report = resolve_leads(http, db, blobs, region=region, official_domains=("official.test",))
+    assert len(calls) == 1 and not db.documents() and report["resolved"] == 0
+    assert store.status(region.slug)["leads"] == {"unconfirmed": 1}
+
+
 def test_interrupted_search_intent_recovers_and_is_still_budgeted(db: Database, store: DiscoveryStore) -> None:
     query = plan(db).queries[0]
     with db.transaction():

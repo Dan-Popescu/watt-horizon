@@ -20,6 +20,8 @@ Les URL de suivi du moteur sont décodées et les domaines sont comparés à des
 
 Les titres de `DocumentRecord` viennent du titre de la page officielle ; pour un PDF direct, le titre de recherche n'est pas recopié. Le téléchargement initial est transmis au parcours de dossier pour éviter une seconde requête. Le parcours conserve ses propres budgets, preuves de rattachement et états partiels. Les préfectures gardent une cadence globale d'au moins cinq secondes entre requêtes, même en changeant de département.
 
+La preuve régionale d'une page HTML est cherchée dans son titre et son contenu principal, pas dans les menus nationaux. Une page annuelle ou de catégorie reste non confirmée et doit passer par son collecteur spécialisé ; elle ne devient jamais un dossier regroupant tous les projets listés.
+
 Les états des pistes sont `pending`, `running`, `unconfirmed`, `partial`, `resolved`, `blocked`, `failed` ou `budget`. **Résolu** signifie que des pièces officielles ont été récupérées ; la classification et l'extraction du projet restent dans la pipeline normale. Les pistes RSS pertinentes sans commune reconnue restent dans cette file et ne deviennent pas des signaux géolocalisés.
 
 Les recherches interrompues reprennent leur curseur et conservent leur compteur d'envoi ; une page coupée par le budget de résultats est revisitée pour ne pas perdre sa fin, avec déduplication des pistes. Les états partiels peuvent être repris ; les échecs demandent une relance explicite. Les blocages ne sont pas automatiquement remis dans la file. Le nombre de tentatives par piste est également borné.

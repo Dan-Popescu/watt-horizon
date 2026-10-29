@@ -4,7 +4,7 @@ import re
 from collections.abc import Sequence
 from time import monotonic
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from radar.domain.departments import DEPARTMENTS
 from radar.domain.enums import SourceKind
@@ -73,6 +73,31 @@ def _region_supported(text: str, region: Region) -> bool:
         ):
             return True
     return False
+
+
+def _official_context(page: str, title: str) -> str:
+    """National navigation/footer links cannot establish the project's region."""
+    scoped = re.search(r"<main\b[^>]*>(.*?)</main>|<article\b[^>]*>(.*?)</article>", page, re.I | re.S)
+    if scoped is None:
+        return title
+    body = re.sub(r"<(nav|header|footer|script|style)\b[^>]*>.*?</\1>", " ", scoped[1] or scoped[2], flags=re.I | re.S)
+    return title + " " + strip_tags(body)
+
+
+def _requires_source_collector(url: str, title: str, region: Region) -> bool:
+    parsed = urlparse(url)
+    configured = [
+        *region.mrae_pages.values(),
+        *(urljoin(region.dreal_base, listing) for listing in region.dreal_listings),
+    ]
+    if any((parsed.hostname, parsed.path) == (urlparse(root).hostname, urlparse(root).path) for root in configured):
+        return True
+    normalized = fold(title)
+    if re.search(r"\b(?:archives|annee|liste|avis rendus|decisions prises)\b", normalized):
+        return True
+    return not re.search(
+        r"\b(?:projet|demande|decision|enquete|consultation|permis|centrale|installation)\b", normalized
+    )
 
 
 def resolve_leads(
@@ -147,12 +172,26 @@ def resolve_leads(
                                 context = read_pdf(data).text
                             else:
                                 page = data.decode("utf-8", errors="replace")
-                                context = strip_tags(page)
                                 heading = re.search(r"<h1\b[^>]*>(.*?)</h1>", page, re.I | re.S) or re.search(
                                     r"<title\b[^>]*>(.*?)</title>", page, re.I | re.S
                                 )
                                 if heading:
                                     official_title = PersonScrubber().scrub(strip_tags(heading[1])) or ""
+                                context = _official_context(page, official_title)
+                                if _requires_source_collector(lead["url"], official_title, region):
+                                    with db.transaction():
+                                        store.lead_state(
+                                            lead["id"],
+                                            "unconfirmed",
+                                            error="listing_requires_qualified_source_collector",
+                                        )
+                                        store.finish_attempt(
+                                            attempt,
+                                            "unconfirmed",
+                                            requests=request_budget.requests,
+                                            duration_s=monotonic() - started,
+                                        )
+                                    continue
                             region_host = urlparse(lead["url"]).hostname in {
                                 urlparse(region.dreal_base).hostname,
                                 *(urlparse(root).hostname for root in region.prefectures.values()),
