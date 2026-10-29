@@ -81,9 +81,11 @@ def _keys(node: _Node) -> Iterable[tuple[str, str]]:
         yield "substation", node.substation
 
 
-def _index(nodes: list[_Node]) -> dict[tuple[str, str], set[int]]:
+def _index(nodes: list[_Node], only_keys: set[str] | None = None) -> dict[tuple[str, str], set[int]]:
     index: dict[tuple[str, str], set[int]] = {}
     for position, node in enumerate(nodes):
+        if only_keys is not None and node.key not in only_keys:
+            continue
         for key in _keys(node):
             index.setdefault(key, set()).add(position)
     return index
@@ -108,14 +110,32 @@ def _link(a: _Node, b: _Node) -> Link:
     return Link(a=first, b=second, reasons=tuple(reasons))
 
 
-def propose_links(filings: Iterable[Filing], signals: Iterable[Signal]) -> list[Link]:
+def propose_links(
+    filings: Iterable[Filing],
+    signals: Iterable[Signal],
+    *,
+    only_keys: set[str] | None = None,
+    metrics: dict[str, int] | None = None,
+) -> list[Link]:
     """Compare only shared-key candidates; retain every dense match and the original stable order."""
     filing_nodes = [_from_filing(f) for f in filings]
     signal_nodes = [_from_signal(s) for s in signals if s.source is not SourceKind.ENERGY_REGISTRY]
     filing_index, signal_index = _index(filing_nodes), _index(signal_nodes)
+    touched_filings = _index(filing_nodes, only_keys) if only_keys is not None else filing_index
+    touched_signals = _index(signal_nodes, only_keys) if only_keys is not None else signal_index
     links: list[Link] = []
+    compared = 0
     for i, node in enumerate(filing_nodes):
-        links.extend(_link(node, filing_nodes[j]) for j in _candidates(node, filing_index) if j > i)
+        index = filing_index if only_keys is None or node.key in only_keys else touched_filings
+        for j in _candidates(node, index):
+            if j > i:
+                links.append(_link(node, filing_nodes[j]))
+                compared += 1
     for node in filing_nodes:
-        links.extend(_link(node, signal_nodes[j]) for j in _candidates(node, signal_index))
+        index = signal_index if only_keys is None or node.key in only_keys else touched_signals
+        for j in _candidates(node, index):
+            links.append(_link(node, signal_nodes[j]))
+            compared += 1
+    if metrics is not None:
+        metrics["candidate_pairs"] = compared
     return links

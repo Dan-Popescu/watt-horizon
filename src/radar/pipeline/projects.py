@@ -27,6 +27,9 @@ def build_projects(
     links: Iterable[Link],
     now: datetime,
     commissioned: Mapping[str, Signal] | None = None,
+    previous: Iterable[Project] = (),
+    affected_keys: set[str] | None = None,
+    metrics: dict[str, int] | None = None,
 ) -> list[Project]:
     """One project per group of target filings (see linking.resolve); the most recent filing leads.
     Human link verdicts win: « same_project » merges, « related » / « unrelated » keep apart, and an « unrelated »
@@ -45,8 +48,15 @@ def build_projects(
                 linked.setdefault(this, set()).add(other)
 
     projects = []
+    reusable = {frozenset(project.filing_keys): project for project in previous}
+    rebuilt = 0
     targets = (f for f in filings if f.classification.category in TARGET_CATEGORIES)
     for group in group_filings(targets, must, cannot):
+        members = frozenset(f.key for f in group)
+        if affected_keys is not None and not (members & affected_keys) and members in reusable:
+            projects.append(reusable[members])
+            continue
+        rebuilt += 1
         newest = sorted(group, key=lambda f: (f.filed_on or date.min, f.key), reverse=True)
         lead = newest[0]
         category = lead.classification.category
@@ -80,4 +90,6 @@ def build_projects(
                 signal_keys=tuple(sorted(signals_of_group)),
             )
         )
+    if metrics is not None:
+        metrics["rebuilt_projects"] = rebuilt
     return projects

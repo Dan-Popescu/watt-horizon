@@ -1,6 +1,5 @@
 """Whole-database steps used by the CLI: process filings, link, build projects. Each step is idempotent."""
 
-from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
@@ -9,12 +8,8 @@ from pathlib import Path
 
 from radar.classification.bayes import train, trusted_examples
 from radar.domain.enums import TARGET_CATEGORIES
-from radar.domain.models import Filing, Link
+from radar.domain.models import Filing
 from radar.evaluation.partitions import PartitionManifest, ensure_partitions, load_manifest
-from radar.linking.linker import propose_links
-from radar.linking.registry import commissioned
-from radar.linking.review import apply_link_decisions
-from radar.pipeline.changes import track_changes
 from radar.pipeline.filings import Services, build_filing
 from radar.pipeline.fingerprint import (
     code_fingerprint,
@@ -24,12 +19,12 @@ from radar.pipeline.fingerprint import (
     git_commit,
     processing_fingerprint,
 )
-from radar.pipeline.projects import build_projects
+from radar.pipeline.linking_state import incremental_link_and_build
 from radar.quality.arbiter import Arbiter, learn
 from radar.quality.confidence import calibrate
 from radar.quality.rulebook import LearnedRule, Rulebook
 from radar.quality.shadow import diff_machine
-from radar.store.db import Database, utcnow
+from radar.store.db import Database
 
 
 @dataclass
@@ -185,27 +180,5 @@ def _state(db: Database, services: Services) -> str:
 
 
 def link_and_build(db: Database, now: datetime | None = None) -> dict[str, object]:
-    """Propose links, rebuild projects and append the change log, in one transaction."""
-    now = now or utcnow()
-    filings, signals = db.filings(), db.signals()
-    in_service = commissioned(filings, signals)
-    links = propose_links(filings, signals) + [
-        Link(
-            a=min(key, s.key),
-            b=max(key, s.key),
-            reasons=(f"registre national : installation en service compatible ({s.payload['power_mw']} MW)",),
-        )
-        for key, s in in_service.items()
-    ]
-    links = apply_link_decisions(links, db.current_link_decisions())
-    built = build_projects(filings, signals, links, now=now, commissioned=in_service)
-    projects, changes = track_changes(db.projects(), built, now)
-    with db.transaction():
-        db.replace_links(links)
-        db.replace_projects(projects)
-        db.add_changes(changes)
-    return {
-        "links": len(links),
-        "projects": len(projects),
-        "changes": dict(Counter(c.kind.value for c in changes)),
-    }
+    """Maintain links and projects incrementally, with an equivalent complete fallback."""
+    return incremental_link_and_build(db, now)

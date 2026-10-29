@@ -97,3 +97,22 @@ def test_dense_grouping_preserves_every_filing_and_human_separation() -> None:
     separated = group_filings(records[:3], cannot=[("0", "1")])
     assert len(separated) == 2
     assert not any({"0", "1"} <= {item.key for item in group} for group in separated)
+
+
+def test_incremental_dense_links_include_both_sides_of_touched_nodes() -> None:
+    records = [filing(str(i), developer="Alpha", location=Location(commune="Méru")) for i in range(20)]
+    signals = [
+        Signal(
+            key="signal:one",
+            kind=SignalKind.COMPANY,
+            source=SourceKind.COMPANY_REGISTRY,
+            title="Synthetic",
+            url="https://example.test",
+            developer="Alpha",
+        )
+    ]
+    full = propose_links(records, signals)
+    metrics: dict[str, int] = {}
+    touched = propose_links(records, signals, only_keys={"19"}, metrics=metrics)
+    assert touched == [link for link in full if "19" in {link.a, link.b}]
+    assert metrics["candidate_pairs"] == 20

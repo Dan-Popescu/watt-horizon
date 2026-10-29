@@ -54,3 +54,17 @@ def test_migration_retains_existing_document_attachment(tmp_path: Path) -> None:
         with migrated.transaction():
             migrated.upsert_document(document("case:new", "New context"))
         assert migrated.documents("case:legacy") == [original]
+
+
+def test_refresh_preserves_earliest_observation_per_attachment(db: Database) -> None:
+    original = document("case:original", "Original context")
+    later = original.model_copy(update={"fetched_at": datetime(2026, 2, 1, tzinfo=UTC), "title": "Refreshed context"})
+    earlier = original.model_copy(update={"fetched_at": datetime(2025, 12, 1, tzinfo=UTC)})
+    with db.transaction():
+        db.upsert_document(original)
+        db.upsert_document(later)
+    stored = db.documents("case:original")[0]
+    assert stored.fetched_at == original.fetched_at and stored.title == "Refreshed context"
+    with db.transaction():
+        db.upsert_document(earlier)
+    assert db.documents("case:original")[0].fetched_at == earlier.fetched_at

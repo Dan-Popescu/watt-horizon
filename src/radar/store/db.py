@@ -102,6 +102,10 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE TABLE dataset_state (id INTEGER PRIMARY KEY CHECK(id = 1), projects_revision INTEGER NOT NULL);
     INSERT INTO dataset_state VALUES (1, 0);
     """,
+    """
+    ALTER TABLE dataset_state ADD COLUMN links_revision INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE pipeline_state (name TEXT PRIMARY KEY, data TEXT NOT NULL);
+    """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -185,6 +189,17 @@ class Database:
             "ON CONFLICT(id) DO NOTHING",
             (doc.id, doc.filing_key, doc.source.value, doc.url, doc.model_dump_json()),
         )
+        existing = self.conn.execute(
+            "SELECT json_extract(data, '$.fetched_at') FROM document_attachments WHERE document_id=? AND filing_key=?",
+            (doc.id, doc.filing_key),
+        ).fetchone()
+        if existing is not None:
+            first = datetime.fromisoformat(existing[0])
+            # Legacy timestamps without an offset use the store's UTC convention.
+            previous = first if first.tzinfo is not None else first.replace(tzinfo=UTC)
+            observed = doc.fetched_at if doc.fetched_at.tzinfo is not None else doc.fetched_at.replace(tzinfo=UTC)
+            if previous <= observed:
+                doc = doc.model_copy(update={"fetched_at": first})
         self.conn.execute(
             "INSERT INTO document_attachments (document_id, filing_key, data) VALUES (?, ?, ?) "
             "ON CONFLICT(document_id, filing_key) DO UPDATE SET data=excluded.data",
@@ -272,6 +287,7 @@ class Database:
         self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS next_links (a TEXT, b TEXT, PRIMARY KEY(a, b))")
         self.conn.execute("DELETE FROM next_links")
         self.conn.executemany("INSERT OR IGNORE INTO next_links VALUES (?, ?)", [(a, b) for a, b, _ in rows])
+        before = self.conn.total_changes
         self.conn.execute(
             "DELETE FROM links WHERE NOT EXISTS (SELECT 1 FROM next_links n WHERE n.a=links.a AND n.b=links.b)"
         )
@@ -279,6 +295,28 @@ class Database:
             "INSERT INTO links (a, b, data) VALUES (?, ?, ?) "
             "ON CONFLICT(a, b) DO UPDATE SET data=excluded.data WHERE links.data <> excluded.data",
             rows,
+        )
+        if self.conn.total_changes != before:
+            self.conn.execute("UPDATE dataset_state SET links_revision=links_revision+1 WHERE id=1")
+
+    def link_revision(self) -> int:
+        return int(self.conn.execute("SELECT links_revision FROM dataset_state WHERE id=1").fetchone()[0])
+
+    def get_pipeline_state(self, name: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT data FROM pipeline_state WHERE name=?", (name,)).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(row[0])
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def set_pipeline_state(self, name: str, state: dict[str, Any]) -> None:
+        self.conn.execute(
+            "INSERT INTO pipeline_state(name,data) VALUES (?,?) "
+            "ON CONFLICT(name) DO UPDATE SET data=excluded.data WHERE pipeline_state.data <> excluded.data",
+            (name, json.dumps(state, sort_keys=True)),
         )
 
     def links(self, key: str | None = None) -> list[Link]:
