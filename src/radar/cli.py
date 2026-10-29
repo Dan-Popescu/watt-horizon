@@ -406,6 +406,10 @@ def cmd_campaign(args: argparse.Namespace, s: Settings) -> Any:
 
         from radar.web.campaign_app import build_app
 
+        # A retained cloud snapshot may have the previous database schema. Migrate
+        # once under the writer lock, then release it before the long-lived server.
+        with process_lock(s.data_dir), Database(s.db_path):
+            pass
         app = build_app(
             s,
             Path(args.directory),
