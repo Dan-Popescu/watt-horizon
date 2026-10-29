@@ -29,10 +29,12 @@ relecture humaine (radar web --review)  ──►  références vérifiées  ─
   - le rappel du premier tri ;
   - l'accord du LLM avec les étiquettes vérifiées ;
   - l'absence de données personnelles.
-- **Comparaison automatique** : chaque mesure est comparée à la précédente, et `--strict` bloque en cas de régression.
+- **Comparaison contrôlée** : les observations indépendantes sont comparées à une référence explicitement approuvée. `--strict` bloque les régressions et les mesures obligatoires impossibles ; un essai ne remplace pas automatiquement la référence.
 - **Ce que mesure l'évaluation** : toujours la **sortie de la machine**, jamais les corrections humaines. Sinon, la mesure serait faussée à 100 %.
 - **Traçabilité** : chaque dossier garde les versions de l'extracteur, du modèle et du prompt utilisés, ainsi que le moteur qui a lu chaque document.
 - **Caches** : les résultats de l'OCR et du LLM sont mis en cache, avec ces versions dans la clé. La mise à jour quotidienne ne repaie pas les mêmes documents.
+- **Travail IA durable** : demandes, dépendances, tentatives, états incertains, réponses brutes et usage vivent dans `llm-jobs.sqlite`, distinct du cache supprimable. Budget et tarifs connus sont nécessaires avant les appels payants.
+- **Jeux publiés** : l'interface publique peut servir une version approuvée immuable pendant que le traitement prépare le candidat suivant. Un pointeur atomique permet activation et rollback sans modifier la référence humaine.
 
 ## Choix et raisons
 
@@ -41,14 +43,14 @@ relecture humaine (radar web --review)  ──►  références vérifiées  ─
 | Une preuve (document, emplacement, citation) pour chaque valeur | Le client paie pour une information vérifiable. C'est aussi une garde contre les hallucinations du LLM. |
 | LLM seulement en secours, et vérifié | Les règles sont gratuites et testées. Le LLM n'est appelé que pour les champs manquants des dossiers cibles. Sa réponse est rejetée si la citation n'est pas dans le document, ou si la valeur n'est pas dans la citation. |
 | PDF bruts stockés par empreinte SHA-256 | C'est la source de vérité. Tout le reste se reconstruit (`radar run`) sans nouvelle collecte. |
-| SQLite (WAL, migrations versionnées) | Un seul fichier, pas de serveur. Suffisant pour quelques dizaines de milliers de dossiers. Passer à PostgreSQL ne toucherait que `store/`. |
+| SQLite (WAL, migrations versionnées) | Coût réduit sur un hôte et écritures sérialisées. La capacité est à mesurer ; plusieurs écrivains ou la haute disponibilité justifieraient une migration dont transactions et requêtes devront être revérifiées. |
 | Tri en deux étages | Les mots-clés gardent tout ce qui pourrait compter (rappel). Le LLM tranche ensuite (précision). |
 | Transcriptions mot pour mot, puis Tesseract | Tesseract fait 4,6 % de mots manquants sur nos scans, surtout dans les titres décoratifs. Une relecture humaine reste la référence. |
 | Masquage des personnes physiques partout | Citations, descriptions, titres et texte envoyé au LLM. Un audit automatique le vérifie à chaque évaluation. |
 | Corrections humaines en ajout seul | Rien n'est écrasé : chaque correction garde son auteur et sa date, et peut être annulée. La plus récente l'emporte. |
 | Regroupement prudent d'un même projet | Même commune ET (même SIRET ou même porteur). Un SIRET seul ne suffit pas : une même société dépose plusieurs projets. |
 | « En service » seulement par correspondance stricte avec le registre national | Même commune, mise en service après le dépôt, puissance à ±30 %. Les petites installations anciennes de la même commune ne comptent pas. |
-| Client HTTP poli et surveillance des collecteurs | Une requête par seconde et par site, au plus. `radar health` signale une source bloquée, muette depuis plusieurs passages ou arrêtée. |
+| Client HTTP poli et surveillance des collecteurs | Cadence par hôte, arrêt sur blocage et minimum de cinq secondes sur les préfectures. Téléchargements en flux et plafonds explicites. `radar health` distingue disponibilité, fraîcheur et santé des sources. |
 | MCP, API JSON et carte branchés sur `api/queries.py` | Une seule logique de requête pour tout le monde. Le MCP fonctionne en local (stdio) et à distance (HTTP). |
 | Journal des changements | Ce que paie un client, c'est l'alerte : « nouveau projet », « puissance modifiée », « décision rendue ». |
 | Références caviardées versionnées ; base et exports de relecture sauvegardés séparément | Préserver le travail humain sans publier les données internes dans le dépôt public. |

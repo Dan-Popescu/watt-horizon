@@ -12,6 +12,7 @@ radar eval | stats | mcp
 import argparse
 import dataclasses
 import json
+import sqlite3
 import sys
 import tempfile
 from collections import Counter
@@ -27,22 +28,38 @@ from radar.classification.gold import load_gold
 from radar.classification.terms import ScreenTerms
 from radar.config import Settings, load_settings
 from radar.domain.privacy import PersonScrubber
+from radar.domain.references import canonical_reference_map
+from radar.evaluation.baseline import (
+    REQUIRED_FIELDS,
+    approve_baseline,
+    assess_report,
+    dataset_fingerprint,
+    load_baseline,
+)
 from radar.evaluation.classification import evaluate_classifier
 from radar.evaluation.gold import draft as draft_field_gold
 from radar.evaluation.gold import load_field_gold, write_field_gold
 from radar.evaluation.ocr import evaluate_ocr
 from radar.evaluation.privacy import audit_privacy
 from radar.evaluation.report import ReportInputs, build_report
-from radar.evaluation.report import compare as compare_reports
 from radar.evaluation.report import metrics as eval_metrics
-from radar.evaluation.stats import split_of
+from radar.evaluation.stats import partition_of
 from radar.extraction import EXTRACTION_VERSION
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.pipeline import importers, llm_batch
 from radar.pipeline.corrections import reviewed_references
 from radar.pipeline.filings import Services, read_documents
 from radar.pipeline.health import collector_health
-from radar.pipeline.run import link_and_build, process_filings
+from radar.pipeline.operations import (
+    PublishedDataset,
+    activate_dataset,
+    dataset_status,
+    operational_status,
+    process_lock,
+    publish_dataset,
+)
+from radar.pipeline.orchestration import execute_processing
+from radar.pipeline.run import assign_partitions, link_and_build, process_filings
 from radar.quality import cases, corpus, errors, improve, propagate, robustness, rulebook, screen_terms, shadow
 from radar.quality.arbiter import learn
 from radar.quality.drift import drift
@@ -55,6 +72,8 @@ from radar.sources.regions import get_region
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
 from radar.store.db import Database
+from radar.store.llm_jobs import BudgetLimits
+from radar.store.snapshots import backup_dataset, restore_dataset
 from radar.validation.lookups import JsonCache, ReferenceCommunes
 from radar.wiring import batch_client, make_classifier, make_http, make_services
 
@@ -162,40 +181,60 @@ def cmd_process(args: argparse.Namespace, s: Settings) -> Any:
     answers of ended batches are collected first, new requests are submitted last; --wait loops until done."""
     batch = bool(getattr(args, "llm_batch", False)) and bool(s.llm_model) and not s.offline
     with Database(s.db_path) as db:
-        run_id = db.start_run("process")
         only = set(args.only) if args.only else None
         services = make_services(s, make_http(s), llm="batch" if batch else "live")
-        full = getattr(args, "full", False)
-        if not batch:
-            report = process_filings(db, services, only=only, full=full)
-            db.finish_run(run_id, asdict(report))
-            return report
-        client, queue = batch_client(s), services.llm_queue
-        rounds: list[dict[str, Any]] = []
-        for _ in range(MAX_BATCH_ROUNDS if getattr(args, "wait", False) else 1):
-            collected = llm_batch.collect(client, queue, services.llm_tasks)
-            report = process_filings(db, services, only=only, full=full)
-            submitted = llm_batch.submit(client, queue)
-            rounds.append({"collected": collected, "processed": report.processed, "submitted": submitted})
-            full = False
-            if not submitted or not getattr(args, "wait", False) or not llm_batch.wait(client, queue):
-                break
-        db.finish_run(run_id, {**asdict(report), "llm_batches": rounds})
-        return {**asdict(report), "llm_batches": rounds}
-
-
-MAX_BATCH_ROUNDS = 3  # classification, then extraction of target filings, then pre-review of their values
+        return execute_processing(
+            db,
+            services,
+            client=batch_client(s) if batch else None,
+            only=only,
+            full=getattr(args, "full", False),
+            wait=bool(getattr(args, "wait", False)),
+            timeout_s=s.llm_wait_timeout_s,
+            poll_s=s.llm_poll_interval_s,
+        )
 
 
 def cmd_llm_batch(args: argparse.Namespace, s: Settings) -> Any:
     """Model batches: status (queued / in flight), collect (write the answers of ended batches into the cache)."""
-    if not s.llm_model or s.offline:
-        return {"error": "No model configured (RADAR_LLM_MODEL), or offline."}
-    services = make_services(s, None, llm="batch")
-    queue = services.llm_queue
+    if args.action == "collect" and (not s.llm_model or s.offline):
+        return {"error": "Collecting provider results requires a configured model and network access"}
+    services = make_services(s, None, llm="batch" if args.action == "collect" else "cached")
+    queue = services.llm_queue or llm_batch.LlmQueue(
+        KeyValueCache(s.cache_path),
+        jobs_path=s.llm_jobs_path,
+        campaign=s.llm_campaign,
+        limits=BudgetLimits(
+            daily_usd=s.llm_daily_budget_usd,
+            campaign_usd=s.llm_campaign_budget_usd,
+            filing_usd=s.llm_filing_budget_usd,
+            max_attempts=s.llm_max_attempts,
+        ),
+    )
+    if args.action == "resolve":
+        if not args.submission:
+            return {"error": "--submission is required for reconciliation"}
+        queue.resolve_uncertain(
+            args.submission,
+            provider_batch_id=args.provider_batch,
+            confirm_not_accepted=args.confirm_not_accepted,
+        )
+        return queue.summary()
+    if args.action == "settle-cost":
+        if not args.submission or not args.request_key or args.actual_usd is None:
+            return {"error": "--submission, --request-key and --actual-usd are required for external cost confirmation"}
+        queue.jobs.settle_cost(args.submission, args.request_key, actual_usd=args.actual_usd)
+        return queue.summary()
     if args.action == "collect":
         return {**llm_batch.collect(batch_client(s), queue, services.llm_tasks), "next": "radar run"}
-    return {"queued": len(queue.pending()), "in_flight": [batch_id for batch_id, _ in queue.in_flight()]}
+    if args.action == "reparse":
+        tasks = {task.name: task for task in services.llm_tasks}
+        parsed = 0
+        for key, entry in queue.jobs.iter_entries("received", "parse_failed", "await_parser"):
+            if task := tasks.get(entry["task"]):
+                parsed += queue.parse_saved(key, task)
+        return {"parsed": parsed, "jobs": queue.summary(), "next": "radar run"}
+    return queue.summary()
 
 
 def cmd_link(_: argparse.Namespace, s: Settings) -> Any:
@@ -207,25 +246,44 @@ def cmd_link(_: argparse.Namespace, s: Settings) -> Any:
 
 
 def cmd_run(args: argparse.Namespace, s: Settings) -> Any:
-    return {"process": cmd_process(args, s), "link": cmd_link(args, s)}
+    processed = cmd_process(args, s)
+    if "error" in processed:
+        return {"process": processed, "error": "Processing incomplete; projects were not rebuilt"}
+    if processed["status"] != "complete":
+        return {"process": processed, "link": {"skipped": "waiting for model results"}}
+    linked = cmd_link(args, s)
+    with Database(s.db_path) as db:
+        assign_partitions(db, s.partitions_path, s.evaluation_test_after)
+    return {"process": processed, "link": linked}
 
 
 def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
     """Quality report, stored and compared with the previous one. --strict: exit 2 on any regression."""
     blobs = BlobStore(s.blobs_dir)
     with Database(s.db_path) as db:
-        filings = db.filings()
+        filings, manifest = assign_partitions(db, s.partitions_path, s.evaluation_test_after)
         file_labels, file_fields = load_gold(s.gold_path), load_field_gold(s.field_gold_path)
         if args.draft_fields:  # the file keeps hand-written references + unverified drafts; reviews stay in the db
-            drafts = draft_field_gold([f for f in filings if f.number in file_labels], file_fields, EXTRACTION_VERSION)
+            known_labels = canonical_reference_map(filings, file_labels)
+            drafts = draft_field_gold([f for f in filings if f.key in known_labels], file_fields, EXTRACTION_VERSION)
             write_field_gold(s.field_gold_path, [*file_fields.values(), *drafts])
             file_fields = load_field_gold(s.field_gold_path)
         reviewed_labels, reviewed_fields = reviewed_references(filings, db.corrections())
-        labels = {**file_labels, **reviewed_labels}  # human review wins
-        field_gold = {**file_fields, **reviewed_fields}
+        labels = {**canonical_reference_map(filings, file_labels), **reviewed_labels}
+        field_gold = {**canonical_reference_map(filings, file_fields), **reviewed_fields}
         ocr = None
         if TesseractOcr.available():
-            ocr = evaluate_ocr(TesseractOcr(), blobs, s.transcripts_dir)
+            ocr = evaluate_ocr(
+                TesseractOcr(
+                    max_workers=s.pdf_workers,
+                    max_pages=s.ocr_max_pages,
+                    max_bytes=s.pdf_max_bytes,
+                    max_pixels=s.ocr_max_pixels,
+                    document_timeout_s=s.ocr_timeout_s,
+                ),
+                blobs,
+                s.transcripts_dir,
+            )
         classifier = None
         if args.classifier:
             services = make_services(s, make_http(s))
@@ -249,23 +307,72 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
                 classifier=classifier,
                 links=db.links(),
                 link_decisions=db.current_link_decisions(),
+                partition_manifest=manifest,
+                failures=db.last_runs().get("process", {}).get("stats", {}).get("failed", {}),
             )
         )
         report["robustness"] = robustness.check_robustness(corpus_documents(db, eval_services)).summary()
-        previous = db.last_runs().get("eval", {}).get("stats", {}).get("metrics", {})
         current = eval_metrics(report)
-        comparison = compare_reports(previous, current) if previous else {"regressions": [], "improvements": []}
+        baseline_path = Path(args.baseline) if getattr(args, "baseline", None) else s.baseline_path
+        previous = load_baseline(baseline_path)
+        profile: dict[str, Any] = {
+            "min_samples": getattr(args, "min_samples", 30),
+            "required_fields": tuple(getattr(args, "required_fields", ",".join(REQUIRED_FIELDS)).split(",")),
+            "min_accuracy": getattr(args, "min_accuracy", 0.95),
+            "min_screening_recall": getattr(args, "min_screening_recall", 0.95),
+        }
+        report["dataset_fingerprint"] = dataset_fingerprint(s.db_path)
+        gate = assess_report(report, previous=previous, **profile)
         run_id = db.start_run("eval")
         db.finish_run(run_id, {"metrics": current, "report": report})
-    result = {**report, "comparison": comparison}
-    if args.strict and comparison["regressions"]:
-        return {**result, "error": "regressions against the previous evaluation"}
+    result = {**report, "comparison": gate["comparison"], "gate": gate}
+    if getattr(args, "new_campaign", False) and not getattr(args, "approve_baseline", False):
+        return {**result, "error": "--new-campaign requires --approve-baseline"}
+    if getattr(args, "approve_baseline", False):
+        approved = approve_baseline(
+            baseline_path,
+            report,
+            dataset_id=report["dataset_fingerprint"],
+            new_campaign=getattr(args, "new_campaign", False),
+            **profile,
+        )
+        result.update(approved_baseline=str(baseline_path), gate=approved["gate"])
+    if args.strict and result["gate"]["status"] != "passed":
+        return {**result, "error": "evaluation approval requirements are not satisfied"}
     return result
 
 
 def cmd_stats(_: argparse.Namespace, s: Settings) -> Any:
     with Database(s.db_path) as db:
-        return queries.dataset_info(db)
+        return {**queries.dataset_info(db).model_dump(mode="json"), "operations": operational_status(s.data_dir)}
+
+
+def cmd_backup(args: argparse.Namespace, s: Settings) -> Any:
+    """Back up durable work and references without racing the local writer."""
+    return backup_dataset(s.data_dir, Path(args.out), gold_dir=s.gold_dir, keep=args.keep)
+
+
+def cmd_restore(args: argparse.Namespace, _: Settings) -> Any:
+    return restore_dataset(
+        Path(args.snapshot),
+        Path(args.to),
+        gold_destination=Path(args.gold_to) if args.gold_to else None,
+    )
+
+
+def cmd_dataset(args: argparse.Namespace, s: Settings) -> Any:
+    directory = Path(args.dir)
+    if args.action == "publish":
+        return publish_dataset(
+            s.db_path,
+            directory,
+            baseline_path=Path(args.baseline) if args.baseline else s.baseline_path,
+        )
+    if args.action == "activate":
+        if not args.version:
+            return {"error": "A dataset version is required for activation"}
+        return activate_dataset(directory, args.version)
+    return dataset_status(directory)
 
 
 def cmd_changes(args: argparse.Namespace, s: Settings) -> Any:
@@ -277,15 +384,35 @@ def cmd_changes(args: argparse.Namespace, s: Settings) -> Any:
 
 
 def cmd_export(args: argparse.Namespace, s: Settings) -> Any:
-    with Database(s.db_path) as db:
-        projects = queries.list_projects(db, category=args.category, department=args.department)
     out = Path(args.out) if args.out else s.data_dir / "exports" / f"projets.{args.format}"
     out.parent.mkdir(parents=True, exist_ok=True)
-    if args.format == "csv":
-        out.write_text(exports.to_csv(projects), encoding="utf-8-sig")
-    else:
-        out.write_text(json.dumps(exports.to_geojson(projects), ensure_ascii=False, indent=1), encoding="utf-8")
-    return {"path": str(out), "projects": len(projects)}
+    count = 0
+    temporary: Path | None = None
+    try:
+        with Database(s.db_path, read_only=True) as db:
+
+            def rows() -> Any:
+                nonlocal count
+                for project in queries.iter_project_summaries(db, category=args.category, department=args.department):
+                    count += 1
+                    yield project
+
+            chunks = exports.iter_csv(rows()) if args.format == "csv" else exports.iter_geojson(rows())
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8-sig" if args.format == "csv" else "utf-8",
+                dir=out.parent,
+                prefix=f".{out.name}.",
+                delete=False,
+            ) as destination:
+                temporary = Path(destination.name)
+                for chunk in chunks:
+                    destination.write(chunk)
+            temporary.replace(out)
+        return {"path": str(out), "projects": count}
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
@@ -295,6 +422,8 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
 
     if args.host not in {"127.0.0.1", "localhost", "::1"} and not s.api_token:
         return {"error": "Refusing to listen on a public interface without RADAR_API_TOKEN."}
+    if s.published_dir is not None and args.review:
+        return {"error": "Published datasets are read-only; review the candidate database separately"}
     review_mode = None
     if args.review:
         services = make_services(s, make_http(s))
@@ -304,8 +433,12 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
             link_and_build(db)
 
         review_mode = (rebuild, lambda: load_gold(s.gold_path))
+    database: Path | Callable[[], Path] = s.db_path
+    if s.published_dir is not None:
+        database = PublishedDataset(s.published_dir)
+        database()  # fail before starting the server if no valid approved version is active
     app = build_app(
-        s.db_path,
+        database,
         token=s.api_token,
         mcp_host=args.public_host or args.host,
         review=review_mode,
@@ -355,12 +488,23 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def cmd_health(args: argparse.Namespace, s: Settings) -> Any:
     """Collector health from the run history. --strict: exit 2 on any alert (for the scheduler)."""
+    operations = operational_status(s.data_dir)
+    if not s.db_path.is_file():
+        unavailable: dict[str, Any] = {
+            "sources": [],
+            "drift": [],
+            "alerts": ["dataset_unavailable"],
+            "operations": operations,
+        }
+        if args.strict:
+            unavailable["error"] = "dataset database is unavailable"
+        return unavailable
     with Database(s.db_path) as db:
         report = collector_health(db.runs("collect:"), now=datetime.now(UTC))
         drifting = drift(db.filings(), _first_fetched(db), datetime.now(UTC))
     alerts = [h.source for h in report if h.status == "alert"]
     alerts += [f"drift:{d.group}:{d.value}:{d.metric}" for d in drifting]
-    result: dict[str, Any] = {"sources": report, "drift": drifting, "alerts": alerts}
+    result: dict[str, Any] = {"sources": report, "drift": drifting, "alerts": alerts, "operations": operations}
     if args.strict and alerts:
         result["error"] = "collector or drift alerts: " + ", ".join(alerts)
     return result
@@ -420,13 +564,13 @@ def cmd_cases(args: argparse.Namespace, s: Settings) -> Any:
         filings = db.filings()
         _, verified = reviewed_references(filings, db.corrections())
         for filing in filings:
-            if filing.number not in verified or split_of(filing.number) == "test":  # test split: measure only
+            if filing.key not in verified or partition_of(filing) != "dev":
                 continue
             documents = db.documents(filing.key)
             case = cases.make_case(
-                filing, documents, read_documents(documents, services), verified[filing.number].expected
+                filing, documents, read_documents(documents, services), verified[filing.key].expected
             )
-            previous = s.cases_dir / f"{case.number}.json"
+            previous = cases.case_path(case, s.cases_dir)
             if previous.exists():  # never downgrade a fixed field: its failure must surface as a regression
                 old = cases.load(previous)
                 case.status |= {k: "fixed" for k, v in old.status.items() if v == "fixed" and k in case.status}
@@ -473,8 +617,8 @@ def cmd_shadow(args: argparse.Namespace, s: Settings) -> Any:
     path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8", newline="\n")
     result: dict[str, Any] = {**report.summary, "report": str(path), "failed": report.failed}
     breaks = [f"{c.number}:{c.field}" for c in changes if c.verdict == "breaks"]
-    if args.strict and breaks:
-        result["error"] = "the current code breaks verified values: " + ", ".join(breaks)
+    if args.strict and (breaks or report.failed):
+        result["error"] = "shadow validation failed: " + ", ".join([*breaks, *sorted(report.failed)])
     return result
 
 
@@ -636,7 +780,11 @@ Mettre à jour après un changement voulu : `uv run radar corpus snapshot`, puis
 def cmd_mcp(_: argparse.Namespace, s: Settings) -> Any:
     from radar.mcp_server import build_server
 
-    build_server(s.db_path).run(transport="stdio")
+    selected: Path | Callable[[], Path] = s.db_path
+    if s.published_dir is not None:
+        selected = PublishedDataset(s.published_dir)
+        selected()
+    build_server(selected).run(transport="stdio")
     return None
 
 
@@ -691,8 +839,21 @@ def build_parser() -> argparse.ArgumentParser:
     for rebuild in (proc, run):
         rebuild.add_argument("--llm-batch", action="store_true", help="model calls via Message Batches (half price)")
         rebuild.add_argument("--wait", action="store_true", help="with --llm-batch: wait for answers and rebuild")
-    lb = sub.add_parser("llm-batch", help="model batches: status, collect answers of ended batches")
-    lb.add_argument("action", nargs="?", choices=["status", "collect"], default="status")
+    lb = sub.add_parser(
+        "llm-batch", help="inspect durable jobs, collect/reparse saved answers or reconcile uncertain sends"
+    )
+    lb.add_argument(
+        "action", nargs="?", choices=["status", "collect", "reparse", "resolve", "settle-cost"], default="status"
+    )
+    lb.add_argument("--submission", help="resolve: uncertain local submission id")
+    lb.add_argument("--provider-batch", help="resolve: confirmed provider batch id")
+    lb.add_argument("--request-key", help="settle-cost: request whose charge was confirmed externally")
+    lb.add_argument("--actual-usd", type=float, help="settle-cost: externally confirmed total USD charge")
+    lb.add_argument(
+        "--confirm-not-accepted",
+        action="store_true",
+        help="resolve only after confirming that the provider did not accept the submission",
+    )
     chg = sub.add_parser("changes", help="change log since a date (new / changed / removed projects)")
     chg.add_argument("--since", required=True, help="ISO date, e.g. 2026-10-01")
     exp = sub.add_parser("export", help="write projects to CSV (Excel, ';') or GeoJSON (GIS)")
@@ -708,10 +869,42 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--category", help="bess | bess_hybrid | storage_substation | datacenter")
         p.add_argument("--department", help='code, e.g. "60"')
     chg.add_argument("--limit", type=int, default=200)
-    ev = sub.add_parser("eval", help="quality report vs gold sets, stored and compared with the previous run")
-    ev.add_argument("--strict", action="store_true", help="exit 2 if any metric regressed")
+    ev = sub.add_parser("eval", help="quality report compared with an explicitly approved reference")
+    ev.add_argument("--strict", action="store_true", help="exit 2 if independent evaluation requirements fail")
     ev.add_argument("--classifier", action="store_true", help="also re-run the model classifier alone (paid)")
     ev.add_argument("--draft-fields", action="store_true", help="add unverified field references from extractions")
+    ev.add_argument("--baseline", help="approved reference path; default: <data>/evaluation/approved.json")
+    ev.add_argument(
+        "--approve-baseline",
+        action="store_true",
+        help="explicitly approve this evaluated dataset if all requirements pass",
+    )
+    ev.add_argument(
+        "--new-campaign",
+        action="store_true",
+        help="with approval: archive the previous reference before a changed evaluation campaign",
+    )
+    ev.add_argument(
+        "--min-samples",
+        type=int,
+        default=30,
+        help="minimum independently verified observations per required field (default: 30)",
+    )
+    ev.add_argument(
+        "--required-fields", default=",".join(REQUIRED_FIELDS), help="comma-separated fields required for approval"
+    )
+    ev.add_argument(
+        "--min-accuracy",
+        type=float,
+        default=0.95,
+        help="minimum observed field accuracy, not a statistical guarantee (default: .95)",
+    )
+    ev.add_argument(
+        "--min-screening-recall",
+        type=float,
+        default=0.95,
+        help="minimum observed independent screening recall (default: .95)",
+    )
     sub.add_parser("errors", help="error clusters from human corrections, detector precision / recall")
     cs = sub.add_parser("cases", help="regression cases from human-verified filings (gold/cases)")
     cs.add_argument("action", choices=["export", "check"])
@@ -754,6 +947,18 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--public-host", help="host name clients use (behind a proxy); default: --host")
     web.add_argument("--review", action="store_true", help="internal review mode: corrections and validations")
+    backup = sub.add_parser("backup", help="consistent backup of database, durable jobs, files and human references")
+    backup.add_argument("--out", required=True, help="private backup root, outside the data directory")
+    backup.add_argument("--keep", type=int, help="retain this many recognized snapshots; preserve unrelated files")
+    restore = sub.add_parser("restore", help="verify and restore a backup into an empty destination")
+    restore.add_argument("snapshot")
+    restore.add_argument("--to", required=True, help="empty destination directory")
+    restore.add_argument("--gold-to", help="optional empty external directory for human references")
+    dataset = sub.add_parser("dataset", help="publish, activate or inspect an approved local dataset snapshot")
+    dataset.add_argument("action", choices=["publish", "activate", "status"])
+    dataset.add_argument("version", nargs="?", help="activate: existing immutable version")
+    dataset.add_argument("--dir", required=True, help="private dataset publication directory")
+    dataset.add_argument("--baseline", help="publish: approved evaluation reference path")
     for name, text in (
         ("link", "propose links, rebuild projects"),
         ("stats", "dataset counts, freshness, caveats"),
@@ -791,6 +996,9 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "llm-batch": cmd_llm_batch,
     "corpus": cmd_corpus,
     "robustness": cmd_robustness,
+    "backup": cmd_backup,
+    "restore": cmd_restore,
+    "dataset": cmd_dataset,
 }
 
 
@@ -798,7 +1006,26 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)
-    result = COMMANDS[args.command](args, load_settings())
+    try:
+        settings = load_settings()
+        mutating = args.command not in {
+            "web",
+            "mcp",
+            "stats",
+            "changes",
+            "digest",
+            "export",
+            "health",
+            "triage",
+            "errors",
+        }
+        if mutating:
+            with process_lock(settings.data_dir):
+                result = COMMANDS[args.command](args, settings)
+        else:
+            result = COMMANDS[args.command](args, settings)
+    except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
+        result = {"error": str(exc), "type": type(exc).__name__}
     if result is not None:
         _emit(result)
     return 2 if isinstance(result, dict) and "error" in result else 0

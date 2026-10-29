@@ -103,7 +103,7 @@ def test_regression_detection() -> None:
     assert [r["metric"] for r in result["improvements"]] == ["ocr.mean_word_miss_rate"]
 
 
-def test_eval_command_compares_with_previous_run(
+def test_eval_command_requires_independent_references_even_without_movement(
     loaded_db: Database, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     gold_dir = loaded_db.path.parent / "gold"
@@ -124,6 +124,8 @@ def test_eval_command_compares_with_previous_run(
         "reviewed_filings": 0,
     }
     assert first["fields_draft"]["power_mw"]["accuracy"] == 1.0 and first["privacy"]["leaks"] == []
-    assert main(["eval", "--strict"]) == 0  # nothing changed: no regression
+    assert main(["eval", "--strict"]) == 2  # no independent verified fields: cannot approve the dataset
     second = json.loads(capsys.readouterr().out)
     assert second["comparison"] == {"regressions": [], "improvements": []}
+    assert second["gate"]["status"] == "failed"
+    assert "independent_field_samples_missing" in second["gate"]["failures"]

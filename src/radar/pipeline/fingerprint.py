@@ -19,6 +19,27 @@ from typing import Any
 from radar.domain.models import Correction, DocumentRecord
 
 PACKAGE = Path(__file__).resolve().parents[1]
+PROCESSING_PATHS = (
+    "domain",
+    "reading",
+    "extraction",
+    "classification",
+    "validation",
+    "pipeline/filings.py",
+    "pipeline/corrections.py",
+    "pipeline/llm_batch.py",
+    "evaluation/fields.py",
+    "evaluation/stats.py",
+    "evaluation/partitions.py",
+    "quality/arbiter.py",
+    "quality/confidence.py",
+    "quality/flags.py",
+    "quality/locate.py",
+    "quality/model_check.py",
+    "quality/propagate.py",
+    "quality/rulebook.py",
+    "quality/templates.py",
+)
 
 
 def digest(*parts: Any) -> str:
@@ -34,6 +55,25 @@ def code_fingerprint() -> str:
             h.update(path.relative_to(PACKAGE).as_posix().encode())
             h.update(path.read_bytes())
     return h.hexdigest()[:16]
+
+
+def processing_fingerprint() -> str:
+    """Only dependencies of filing construction invalidate its derived output.
+
+    Reading this small set once per processing run also supports an edited checkout without stale
+    process-wide memoization. Presentation, exports and collector code are not extraction inputs.
+    """
+    paths: list[Path] = []
+    for name in PROCESSING_PATHS:
+        path = PACKAGE / name
+        paths.extend(path.rglob("*.py") if path.is_dir() else [path])
+    return digest(
+        [
+            (path.relative_to(PACKAGE).as_posix(), hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in sorted(paths)
+            if path.is_file() and "__pycache__" not in path.parts
+        ]
+    )
 
 
 @cache

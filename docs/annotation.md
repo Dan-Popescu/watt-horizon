@@ -17,6 +17,10 @@ Pour que deux relecteurs saisissent la même chose. En cas de doute, choisir la 
 
 **Champ vide** : l'information est absente des documents. C'est une réponse, pas un oubli : la machine sera comptée fausse si elle invente une valeur.
 
+Un champ non vérifié ou impossible à déterminer n'est pas une absence confirmée. Laisser ce champ hors de la référence `expected` tant qu'il n'a pas été tranché ; `null` y signifie une absence réellement constatée. Une page non lue ou un OCR en échec doit rester signalé, sans transformer le manque de lecture en preuve d'absence.
+
+Une référence porte la clé complète `filing_key` (source, région et numéro). Un numéro seul n'est accepté que s'il n'est pas ambigu dans la cohorte. Les valeurs approuvées sont conservées avec leur instantané ; une nouvelle extraction ne les remplace pas.
+
 **Cause** (en cas de correction) :
 - **lecture / OCR** : texte mal lu ;
 - **mise en page** : formulaire d'un format non prévu ;

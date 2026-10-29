@@ -23,6 +23,7 @@ from radar.domain.enums import Category
 from radar.domain.fields import field_values, machine_values
 from radar.domain.models import LINK_VERDICTS, Correction, Filing, LinkDecision, Signal
 from radar.domain.privacy import PersonScrubber
+from radar.domain.references import canonical_reference_map
 from radar.linking import review as link_review
 from radar.pipeline.corrections import CAUSES, VALIDATED, validate_value
 from radar.quality.flags import FLAGS
@@ -39,10 +40,11 @@ def review_items(db: Database, labels: dict[str, GoldLabel], today: date | None 
     for c in all_corrections:
         corrections.setdefault(c.filing_key, []).append(c)
     filings = db.filings()
+    labels = canonical_reference_map(filings, labels)
     queue = {t.key: t for t in triage(filings, all_corrections, today or date.today(), db.machine_changes())}
     items = []
     for f in filings:
-        item = _item(db, f, labels.get(f.number), corrections.get(f.key, []))
+        item = _item(db, f, labels.get(f.key), corrections.get(f.key, []))
         if t := queue.get(f.key):
             item = item.model_copy(
                 update={

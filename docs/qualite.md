@@ -8,7 +8,7 @@ Objectif : quand les données arrivent en volume, repérer tout seul les cas mal
 collecte ─► dossiers + signalements ─► file de relecture ─► corrections (cause, à l'aveugle)
    ▲                                                              │
    │      règles améliorées ◄── erreurs fréquentes + cas de non-régression ◄┘
-   └──── radar eval : mesures avec marge d'erreur, comparées à la fois précédente
+   └──── radar eval : mesures indépendantes, comparées à la référence approuvée
 ```
 
 | Étape | Outil | Ce que ça apporte |
@@ -19,7 +19,7 @@ collecte ─► dossiers + signalements ─► file de relecture ─► correcti
 | 4. Corriger | onglet Relecture | Chaque correction note sa **cause** (OCR, mise en page, règle, classement…). Le mode **à l'aveugle** fait saisir sans voir la machine. |
 | 5. Apprendre | `radar errors` | Erreurs regroupées par champ, cause et type de document : la règle à améliorer en premier. Les erreurs qu'**aucun signalement** n'avait vues indiquent le prochain détecteur à écrire. |
 | 6. Ne jamais régresser | `radar cases export` puis `check` | Chaque dossier vérifié devient un test rejoué sans PDF. Une erreur connue reste « ouverte » jusqu'à sa correction. Un champ corrigé qui casse de nouveau bloque les tests. |
-| 7. Mesurer | `radar eval`, onglet Qualité | Scores avec marge d'erreur, par type de document, sur un jeu de test gelé. Plus : calibration de la confiance, justesse à l'aveugle, rappel estimé du tri, intégrité des preuves, robustesse, précision des liens et des regroupements, accord entre relecteurs, régressions. |
+| 7. Mesurer | `radar eval`, onglet Qualité | Scores par champ et groupe indépendant, par type de document, sur un test gelé. La comparaison utilise une référence approuvée, jamais automatiquement le dernier essai. |
 
 ## Ce qui s'améliore tout seul, et ce qui reste humain
 
@@ -44,12 +44,14 @@ collecte ─► dossiers + signalements ─► file de relecture ─► correcti
 
 ## Règles de méthode
 
-- **Jeu de test gelé.** Environ 30 % des dossiers sont tirés une fois pour toutes (de façon stable, par numéro). On voit leurs scores, jamais le détail de leurs erreurs, et ils ne deviennent pas des cas de test : sinon on règle les règles sur eux et leurs scores mentent. Les dossiers traités avant le 2026-10-12 ont déjà servi au réglage : le jeu de test n'est fiable que pour les dossiers ajoutés depuis.
+- **Populations gelées et groupées.** Les dossiers partageant un document ou un même projet restent ensemble dans un manifeste versionné développement/calibration/test. Apprendre les règles et l'arbitrage sur le développement, les seuils sur la calibration, et mesurer sur le test. Les détails du test ne deviennent pas des cas de développement. Les données utilisées avant le 2026-10-12 pour régler les règles ne deviennent pas indépendantes par un nouveau nom de campagne.
 - **Une part à l'aveugle.** Relire environ 1 dossier sur 5 en mode « à l'aveugle ». Sans cela, le relecteur valide ce que la machine propose, et la justesse paraît meilleure qu'elle n'est.
 - **Les audits aléatoires d'abord.** Ils sont en tête de file. Les laisser de côté fausse l'estimation du rappel.
-- **Marges d'erreur.** 8 sur 10, c'est « entre 49 et 94 % ». Ne comparer deux versions que si leurs marges ne se chevauchent pas, ou s'appuyer sur les cas de non-régression.
+- **Effectifs indépendants.** Trente dossiers d'un même projet ne font qu'un groupe. Les rapports distinguent effectifs bruts et indépendants. Comparer les versions sur les mêmes groupes et garder les régressions individuelles de développement ; le chevauchement des intervalles de deux taux ne constitue pas à lui seul un test de différence. Les seuils de promotion sont des critères sur les observations, pas une garantie de précision en production.
 - **La machine est mesurée seule.** Les corrections humaines ne comptent jamais comme des réussites de la machine.
-- **Double relecture.** Environ 1 dossier relu sur 10 revient, à l'aveugle, pour un autre relecteur. Si deux relecteurs ne s'accordent qu'à 85 % sur un champ, une justesse mesurée de 95 % sur ce champ ne veut rien dire : il faut d'abord préciser la consigne.
+- **Double relecture.** Un échantillon revient à l'aveugle pour un autre relecteur. Les désaccords demandent une consigne plus précise et un arbitrage documenté avant de conclure à une précision élevée. Une correction d'un champ ne valide pas tous les autres.
+- **Référence immuable.** Une validation conserve l'instantané effectivement approuvé. Si la machine change ensuite, la référence reste identique et le champ revient en relecture. Un ancien événement sans instantané n'autorise pas à inventer ce qu'un humain aurait validé.
+- **Promotion explicite.** `radar eval --approve-baseline` doit satisfaire le profil choisi ; `radar dataset publish` vérifie l'approbation du jeu exact avant activation. Les essais dégradés restent des essais. Voir [exploitation.md](exploitation.md).
 
 ## Routine conseillée (hebdomadaire)
 

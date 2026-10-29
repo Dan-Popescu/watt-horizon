@@ -1,7 +1,9 @@
 """Runtime settings, from environment variables with safe defaults. No other module reads `os.environ`."""
 
+import math
 import os
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 
@@ -17,6 +19,45 @@ class Settings:
     llm_passages: bool = False  # extraction sends windows around clues instead of the first 20k chars (measure first)
     llm_check: bool = True  # model pre-review of uncertain values (needs llm_model; uses the fast model if set)
     gold_dir: Path = Path("gold")  # reference sets and review exports (in the repository, not in data/)
+    pdf_workers: int = 2
+    http_max_bytes: int = 32 * 1024 * 1024
+    http_deadline_s: int = 60
+    pdf_max_bytes: int = 32 * 1024 * 1024
+    pdf_max_pages: int = 500
+    pdf_batch_bytes: int = 64 * 1024 * 1024
+    pdf_timeout_s: int = 30
+    ocr_max_pages: int = 100
+    ocr_max_pixels: int = 40_000_000
+    ocr_timeout_s: int = 60
+    llm_daily_budget_usd: float = 0.0
+    llm_campaign_budget_usd: float = 0.0
+    llm_filing_budget_usd: float = 0.0
+    llm_max_attempts: int = 3
+    llm_campaign: str = "default"
+    llm_pricing_path: Path | None = None
+    llm_wait_timeout_s: int = 3600
+    llm_poll_interval_s: int = 10
+    published_dir: Path | None = None
+    evaluation_campaign: str = "default"
+    evaluation_test_after: date | None = None
+
+    @property
+    def llm_jobs_path(self) -> Path:
+        """Durable requests and usage; deliberately outside the disposable cache."""
+        return self.data_dir / "llm-jobs.sqlite"
+
+    @property
+    def partitions_path(self) -> Path:
+        return self.evaluation_dir / "partitions.json"
+
+    @property
+    def baseline_path(self) -> Path:
+        return self.evaluation_dir / "approved.json"
+
+    @property
+    def evaluation_dir(self) -> Path:
+        base = self.data_dir / "evaluation"
+        return base if self.evaluation_campaign == "default" else base / "campaigns" / self.evaluation_campaign
 
     @property
     def db_path(self) -> Path:
@@ -96,6 +137,44 @@ def _flag(name: str, default: bool) -> bool:
     return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _budget(name: str) -> float:
+    try:
+        value = float(os.environ.get(name, "0"))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a finite non-negative USD limit") from exc
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be a finite non-negative USD limit")
+    return value
+
+
+def _optional_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    return Path(value).resolve() if value else None
+
+
+def _evaluation_campaign() -> str:
+    value = os.environ.get("RADAR_EVALUATION_CAMPAIGN", "default")
+    if (
+        not value
+        or len(value) > 80
+        or value in {".", ".."}
+        or not value.isascii()
+        or any(not (character.isalnum() or character in "._-") for character in value)
+    ):
+        raise ValueError("RADAR_EVALUATION_CAMPAIGN must be a simple ASCII campaign name")
+    return value
+
+
 def load_settings() -> Settings:
     return Settings(
         data_dir=Path(os.environ.get("RADAR_DATA_DIR", "data")).resolve(),
@@ -110,4 +189,27 @@ def load_settings() -> Settings:
         llm_passages=_flag("RADAR_LLM_PASSAGES", False),
         llm_check=_flag("RADAR_LLM_CHECK", True),
         gold_dir=Path(os.environ.get("RADAR_GOLD_DIR", "gold")).resolve(),
+        pdf_workers=_positive_int("RADAR_PDF_WORKERS", 2),
+        http_max_bytes=_positive_int("RADAR_HTTP_MAX_BYTES", 32 * 1024 * 1024),
+        http_deadline_s=_positive_int("RADAR_HTTP_DEADLINE_S", 60),
+        pdf_max_bytes=_positive_int("RADAR_PDF_MAX_BYTES", 32 * 1024 * 1024),
+        pdf_max_pages=_positive_int("RADAR_PDF_MAX_PAGES", 500),
+        pdf_batch_bytes=_positive_int("RADAR_PDF_BATCH_BYTES", 64 * 1024 * 1024),
+        pdf_timeout_s=_positive_int("RADAR_PDF_TIMEOUT_S", 30),
+        ocr_max_pages=_positive_int("RADAR_OCR_MAX_PAGES", 100),
+        ocr_max_pixels=_positive_int("RADAR_OCR_MAX_PIXELS", 40_000_000),
+        ocr_timeout_s=_positive_int("RADAR_OCR_TIMEOUT_S", 60),
+        llm_daily_budget_usd=_budget("RADAR_LLM_DAILY_BUDGET_USD"),
+        llm_campaign_budget_usd=_budget("RADAR_LLM_CAMPAIGN_BUDGET_USD"),
+        llm_filing_budget_usd=_budget("RADAR_LLM_FILING_BUDGET_USD"),
+        llm_max_attempts=_positive_int("RADAR_LLM_MAX_ATTEMPTS", 3),
+        llm_campaign=os.environ.get("RADAR_LLM_CAMPAIGN", "default"),
+        llm_pricing_path=_optional_path("RADAR_LLM_PRICING_PATH"),
+        llm_wait_timeout_s=_positive_int("RADAR_LLM_WAIT_TIMEOUT_S", 3600),
+        llm_poll_interval_s=_positive_int("RADAR_LLM_POLL_INTERVAL_S", 10),
+        published_dir=_optional_path("RADAR_PUBLISHED_DIR"),
+        evaluation_campaign=_evaluation_campaign(),
+        evaluation_test_after=date.fromisoformat(os.environ["RADAR_EVAL_TEST_AFTER"])
+        if os.environ.get("RADAR_EVAL_TEST_AFTER")
+        else None,
     )

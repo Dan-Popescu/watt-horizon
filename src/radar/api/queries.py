@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import date, datetime
 
 from radar.api.views import (
@@ -62,6 +62,21 @@ def _categories(category: str | None) -> Iterable[str]:
     if category is None:
         return [c.value for c in TARGET_CATEGORIES]
     return [Category(category).value]  # raises ValueError on unknown categories
+
+
+def iter_project_summaries(
+    db: Database,
+    *,
+    category: str | None = None,
+    department: str | None = None,
+) -> Iterator[ProjectSummary]:
+    """Stream a complete filtered export through the same category policy as paged reads."""
+    rows = db.iter_projects(categories=_categories(category), department=department)
+    try:
+        for project in rows:
+            yield _summary(project)
+    finally:
+        rows.close()
 
 
 def search_projects(

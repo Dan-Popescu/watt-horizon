@@ -1,9 +1,10 @@
 """Composition root: the only place that builds concrete adapters from `Settings`."""
 
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from radar.classification.base import CachedClassifier, ChainClassifier, Classifier
+from radar.classification.base import ChainClassifier, Classifier
 from radar.classification.gold import GoldClassifier, load_gold
 from radar.classification.terms import ScreenTerms
 from radar.config import Settings
@@ -11,7 +12,15 @@ from radar.extraction.llm import FieldExtractor
 from radar.net.http import PoliteHttp
 from radar.pipeline.filings import Services
 from radar.pipeline.fingerprint import digest, files_fingerprint
-from radar.pipeline.llm_batch import DeferredClassifier, DeferredExtractor, DeferredVerifier, LlmQueue
+from radar.pipeline.llm_batch import (
+    DeferredClassifier,
+    DeferredExtractor,
+    DeferredVerifier,
+    LlmQueue,
+    TrackedClassifier,
+    TrackedExtractor,
+    TrackedVerifier,
+)
 from radar.quality.propagate import Aliases
 from radar.quality.rulebook import Rulebook
 from radar.quality.templates import Registry
@@ -19,11 +28,21 @@ from radar.reading.ocr import make_ocr
 from radar.reading.pdf import PdfReader
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
+from radar.store.db import Database
+from radar.store.llm_jobs import BudgetLimits, TokenPricing
 from radar.validation.lookups import ApiLookups, CompositeLookups, JsonCache, ReferenceCommunes
 
 
 def make_http(settings: Settings) -> PoliteHttp | None:
-    return None if settings.offline else PoliteHttp(settings.user_agent)
+    return (
+        None
+        if settings.offline
+        else PoliteHttp(
+            settings.user_agent,
+            max_response_bytes=settings.http_max_bytes,
+            max_response_seconds=settings.http_deadline_s,
+        )
+    )
 
 
 LlmMode = Literal["live", "batch", "cached"]
@@ -42,26 +61,46 @@ class LlmSetup:
 
 
 def make_llm(settings: Settings, cache: KeyValueCache, mode: LlmMode = "live") -> LlmSetup:
-    if not settings.llm_model or settings.offline:  # offline means no network at all, LLM included
+    if not settings.llm_model or (settings.offline and mode != "cached"):
         return LlmSetup()
     from radar.classification.llm import LlmClassifier, TieredClassifier  # optional dependency
-    from radar.extraction.llm import CachedExtractor, LlmExtractor
-    from radar.quality.model_check import CachedVerifier, LlmVerifier
+    from radar.extraction.llm import LlmExtractor
+    from radar.quality.model_check import LlmVerifier
 
     strong = LlmClassifier(settings.llm_model)
     fast = LlmClassifier(settings.llm_fast_model) if settings.llm_fast_model else None
     extractor = LlmExtractor(settings.llm_model, passages=settings.llm_passages)
     verifier = LlmVerifier(settings.llm_fast_model or settings.llm_model) if settings.llm_check else None
     tasks = tuple(t for t in (strong, fast, extractor, verifier) if t is not None)
-    queue = LlmQueue(cache) if mode == "batch" else None
+    pricing = {}
+    if settings.llm_pricing_path is not None:
+        raw = json.loads(settings.llm_pricing_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("LLM pricing must map model names to versioned token rates")
+        for model, values in raw.items():
+            if not isinstance(values, dict):
+                raise ValueError(f"Invalid pricing entry for {model}")
+            pricing[model] = TokenPricing(**values)
+    queue = LlmQueue(
+        cache,
+        jobs_path=settings.llm_jobs_path,
+        campaign=settings.llm_campaign,
+        pricing=pricing,
+        limits=BudgetLimits(
+            daily_usd=settings.llm_daily_budget_usd,
+            campaign_usd=settings.llm_campaign_budget_usd,
+            filing_usd=settings.llm_filing_budget_usd,
+            max_attempts=settings.llm_max_attempts,
+        ),
+    )
     if mode == "live":
-        wrap_c: Any = lambda t: CachedClassifier(t, cache)  # noqa: E731
-        wrap_e: Any = lambda t: CachedExtractor(t, cache)  # noqa: E731
-        wrap_v: Any = lambda t: CachedVerifier(t, cache)  # noqa: E731
+        wrap_c: Any = lambda t: TrackedClassifier(t, cache, queue)  # noqa: E731
+        wrap_e: Any = lambda t: TrackedExtractor(t, cache, queue)  # noqa: E731
+        wrap_v: Any = lambda t: TrackedVerifier(t, cache, queue)  # noqa: E731
     else:  # batch queues misses; cached answers None on a miss (no queue, no call)
-        wrap_c = lambda t: DeferredClassifier(t, cache, queue)  # noqa: E731
-        wrap_e = lambda t: DeferredExtractor(t, cache, queue)  # noqa: E731
-        wrap_v = lambda t: DeferredVerifier(t, cache, queue)  # noqa: E731
+        wrap_c = lambda t: DeferredClassifier(t, cache, queue, cache_only=mode == "cached")  # noqa: E731
+        wrap_e = lambda t: DeferredExtractor(t, cache, queue, cache_only=mode == "cached")  # noqa: E731
+        wrap_v = lambda t: DeferredVerifier(t, cache, queue, cache_only=mode == "cached")  # noqa: E731
     classifier: Classifier = wrap_c(strong)
     if fast is not None:
         classifier = TieredClassifier(wrap_c(fast), classifier)
@@ -78,7 +117,11 @@ def make_classifier(
         classifiers.append(llm.classifier)
     gold = load_gold(settings.gold_path) if with_gold else {}
     if gold:
-        classifiers.append(GoldClassifier(gold))  # fallback, and the reference for `radar eval`
+        known_keys: list[str] = []
+        if settings.db_path.is_file():
+            with Database(settings.db_path, read_only=True) as db:
+                known_keys = db.filing_keys_with_documents()
+        classifiers.append(GoldClassifier(gold, known_keys=known_keys))
     return ChainClassifier(*classifiers) if classifiers else None
 
 
@@ -88,7 +131,7 @@ def batch_client(settings: Settings) -> Any:
         return None
     import anthropic  # optional dependency
 
-    return anthropic.Anthropic().messages.batches
+    return anthropic.Anthropic(max_retries=0).messages.batches
 
 
 def make_lookups(settings: Settings, http: PoliteHttp | None) -> CompositeLookups:
@@ -98,7 +141,16 @@ def make_lookups(settings: Settings, http: PoliteHttp | None) -> CompositeLookup
 
 def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode = "live") -> Services:
     cache = KeyValueCache(settings.cache_path)
-    ocr = make_ocr(settings.transcripts_dir, use_tesseract=settings.use_tesseract, cache=cache)
+    ocr = make_ocr(
+        settings.transcripts_dir,
+        use_tesseract=settings.use_tesseract,
+        cache=cache,
+        max_workers=settings.pdf_workers,
+        max_pages=settings.ocr_max_pages,
+        max_bytes=settings.pdf_max_bytes,
+        max_pixels=settings.ocr_max_pixels,
+        document_timeout_s=settings.ocr_timeout_s,
+    )
     models = make_llm(settings, cache, llm)
     classifier = make_classifier(settings, cache, llm=models)
     extractor = models.extractor
@@ -110,6 +162,12 @@ def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode =
         extractor.name if extractor else None,
         models.verifier.name if models.verifier else None,
         settings.offline,
+        settings.pdf_max_bytes,
+        settings.pdf_max_pages,
+        settings.ocr_max_pages,
+        settings.ocr_max_pixels,
+        settings.pdf_timeout_s,
+        settings.ocr_timeout_s,
     )
     return Services(
         blobs=BlobStore(settings.blobs_dir),
@@ -122,9 +180,19 @@ def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode =
         labels={n: g.category for n, g in load_gold(settings.gold_path).items() if g.verified},
         screen_terms=ScreenTerms.load(settings.screen_terms_path).pattern(),
         fingerprint=setup,
-        reader=PdfReader(cache),
+        reader=PdfReader(
+            cache,
+            max_workers=settings.pdf_workers,
+            max_bytes=settings.pdf_max_bytes,
+            max_pages=settings.pdf_max_pages,
+            max_batch_bytes=settings.pdf_batch_bytes,
+            max_memo_bytes=settings.pdf_batch_bytes,
+            document_timeout_s=settings.pdf_timeout_s,
+        ),
         verifier=models.verifier,
         llm_queue=models.queue,
         llm_tasks=models.tasks,
+        partitions_path=settings.partitions_path,
+        partitions_test_after=settings.evaluation_test_after,
         lookups=make_lookups(settings, http),
     )

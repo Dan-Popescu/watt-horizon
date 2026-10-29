@@ -78,9 +78,9 @@ def evaluate_ocr(engine: OcrEngine, blobs: BlobStore, transcripts_dir: Path) -> 
     for path in sorted(transcripts_dir.glob("*.txt")):
         document_id = path.stem
         try:
-            data = blobs.get(document_id)
-        except FileNotFoundError:
-            failures[document_id[:12]] = "missing source document"
+            data = blobs.get(document_id, max_bytes=getattr(engine, "max_bytes", 32 * 1024 * 1024))
+        except (OSError, ValueError) as exc:
+            failures[document_id[:12]] = type(exc).__name__
             continue
         try:
             content = read_pdf(data)

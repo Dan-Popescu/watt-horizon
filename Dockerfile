@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Read-only web/MCP server and scheduled jobs. State lives in the /data volume.
 #   docker build -t radar .
 #   docker run -p 8765:8765 -v radar-data:/data -e RADAR_API_TOKEN=... radar
@@ -14,10 +15,14 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/opt/venv PAT
 WORKDIR /app
 # Dependencies first (cached layer), then the project itself.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --extra llm --no-install-project
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
+    uv sync --frozen --no-dev --extra llm --no-install-project
 COPY src ./src
 COPY gold ./gold
-RUN uv sync --frozen --no-dev --extra llm --no-editable
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
+    uv sync --frozen --no-dev --extra llm --no-editable
 
 RUN useradd --create-home --uid 10001 radar \
  && mkdir -p /data/gold /backups \

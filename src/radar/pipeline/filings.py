@@ -4,6 +4,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from radar.classification.base import ClassificationInput, Classifier
@@ -71,13 +72,15 @@ class Services:
     verifier: Any = None  # model pre-review of uncertain values (quality/model_check.py), None = off
     llm_queue: Any = None  # batch mode (pipeline/llm_batch.LlmQueue): builds waiting for an answer
     llm_tasks: tuple[Any, ...] = ()  # model tasks (request/parse/key), to read batch answers
+    partitions_path: Path | None = None
+    partitions_test_after: date | None = None
 
 
 def read_documents(documents: list[DocumentRecord], services: Services) -> list[PdfContent]:
     """Text layer + form fields + OCR for each document, in order."""
     contents = []
     for doc in documents:
-        data = services.blobs.get(doc.id)
+        data = services.blobs.get(doc.id, max_bytes=services.reader.max_bytes)
         contents.append(services.ocr.complete(doc.id, data, services.reader.read(doc.id, data)))
     return contents
 
@@ -216,9 +219,7 @@ def build_filing(
     texts = [c.text for c in contents]
     form_fields = [c.fields for c in contents]
     reading = {doc.id: c.read_by for doc, c in zip(documents, contents, strict=True)}
-    unread = [
-        doc.id for doc, c in zip(documents, contents, strict=True) if c.unread_scanned_pages and c.is_mostly_scanned
-    ]
+    unread = [doc.id for doc, c in zip(documents, contents, strict=True) if c.unread_scanned_pages]
 
     extraction = extract_facts([(d.id, d.role, d.title) for d in documents], contents, services.arbiter, services.rules)
     form, decision, facts = extraction.form, extraction.decision, extraction.facts
@@ -330,12 +331,20 @@ def build_filing(
         },
     )
     raw = raw_scores(field_values(machine), extraction.support, flags, validation.checks, machine.strata["read"])
+    values = field_values(machine)
     calibration = services.calibration or Calibration()
     machine = machine.model_copy(
         update={
             "field_score": raw,
-            "field_confidence": {name: calibration.confidence(score) for name, score in raw.items()},
-            "auto_accepted": tuple(name for name, score in raw.items() if calibration.auto_accepted(score)),
+            "field_confidence": {
+                name: calibration.confidence(score, field_name=name, present=values.get(name) not in (None, ""))
+                for name, score in raw.items()
+            },
+            "auto_accepted": tuple(
+                name
+                for name, score in raw.items()
+                if calibration.auto_accepted(score, field_name=name, present=values.get(name) not in (None, ""))
+            ),
         }
     )
     texts_by_doc = {doc.id: text for doc, text in zip(documents, texts, strict=True)}
