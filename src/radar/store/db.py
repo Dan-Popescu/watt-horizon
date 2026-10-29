@@ -6,7 +6,7 @@ Schema changes: bump `SCHEMA_VERSION` and add a step to `_MIGRATIONS` (never edi
 import json
 import sqlite3
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict, Unpack, cast
@@ -372,8 +372,9 @@ class Database:
         if limit is not None:
             sql += " LIMIT :result_limit"
             args["result_limit"] = max(0, limit)
-        for row in self.conn.execute(sql, args):
-            yield Project.model_validate_json(row["data"])
+        with closing(self.conn.execute(sql, args)) as rows:
+            for row in rows:
+                yield Project.model_validate_json(row["data"])
 
     def _project_filter(
         self,

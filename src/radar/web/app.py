@@ -7,26 +7,28 @@ If `token` is set, every route except / and /healthz requires `Authorization: Be
 
 import contextlib
 import hmac
-import json
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
+import anyio
 from pydantic import BaseModel
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+from starlette.types import Receive, Scope, Send
 
 from radar.api import exports, queries
 from radar.api.review import link_items, review_items, submit_link_decision, submit_review
 from radar.api.views import ProjectPage
 from radar.classification.gold import GoldLabel
+from radar.domain.enums import TARGET_CATEGORIES, Category
 from radar.pipeline.operations import ProcessBusyError, operational_status, process_lock
 from radar.pipeline.run import link_and_build
 from radar.quality import pageview, propagate
@@ -67,6 +69,21 @@ class BearerToken(BaseHTTPMiddleware):
 
 
 Rebuild = Callable[[Database, str], None]  # re-process one filing (applies corrections) and rebuild projects
+
+
+class _ExportStream(StreamingResponse):
+    """Close the suspended database generator even if ASGI send fails or the client disconnects."""
+
+    def __init__(self, stream: AsyncGenerator[str, None], *, media_type: str, headers: dict[str, str]) -> None:
+        self.stream = stream
+        super().__init__(stream, media_type=media_type, headers=headers)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self.stream.aclose()
 
 
 def build_app(
@@ -156,14 +173,37 @@ def build_app(
         fmt, q = request.path_params["fmt"], request.query_params
         if fmt not in {"csv", "geojson"}:
             return _json({"error": "format: csv or geojson"}, 404)
-        rows = queries.list_projects(db, category=q.get("category") or None, department=q.get("department") or None)
-        if fmt == "csv":
-            body = "﻿" + exports.to_csv(rows)  # BOM: Excel detects UTF-8
-            disposition = {"Content-Disposition": 'attachment; filename="projets.csv"'}
-            return Response(body, media_type="text/csv; charset=utf-8", headers={**NO_STORE, **disposition})
-        body = json.dumps(exports.to_geojson(rows), ensure_ascii=False)
-        disposition = {"Content-Disposition": 'attachment; filename="projets.geojson"'}
-        return Response(body, media_type="application/geo+json", headers={**NO_STORE, **disposition})
+        requested = q.get("category")
+        categories = [Category(requested).value] if requested else [c.value for c in TARGET_CATEGORIES]
+        selected_path, department = db.path, q.get("department") or None
+
+        async def content() -> AsyncGenerator[str, None]:
+            # The endpoint connection closes before StreamingResponse consumes this iterator.
+            # Keep this new connection and cursor on the event-loop thread throughout the stream.
+            with Database(selected_path, read_only=True) as reader:
+                projects = reader.iter_projects(categories=categories, department=department)
+                chunks = exports.iter_csv(projects) if fmt == "csv" else exports.iter_geojson(projects)
+                try:
+                    if fmt == "csv":
+                        yield "\ufeff"  # Excel detects UTF-8 from the BOM.
+                    yield next(chunks)  # The header/prefix is available before consuming any project.
+                    pending: list[str] = []
+                    size = 0
+                    for chunk in chunks:
+                        pending.append(chunk)
+                        size += len(chunk)
+                        if len(pending) >= 64 or size >= 65536:
+                            yield "".join(pending)
+                            pending.clear()
+                            size = 0
+                    if pending:
+                        yield "".join(pending)
+                finally:
+                    chunks.close()
+
+        media_type = "text/csv; charset=utf-8" if fmt == "csv" else "application/geo+json"
+        disposition = {"Content-Disposition": f'attachment; filename="projets.{fmt}"'}
+        return _ExportStream(content(), media_type=media_type, headers={**NO_STORE, **disposition})
 
     def review_list(db: Database, _: Request) -> Any:
         if review is None:
