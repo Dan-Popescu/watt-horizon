@@ -15,6 +15,7 @@ def test_capacity_probe_checks_dense_sparse_and_complete_keyset_pages() -> None:
             "sparse:20",
             "dense:20",
             "pages:205",
+            "storage:40",
             "--repeats",
             "1",
         ],
@@ -25,12 +26,14 @@ def test_capacity_probe_checks_dense_sparse_and_complete_keyset_pages() -> None:
         timeout=30,
     )
     report = json.loads(result.stdout)
-    sparse, dense, pages = report["measurements"]
+    sparse, dense, pages, storage = report["measurements"]
     assert sparse["candidate_pairs"] == sparse["links"] == 0 and sparse["groups"] == 20
     assert dense["candidate_pairs"] == dense["links"] == 190 and dense["groups"] == 1
     assert dense["incremental_candidate_pairs"] == 19
     assert pages["projects_seen"] == 205 and pages["pages"] == 2 and pages["max_page_items"] == 200
     assert pages["unknown_power_projects"] == 16
+    assert storage["links_stored"] == 40 and storage["unchanged_revision_preserved"]
+    assert len(storage["stored_json_sha256"]) == 64
     assert report["network_requests"] == report["model_calls"] == 0
     assert all(measurement["peak_process_rss_mib"] > 0 for measurement in report["measurements"])
 

@@ -32,6 +32,29 @@ la version Python, la plateforme, la révision du code applicatif et le SHA-256 
 Code applicatif : `40f12914311b266ed4cab29cebe72691b3a62bc0`, Python 3.12.14,
 Linux x86-64. Aucun chronométrage n'utilise `tracemalloc`.
 
+Ce rapport a été produit avec la première version du banc (`69a8105`), avant l'ajout
+du scénario `storage:100000`. La commande sans scénarios du banc actuel ajoute ses
+trois répétitions ; les neuf scénarios des tableaux restent identiques.
+
+## Stockage de liens reçus en flux
+
+```bash
+uv run python tools/benchmark_capacity.py storage:100000 --repeats 3
+```
+
+Ce scénario génère les objets `Link` un par un, sans liste préalable. Il mesure le
+premier stockage puis un remplacement identique, et vérifie le nombre exact de liens,
+le SHA-256 des JSON ordonnés par leurs clés et la conservation de la révision lors du
+remplacement sans changement. Le contrôle des données utilise un curseur SQL en flux,
+sans appeler `db.links()`, qui matérialiserait une seconde liste complète. La raison
+synthétique de chaque lien est la chaîne `Synthetic storage measurement ` répétée
+20 fois ; ses caractéristiques ne décrivent pas des liens réels.
+
+`initial_storage_peak_process_rss_mib` est pris juste après le premier stockage ;
+le pic global inclut aussi les contrôles et le second passage. Ce scénario isole la
+persistance d'une entrée déjà générable en flux. Il ne réduit pas les allocations de
+`propose_links`, dont l'interface retourne encore une liste complète.
+
 ## Rapprochement et regroupement
 
 Le cas isolé donne à chaque dossier une commune et un nom de société distincts.

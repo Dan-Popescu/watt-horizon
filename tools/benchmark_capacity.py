@@ -25,7 +25,7 @@ from typing import Any
 
 from radar.api.queries import project_page
 from radar.domain.enums import Category, Confidence, SourceKind
-from radar.domain.models import Filing, Location, Power, Project
+from radar.domain.models import Filing, Link, Location, Power, Project
 from radar.linking.linker import propose_links
 from radar.linking.resolve import group_filings
 from radar.store.db import Database
@@ -40,8 +40,9 @@ DEFAULT_CASES = (
     "pages:1000",
     "pages:5000",
     "pages:10000",
+    "storage:100000",
 )
-MAX_RECORDS = {"sparse": 100_000, "dense": 1_500, "pages": 100_000}
+MAX_RECORDS = {"sparse": 100_000, "dense": 1_500, "pages": 100_000, "storage": 500_000}
 
 
 def parse_case(value: str) -> tuple[str, int]:
@@ -51,7 +52,9 @@ def parse_case(value: str) -> tuple[str, int]:
         if kind not in MAX_RECORDS or not 1 <= count <= MAX_RECORDS[kind]:
             raise ValueError
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("Use sparse:1..100000, dense:1..1500 or pages:1..100000") from exc
+        raise argparse.ArgumentTypeError(
+            "Use sparse:1..100000, dense:1..1500, pages:1..100000 or storage:1..500000"
+        ) from exc
     return kind, count
 
 
@@ -141,6 +144,46 @@ def percentile_nearest_rank(values: list[float], percentile: float) -> float:
     return sorted(values)[max(0, math.ceil(len(values) * percentile) - 1)]
 
 
+def links(count: int) -> Iterator[Link]:
+    for i in range(count):
+        yield Link(a=f"manual:test:{i:06d}", b="signal:test", reasons=("Synthetic storage measurement " * 20,))
+
+
+def storage_probe(count: int) -> dict[str, Any]:
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="watt-capacity-storage-") as directory:
+        path = Path(directory) / "synthetic.sqlite"
+        with Database(path) as db:
+            with db.transaction():
+                db.replace_links(links(count))
+            initial_s = time.perf_counter() - started
+            initial_peak = peak_rss_mib()
+            revision = db.link_revision()
+            actual_count = db.conn.execute("SELECT count(*) FROM links").fetchone()[0]
+            actual_hash = hashlib.sha256()
+            for row in db.conn.execute("SELECT data FROM links ORDER BY a,b"):
+                actual_hash.update(row["data"].encode("utf-8"))
+            expected_hash = hashlib.sha256()
+            for link in links(count):
+                expected_hash.update(link.model_dump_json().encode("utf-8"))
+            if actual_count != count or actual_hash.digest() != expected_hash.digest():
+                raise RuntimeError("Streamed link storage omitted or changed synthetic links")
+            started = time.perf_counter()
+            with db.transaction():
+                db.replace_links(links(count))
+            unchanged_s = time.perf_counter() - started
+            if db.link_revision() != revision:
+                raise RuntimeError("Identical streamed link storage changed the dataset revision")
+            return {
+                "initial_storage_s": initial_s,
+                "unchanged_storage_s": unchanged_s,
+                "initial_storage_peak_process_rss_mib": initial_peak,
+                "links_stored": actual_count,
+                "stored_json_sha256": actual_hash.hexdigest(),
+                "unchanged_revision_preserved": True,
+            }
+
+
 def page_probe(count: int) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="watt-capacity-") as directory:
         path = Path(directory) / "synthetic.sqlite"
@@ -203,7 +246,12 @@ def page_probe(count: int) -> dict[str, Any]:
 def worker(kind: str, count: int) -> dict[str, Any]:
     baseline = peak_rss_mib()
     started = time.perf_counter()
-    measurements = page_probe(count) if kind == "pages" else matching_probe(count, kind == "dense")
+    if kind == "pages":
+        measurements = page_probe(count)
+    elif kind == "storage":
+        measurements = storage_probe(count)
+    else:
+        measurements = matching_probe(count, kind == "dense")
     return {
         "kind": kind,
         "records": count,
@@ -221,7 +269,9 @@ def main() -> int:
         description="Offline synthetic capacity probes; no production data, network or model calls.",
         epilog="Example: uv run python tools/benchmark_capacity.py sparse:1000 dense:300 pages:1000 --repeats 3",
     )
-    parser.add_argument("cases", nargs="*", type=parse_case, help="kind:records; bounded sparse, dense or pages")
+    parser.add_argument(
+        "cases", nargs="*", type=parse_case, help="kind:records; bounded sparse, dense, pages or storage"
+    )
     parser.add_argument("--repeats", type=int, default=3, choices=range(1, 6))
     parser.add_argument("--timeout-seconds", type=int, default=60, choices=range(1, 61))
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
