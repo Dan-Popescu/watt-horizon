@@ -28,6 +28,7 @@ def test_opinion_and_annex_quantities_have_page_evidence() -> None:
 def test_supporting_contexts_abstain_on_ambiguity_and_conflicts() -> None:
     for text in (
         "Le projet de stockage prévoit 30 MW ; le projet de stockage prévoit 45 MW.",
+        "Le projet de stockage prévoit 30 MW et 45 MW. Le projet de stockage prévoit 30 MW.",
         "Le projet de stockage existant présente une puissance de 30 MW.",
         "Le projet de stockage comporte une phase 1 de 30 MW.",
         "Le projet de stockage est raccordé à un transformateur de 30 MW.",

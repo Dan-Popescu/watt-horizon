@@ -43,7 +43,11 @@ def extract_supporting(documents: Iterable[tuple[str, PdfContent]]) -> Facts:
                     continue
                 powers = {(value.low, value.high) for value in values if value.dimension == "power"}
                 energies = {(value.low, value.high) for value in values if value.dimension == "energy"}
-                if len(powers) > 1 or len(energies) > 1 or not (powers or energies):
+                if len(powers) > 1 or len(energies) > 1:
+                    # Discarding the conflicting statement would let a later,
+                    # simpler repetition conceal the contradiction.
+                    return Facts()
+                if not (powers or energies):
                     continue
                 low, high = next(iter(powers), (None, None))
                 energy_low, energy = next(iter(energies), (None, None))
