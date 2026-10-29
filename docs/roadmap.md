@@ -19,6 +19,13 @@ Voir [la spécification de livraison](scalable-quality-pipeline.md) et [l’expl
 
 ## Validation métier et exploitation restant à établir
 
+Les [trois lots de couverture documentaire](documentary-quality-plan.md) disposent désormais de leurs outils :
+inventaire et rattrapage reprenable, parcours borné des pièces avec provenance, extraction prudente dans les
+annexes, campagnes aveugles et comparaison des sorties brutes. L'[inventaire externe](inventaire-reference-decouverte.md)
+permet d'inclure les dossiers jamais collectés dans la mesure du rappel. Les défauts relevés pendant les deux
+revues de livraison ont été corrigés et couverts par des tests. La collecte réelle, l'annotation représentative et
+la qualification des nouvelles régions/périodes restent à effectuer ; l'existence de ces outils ne vaut pas validation métier.
+
 1. Annoter des groupes représentatifs des sources, régions, périodes et modalités, avec une part à l’aveugle et une double annotation. Ne pas déduire une validation humaine de la sortie machine.
 2. Mesurer erreurs publiées, faux absents, informations et projets manqués, faux regroupements, coût humain et coût par projet exploitable. Les seuils par défaut de 0,95 et 30 groupes sont des règles sur des observations, pas des garanties statistiques.
 3. Réserver un nouveau test prospectif à des groupes réellement nouveaux, avec un manifeste distinct et une date de première observation réelle. Un ancien test déjà exploité pour régler les règles ne devient pas indépendant par renommage.

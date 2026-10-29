@@ -59,6 +59,13 @@ La carte est alors sur http://127.0.0.1:8765. Avec `RADAR_OFFLINE=1`, rien n'est
 
 Méthode : [docs/qualite.md](docs/qualite.md). Guide d'annotation : [docs/annotation.md](docs/annotation.md).
 
+La couverture et les archives sont inspectables avec `radar coverage --years 2024 2025 2026`.
+Le [rattrapage historique](docs/couverture-documentaire.md) reprend les listes par pages ; la
+[récupération des dossiers](docs/dossiers-documentaires.md) suit les pièces et annexes avec budgets et provenance.
+Les [campagnes aveugles](docs/campagnes-annotation.md) préparent des références humaines et comparent des variantes
+sur les mêmes entrées. Un [inventaire manuel externe](docs/inventaire-reference-decouverte.md) mesure aussi les
+dossiers jamais collectés. Ces outils ne donnent aucun score de précision réel sans références vérifiées.
+
 ## Brancher un agent (MCP)
 
 Deux façons de se connecter :
