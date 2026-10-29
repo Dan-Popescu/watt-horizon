@@ -119,6 +119,8 @@ def _execute(db: Database, now: datetime | None, *, force_full: bool) -> dict[st
     changed_signals = _changes(previous.signals, signal_hashes) if valid and previous else set(signal_hashes)
     changed_decisions = _changes(previous.decisions, decision_hashes) if valid and previous else set(decision_hashes)
     if valid and previous is not None and not (changed_filings or changed_signals or changed_decisions):
+        with db.transaction():
+            db.conn.execute("DELETE FROM pipeline_state WHERE name='linking_dirty'")
         return {
             "links": previous.links_count,
             "projects": previous.projects_count,
@@ -200,6 +202,7 @@ def _execute(db: Database, now: datetime | None, *, force_full: bool) -> dict[st
             projects_count=len(projects),
         )
         db.set_pipeline_state(STATE_NAME, state.model_dump(mode="json"))
+        db.conn.execute("DELETE FROM pipeline_state WHERE name='linking_dirty'")
     return {
         "links": len(links),
         "projects": len(projects),

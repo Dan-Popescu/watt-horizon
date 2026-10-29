@@ -9,7 +9,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict, Unpack, cast
+from typing import Any, Literal, TypedDict, Unpack, cast
 
 from radar.domain.geo import bbox_around, haversine_km
 from radar.domain.models import Correction, DocumentRecord, Filing, Link, LinkDecision, Project, ProjectChange, Signal
@@ -106,6 +106,107 @@ _MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE dataset_state ADD COLUMN links_revision INTEGER NOT NULL DEFAULT 0;
     CREATE TABLE pipeline_state (name TEXT PRIMARY KEY, data TEXT NOT NULL);
     """,
+    """
+    CREATE TABLE processing_outcomes (
+        key TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK(state IN ('running', 'complete', 'waiting', 'failed')),
+        error TEXT,
+        input_revision INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX processing_outcomes_state ON processing_outcomes(state, key);
+    CREATE TRIGGER document_input_insert AFTER INSERT ON document_attachments BEGIN
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        VALUES (NEW.filing_key,'waiting','document_inputs_changed',1)
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='document_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+    END;
+    CREATE TRIGGER document_input_update AFTER UPDATE ON document_attachments
+    WHEN OLD.data IS NOT NEW.data OR OLD.document_id IS NOT NEW.document_id OR OLD.filing_key IS NOT NEW.filing_key
+    BEGIN
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        SELECT OLD.filing_key,'waiting','document_inputs_changed',1 WHERE OLD.filing_key IS NOT NEW.filing_key
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='document_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        VALUES (NEW.filing_key,'waiting','document_inputs_changed',1)
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='document_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+    END;
+    CREATE TRIGGER document_input_delete AFTER DELETE ON document_attachments BEGIN
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        VALUES (OLD.filing_key,'waiting','document_inputs_changed',1)
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='document_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+    END;
+    CREATE TRIGGER correction_input_insert AFTER INSERT ON corrections WHEN NEW.active=1 BEGIN
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        VALUES (NEW.filing_key,'waiting','correction_inputs_changed',1)
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='correction_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+    END;
+    CREATE TRIGGER correction_input_update AFTER UPDATE ON corrections
+    WHEN (OLD.active=1 OR NEW.active=1) AND (
+        OLD.id IS NOT NEW.id OR OLD.filing_key IS NOT NEW.filing_key OR OLD.field IS NOT NEW.field
+        OR OLD.value IS NOT NEW.value OR OLD.note IS NOT NEW.note OR OLD.author IS NOT NEW.author
+        OR OLD.created_at IS NOT NEW.created_at OR OLD.cause IS NOT NEW.cause OR OLD.blind IS NOT NEW.blind
+        OR OLD.active IS NOT NEW.active)
+    BEGIN
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        SELECT OLD.filing_key,'waiting','correction_inputs_changed',1
+        WHERE OLD.active=1 AND (OLD.filing_key IS NOT NEW.filing_key OR NEW.active!=1)
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='correction_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        SELECT NEW.filing_key,'waiting','correction_inputs_changed',1 WHERE NEW.active=1
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='correction_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+    END;
+    CREATE TRIGGER correction_input_delete AFTER DELETE ON corrections WHEN OLD.active=1 BEGIN
+        INSERT INTO processing_outcomes(key,state,error,input_revision)
+        VALUES (OLD.filing_key,'waiting','correction_inputs_changed',1)
+        ON CONFLICT(key) DO UPDATE SET state='waiting',error='correction_inputs_changed',
+            input_revision=processing_outcomes.input_revision+1;
+    END;
+    CREATE TRIGGER linking_filing_insert AFTER INSERT ON filings BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_filing_update AFTER UPDATE ON filings WHEN OLD.data IS NOT NEW.data BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_filing_delete AFTER DELETE ON filings BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_signal_insert AFTER INSERT ON signals BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_signal_update AFTER UPDATE ON signals WHEN OLD.data IS NOT NEW.data BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_signal_delete AFTER DELETE ON signals BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_decision_insert AFTER INSERT ON link_decisions BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_decision_update AFTER UPDATE ON link_decisions
+    WHEN OLD.id IS NOT NEW.id OR OLD.a IS NOT NEW.a OR OLD.b IS NOT NEW.b OR OLD.verdict IS NOT NEW.verdict
+        OR OLD.author IS NOT NEW.author OR OLD.created_at IS NOT NEW.created_at OR OLD.note IS NOT NEW.note
+    BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    CREATE TRIGGER linking_decision_delete AFTER DELETE ON link_decisions BEGIN
+        INSERT INTO pipeline_state VALUES ('linking_dirty','true') ON CONFLICT(name)
+        DO UPDATE SET data='true' WHERE pipeline_state.data IS NOT 'true';
+    END;
+    """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -174,8 +275,11 @@ class Database:
         current = self.conn.execute("PRAGMA user_version").fetchone()[0]
         for version in range(current, SCHEMA_VERSION):
             with self.conn:
-                self.conn.executescript(_MIGRATIONS[version])
-                self.conn.execute(f"PRAGMA user_version = {version + 1}")
+                # executescript otherwise commits before executing its statements. Keep the schema
+                # and its version in the same explicit transaction, including on startup failure.
+                self.conn.executescript(
+                    "BEGIN IMMEDIATE;\n" + _MIGRATIONS[version] + f"\nPRAGMA user_version = {version + 1};\nCOMMIT;"
+                )
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -222,6 +326,44 @@ class Database:
     def iter_filing_keys_with_documents(self) -> Iterator[str]:
         for row in self.conn.execute("SELECT DISTINCT filing_key FROM document_attachments ORDER BY filing_key"):
             yield row[0]
+
+    # Processing evidence survives partial rebuilds and interrupted processes. ----------------------
+    def note_processing_outcome(
+        self,
+        key: str,
+        state: Literal["running", "complete", "waiting", "failed"],
+        error: str | None = None,
+        *,
+        expected_revision: int | None = None,
+    ) -> bool:
+        """The caller commits running before work and completion alongside the filing write."""
+        changed = self.conn.execute(
+            "INSERT INTO processing_outcomes(key,state,error) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET state=excluded.state,error=excluded.error "
+            "WHERE (processing_outcomes.state IS NOT excluded.state OR processing_outcomes.error IS NOT excluded.error) "
+            "AND (? IS NULL OR processing_outcomes.input_revision=?)",
+            (key, state, error, expected_revision, expected_revision),
+        ).rowcount
+        return expected_revision is None or bool(changed) or self.processing_input_revision(key) == expected_revision
+
+    def processing_input_revision(self, key: str) -> int:
+        row = self.conn.execute("SELECT input_revision FROM processing_outcomes WHERE key=?", (key,)).fetchone()
+        return int(row[0]) if row else 0
+
+    def processing_outcome(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT state FROM processing_outcomes WHERE key=?", (key,)).fetchone()
+        return str(row[0]) if row else None
+
+    def unfinished_processing_keys(self) -> Iterator[str]:
+        for row in self.conn.execute("SELECT key FROM processing_outcomes WHERE state!='complete' ORDER BY key"):
+            yield str(row[0])
+
+    def prune_processing_outcomes(self) -> None:
+        """Only remove work whose filing and document attachments have both disappeared."""
+        self.conn.execute(
+            "DELETE FROM processing_outcomes WHERE NOT EXISTS (SELECT 1 FROM filings f WHERE f.key=processing_outcomes.key) "
+            "AND NOT EXISTS (SELECT 1 FROM document_attachments d WHERE d.filing_key=processing_outcomes.key)"
+        )
 
     # Filings ---------------------------------------------------------------------------------------
     def upsert_filing(self, f: Filing) -> None:
@@ -318,6 +460,9 @@ class Database:
             "ON CONFLICT(name) DO UPDATE SET data=excluded.data WHERE pipeline_state.data <> excluded.data",
             (name, json.dumps(state, sort_keys=True)),
         )
+
+    def clear_pipeline_state(self, name: str) -> None:
+        self.conn.execute("DELETE FROM pipeline_state WHERE name=?", (name,))
 
     def links(self, key: str | None = None) -> list[Link]:
         sql, args = "SELECT data FROM links", cast(tuple[Any, ...], ())

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-def candidate_readiness(data_dir: Path) -> dict[str, Any]:
+def candidate_readiness(data_dir: Path, *, verify_inputs: bool = True) -> dict[str, Any]:
     """History and jobs can become incomplete without changing any project row.
 
     Read actual durable state, including a crash before the run could finish. Status reads
@@ -32,6 +32,22 @@ def candidate_readiness(data_dir: Path) -> dict[str, Any]:
                     reasons.append(f"process_{status}")
                 if stats.get("failed") or stats.get("error"):
                     reasons.append("process_failed_or_incomplete")
+            if connection.execute("SELECT 1 FROM processing_outcomes WHERE state != 'complete' LIMIT 1").fetchone():
+                reasons.append("filing_processing_unfinished")
+            if connection.execute("SELECT 1 FROM pipeline_state WHERE name='linking_dirty'").fetchone():
+                reasons.append("project_rebuild_required")
+            if verify_inputs:
+                if connection.execute(
+                    "SELECT 1 FROM document_attachments d LEFT JOIN filings f ON f.key=d.filing_key "
+                    "WHERE f.key IS NULL OR NOT EXISTS ("
+                    "SELECT 1 FROM json_each(f.data, '$.document_ids') ids WHERE ids.value=d.document_id) LIMIT 1"
+                ).fetchone():
+                    reasons.append("documents_without_current_filing")
+                if connection.execute(
+                    "SELECT 1 FROM filings f, json_each(f.data, '$.document_ids') ids WHERE NOT EXISTS ("
+                    "SELECT 1 FROM document_attachments d WHERE d.filing_key=f.key AND d.document_id=ids.value) LIMIT 1"
+                ).fetchone():
+                    reasons.append("filing_documents_changed")
     except (sqlite3.Error, ValueError, TypeError, AttributeError):
         reasons.append("processing_status_unavailable")
     jobs = data_dir / "llm-jobs.sqlite"
@@ -61,4 +77,9 @@ def candidate_readiness(data_dir: Path) -> dict[str, Any]:
                         reasons.append("legacy_model_jobs_require_migration")
             except sqlite3.Error:
                 reasons.append("legacy_model_status_unavailable")
-    return {"ready": not reasons, "reasons": sorted(set(reasons)), "job_states": states}
+    return {
+        "ready": not reasons,
+        "reasons": sorted(set(reasons)),
+        "job_states": states,
+        "inputs_verified": verify_inputs,
+    }

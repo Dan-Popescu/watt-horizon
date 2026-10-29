@@ -22,6 +22,7 @@ from radar.pipeline.operations import (
     process_lock,
     publish_dataset,
 )
+from radar.pipeline.run import link_and_build
 from radar.store.cache import KeyValueCache
 from radar.store.db import Database
 from radar.store.snapshots import (
@@ -166,6 +167,7 @@ def test_publication_preserves_active_version_on_failure_and_can_roll_back(tmp_p
                     document_ids=(),
                 )
             )
+        link_and_build(db)
         with pytest.raises(ValueError, match="different dataset"):
             publish_dataset(db.path, published, baseline_path=approval)
         assert active_dataset_path(published) == first_path

@@ -186,6 +186,7 @@ def operational_status(data_dir: Path, *, now: datetime | None = None, max_age_s
     result: dict[str, Any] = {
         "database": {"ready": False, "reason": "missing"},
         "freshness": {"status": "unknown", "last_completed_link": None},
+        "candidate": candidate_readiness(data_dir, verify_inputs=False),
     }
     if data_dir.exists():
         disk = shutil.disk_usage(data_dir)

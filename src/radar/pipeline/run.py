@@ -49,6 +49,8 @@ def process_filings(
     Source reliabilities and confidence calibration are re-learned from human reviews first, unless given.
     Incremental: a filing whose input fingerprint is unchanged is skipped (unless `full` or listed in `only`)."""
     report = StepReport()
+    with db.transaction():
+        db.prune_processing_outcomes()
     partitioned, manifest = assign_partitions(db, services.partitions_path, services.partitions_test_after)
     if services.arbiter is None or services.calibration is None or services.opinion is None:
         filings, corrections = partitioned, db.corrections()
@@ -69,29 +71,44 @@ def process_filings(
         for key in batch_keys:
             if only is not None and key not in only:
                 continue
+            input_revision = db.processing_input_revision(key)
             previous, documents = db.filing(key), db.documents(key)
             corrections = db.corrections(key)
             fingerprint = (
                 digest(filing_fingerprint(state, documents), corrections_fingerprint(corrections)) if state else None
             )
-            if may_skip and fingerprint and previous and previous.versions.get("input") == fingerprint:
+            if (
+                may_skip
+                and fingerprint
+                and previous
+                and previous.versions.get("input") == fingerprint
+                and db.processing_outcome(key) in {None, "complete"}
+            ):
                 report.unchanged += 1
                 continue
-            todo.append((key, previous, documents, corrections, fingerprint))
+            todo.append((key, previous, documents, corrections, fingerprint, input_revision))
+        # Commit before any preparation or parsing. A process interruption leaves
+        # evidence for this chunk even when no filing or run report was written.
+        with db.transaction():
+            for key, _, _, _, _, input_revision in todo:
+                db.note_processing_outcome(key, "running", expected_revision=input_revision)
         services.reader.prefetch(
             [
                 (d.id, partial(services.blobs.get, d.id, max_bytes=services.reader.max_bytes))
-                for _, _, docs, _, _ in todo
+                for _, _, docs, _, _, _ in todo
                 for d in docs
             ]
         )
-        for key, previous, documents, corrections, fingerprint in todo:
+        for key, previous, documents, corrections, fingerprint, input_revision in todo:
             try:
                 filing = build_filing(key, documents, services, corrections)
             except Exception as exc:  # recorded and reported; the run continues
                 report.failed[key] = f"{type(exc).__name__}: {exc}"
+                with db.transaction():
+                    db.note_processing_outcome(key, "failed", report.failed[key], expected_revision=input_revision)
                 continue
-            if services.llm_queue is not None and services.llm_queue.waiting(key):
+            waiting = services.llm_queue is not None and services.llm_queue.waiting(key)
+            if waiting:
                 fingerprint = None  # a response is still pending or blocked: do not seal this output
             trace = {"code": code_fingerprint(), **({"git": commit} if (commit := git_commit()) else {})}
             strata = dict(filing.strata)
@@ -109,6 +126,15 @@ def process_filings(
             )
             with db.transaction():
                 db.upsert_filing(filing)
+                if not db.note_processing_outcome(
+                    key, "waiting" if waiting else "complete", expected_revision=input_revision
+                ):
+                    # Input changed while this filing was being built. Preserve the
+                    # trigger's waiting outcome and never seal the stale snapshot.
+                    versions = dict(filing.versions)
+                    versions.pop("input", None)
+                    filing = filing.model_copy(update={"versions": versions})
+                    db.upsert_filing(filing)
                 if changed := diff_machine(previous, filing):
                     db.add_machine_changes(key, changed, filing.versions.get("extraction", ""))
             report.processed += 1
