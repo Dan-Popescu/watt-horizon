@@ -1,9 +1,13 @@
 """Supplementary project statements and bounded retrieval throughout long inputs."""
 
-from radar.domain.enums import DocumentRole
-from radar.extraction.llm import plan_passages, select_passages
+from datetime import UTC, datetime
+
+from radar.domain.enums import DocumentRole, SourceKind
+from radar.domain.models import DocumentRecord
+from radar.extraction.facts import Facts
+from radar.extraction.llm import Extracted, ExtractionInput, plan_passages, select_passages
 from radar.extraction.supporting import extract_supporting
-from radar.pipeline.filings import extract_facts
+from radar.pipeline.filings import _llm_fallback, extract_facts
 from radar.reading.pdf import PdfContent
 
 
@@ -74,3 +78,28 @@ def test_passage_power_does_not_match_energy_only() -> None:
     selected = plan_passages(text, ("power_mw",), budget=1000)
     assert selected.matched_clues == 0
     assert select_passages(text, ("power_mw",), budget=1000) == text[:1000]
+
+
+def test_fallback_cannot_attribute_a_quote_crossing_document_boundaries() -> None:
+    class CrossDocumentExtractor:
+        name = "llm-extract:constructed-test"
+
+        def extract(self, item: ExtractionInput) -> Extracted:
+            return {"developer": ("ALPHA BETA", "société ALPHA BETA")}
+
+    docs = [
+        DocumentRecord(
+            id=str(i),
+            source=SourceKind.MRAE_OPINION,
+            url="https://example.org/doc.pdf",
+            title="Avis",
+            role=DocumentRole.OPINION,
+            filing_key="mrae_opinion:hdf:1",
+            fetched_at=datetime.now(UTC),
+            filename="doc.pdf",
+        )
+        for i in range(2)
+    ]
+    facts = Facts()
+    _llm_fallback("k", "Avis", facts, docs, ["La société ALPHA", "BETA présente le projet."], CrossDocumentExtractor())
+    assert facts.developer is None and "developer" not in facts.evidence
