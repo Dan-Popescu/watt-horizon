@@ -48,12 +48,18 @@ def is_document_url(url: str) -> bool:
     )
 
 
-def attachment_links(page: str, page_url: str, root_url: str, *, max_links: int = 501) -> list[tuple[str, str]]:
+def attachment_links(
+    page: str, page_url: str, root_url: str, *, max_links: int = 501, include_external: bool = False
+) -> list[tuple[str, str]]:
     """Only selected-case attachment links; never a general whole-site crawl."""
     found: dict[str, str] = {}
     for raw, title, _ in links(page, page_url):
         url = canonical_url(raw)
-        if not same_origin(url, root_url) or _UNRELATED.search(title):
+        if (
+            urlparse(url).scheme not in {"http", "https"}
+            or (not include_external and not same_origin(url, root_url))
+            or _UNRELATED.search(title)
+        ):
             continue
         if is_document_url(url) or _ATTACHMENT.search(title):
             found.setdefault(url, title)
@@ -84,6 +90,8 @@ class DossierReport:
     pages: int = 0
     documents: int = 0
     bytes: int = 0
+    outside_scope: int = 0
+    links: int = 0
     errors: list[str] = field(default_factory=list)
     updated_at: str = ""
 
@@ -167,12 +175,21 @@ def scan_dossier(
             report.pages += 1
             edge(parent, url, "page")
             children = attachment_links(
-                data.decode("utf-8", errors="replace"), url, root_url, max_links=limits.links + 1
+                data.decode("utf-8", errors="replace"), url, root_url, max_links=limits.links + 1, include_external=True
             )
             if len(children) > limits.links:
                 limited = True
                 children = children[: limits.links]
             for child, child_title in children:
+                if report.links >= limits.links:
+                    limited = True
+                    break
+                report.links += 1
+                if not same_origin(child, root_url):
+                    edge(url, child, "outside_scope")
+                    report.outside_scope += 1
+                    limited = True
+                    continue
                 if child in seen:
                     state, reference_id = terminal.get(child, ("visited", None))
                     edge(url, child, state, reference_id)
@@ -188,12 +205,16 @@ def scan_dossier(
         if not report.documents:
             report.errors.append(f"no recognized documents: {root_url}")
         report.state = "partial" if limited or report.errors else "complete"
-    except SiteBlockedError:
+    except SiteBlockedError as exc:
         report.state = "blocked"
+        report.errors.append(f"{type(exc).__name__}: {exc}")
+        edge(parent, url, "blocked")
         persist()
         raise
-    except Exception:
+    except Exception as exc:
         report.state = "failed"
+        report.errors.append(f"{type(exc).__name__}: {exc}")
+        edge(parent, url, "failed")
         persist()
         raise
     persist()

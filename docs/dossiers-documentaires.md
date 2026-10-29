@@ -4,6 +4,10 @@ Les collecteurs documentaires utilisent maintenant un parcours commun des pièce
 
 Le parcours reste sur l'origine du dossier et ne suit pas les liens de navigation générale identifiés. Il n'ouvre pas les archives ou l'ensemble d'une page annuelle au nom d'un dossier. Les fichiers externes, les archives ZIP et les documents bureautiques ne sont pas extraits par ce mécanisme. Une récupération complète signifie que les liens reconnus dans ce périmètre ont été parcourus ; elle ne garantit pas que toutes les pièces existantes sont publiées ou reconnues.
 
+Les liens de pièces reconnus sur une autre origine restent enregistrés avec l'état `outside_scope`, sans requête réseau. Leur présence laisse le dossier partiel et demande une vérification ou une configuration explicite de la source concernée ; elle n'est pas assimilée à une absence de document.
+
+Les liens externes et les cycles consomment le même budget global de relations découvertes. Une erreur ou un blocage conserve son type, son motif et l'état du lien concerné dans le dernier parcours ; l'opérateur peut donc distinguer une pièce non reconnue, un refus du site et une limite de parcours.
+
 ## Budgets et reprise
 
 Les options `collect` et `update` acceptent :

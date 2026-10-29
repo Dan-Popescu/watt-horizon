@@ -52,10 +52,12 @@ def test_query_download_neutral_annex_and_indirect_html_are_one_dossier(tmp_path
                 root_url=ROOT,
                 title="Stockage par batteries",
             )
-            assert result.state == "complete" and result.documents == 2 and result.pages == 2
+            assert result.state == "partial" and result.documents == 2 and result.pages == 2
+            assert result.outside_scope == 1
         key = "dreal_case_by_case:r:012667"
         assert len(db.documents(key)) == 2
         assert all("else.test" not in url for url in urls)
+        assert any(edge["state"] == "outside_scope" for edge in db.dossier_edges(key))
         downloaded = [edge for edge in db.dossier_edges(key) if "form.PDF" in edge["url"]]
         assert len(downloaded) == 2
         assert all(edge["state"] == "document" and edge["document_id"] for edge in downloaded)
@@ -123,6 +125,10 @@ def test_block_stops_dossier_and_keeps_graph(tmp_path: Path) -> None:
             )
         assert requests == ["/case", "/a.pdf"]
         assert db.dossier_scans()[0]["state"] == "blocked"
+        assert "SiteBlockedError" in db.dossier_scans()[0]["errors"][0]
+        assert any(
+            edge["url"].endswith("/a.pdf") and edge["state"] == "blocked" for edge in db.dossier_edges("prefecture:r:n")
+        )
 
 
 def test_anonymous_dreal_annex_is_kept_and_identity_survives_rename(tmp_path: Path) -> None:
@@ -263,3 +269,28 @@ def test_dossier_rejects_cross_origin_redirect_before_following_it(tmp_path: Pat
             )
         assert requests == [ROOT]
         assert db.dossier_scans()[0]["state"] == "failed"
+        assert "origin" in db.dossier_scans()[0]["errors"][0]
+        assert db.dossier_edges("prefecture:r:n")[0]["state"] == "failed"
+
+
+def test_external_attachments_share_the_dossier_link_budget(tmp_path: Path) -> None:
+    page = "".join(f'<a href="https://else.test/{i}.pdf">Annexe</a>' for i in range(10))
+    with (
+        Database(tmp_path / "db") as db,
+        PoliteHttp(
+            "t", default_interval_s=0, transport=httpx.MockTransport(lambda _: httpx.Response(200, text=page))
+        ) as http,
+    ):
+        result = collect_dossier(
+            http,
+            db,
+            BlobStore(tmp_path / "blobs"),
+            source=SourceKind.PREFECTURE,
+            region="r",
+            number="n",
+            root_url=ROOT,
+            title="Dossier",
+            limits=DossierLimits(links=2),
+        )
+        assert result.state == "partial" and result.outside_scope == 2 and result.links == 2
+        assert len(db.dossier_edges("prefecture:r:n")) == 3
