@@ -346,6 +346,47 @@ def test_incomplete_processing_blocks_snapshot(db: Database, blobs: BlobStore, t
         snapshot(db, load_campaign(directory), tmp_path / "stale.json", "stale")
 
 
+def test_cli_comparison_rechecks_groups_after_snapshot_export(
+    db: Database,
+    blobs: BlobStore,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first = seed(db, blobs)
+    second = seed(db, blobs, number="000002", partition="test")
+    directory = tmp_path / "campaign"
+    prepare(db, directory)
+    snapshot_path = tmp_path / "before.json"
+    snapshot(db, load_campaign(directory), snapshot_path, "before")
+    with db.transaction():
+        db.add_link_decision(
+            LinkDecision(
+                a=first.key, b=second.key, verdict="same_project", author="Reviewer", created_at=datetime.now(UTC)
+            )
+        )
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    assert (
+        cli.main(
+            [
+                "campaign",
+                "compare",
+                str(directory),
+                "--baseline",
+                str(snapshot_path),
+                "--candidate",
+                str(snapshot_path),
+                "--annotations",
+                str(directory / "reviewer-a.jsonl"),
+            ]
+        )
+        == 2
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert "cross frozen" in report["error"]
+
+
 @pytest.mark.parametrize("partition", ["dev", "test"])
 @pytest.mark.parametrize("decision_only", [False, True])
 def test_new_same_project_relationship_invalidates_frozen_groups(

@@ -414,6 +414,11 @@ def cmd_campaign(args: argparse.Namespace, s: Settings) -> Any:
     if args.action == "snapshot":
         with Database(s.db_path) as db:
             return campaign_compare.snapshot(db, manifest, Path(args.out), args.name)
+    if args.action == "compare":
+        # Existing snapshot files do not preserve independence when a later review
+        # discovers that two supposedly separate projects belong together.
+        with Database(s.db_path) as db:
+            campaign.check_documents(db, manifest)
     services = make_services(s, None, llm="cached")
     report, references = campaign_review.validate(
         manifest,
