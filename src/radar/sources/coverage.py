@@ -1,7 +1,6 @@
 """Evidence about enumerated source scopes, distinct from document/project recall."""
 
 import re
-from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -85,8 +84,6 @@ def inventory(
         row["stale"] = bool(freshness_at and now - datetime.fromisoformat(freshness_at) > timedelta(days=stale_days))
         row["status"] = "stale" if row["stale"] and item.state == "complete" else item.state
         rows.append(row)
-    dossiers = [row for row in db.dossier_scans() if row["filing_key"].split(":", 2)[1] == region.slug]
-    incomplete = [row for row in dossiers if row["state"] != "complete"]
     return {
         "region": region.slug,
         "years": years,
@@ -94,12 +91,7 @@ def inventory(
         "as_of": now.isoformat(),
         "caveat": "Couverture des pages configurées, pas une mesure d’exhaustivité des projets ou d’Internet.",
         "prefectures": "Périmètre de navigation restreint ; aucune couverture annuelle complète déduite.",
-        "dossiers": {
-            "by_state": dict(Counter(row["state"] for row in dossiers)),
-            "incomplete_n": len(incomplete),
-            "incomplete": incomplete[:20],
-            "truncated": len(incomplete) > 20,
-        },
+        "dossiers": db.dossier_summary(region.slug),
     }
 
 

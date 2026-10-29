@@ -230,6 +230,10 @@ _MIGRATIONS += (
     );
     CREATE INDEX dossier_edges_filing ON dossier_edges(filing_key);
     """,
+    """
+    CREATE INDEX dossier_scans_root ON dossier_scans(root_url, filing_key);
+    CREATE INDEX dossier_edges_url ON dossier_edges(filing_key, root_url, url);
+    """,
 )
 SCHEMA_VERSION = len(_MIGRATIONS)
 
@@ -766,6 +770,39 @@ class Database:
         if key is not None:
             sql += " WHERE filing_key=?"
         return [{"filing_key": r[0], "root_url": r[1], **json.loads(r[2])} for r in self.conn.execute(sql, args)]
+
+    def dossier_keys_for_root(self, root_url: str) -> list[str]:
+        return [
+            row[0] for row in self.conn.execute("SELECT filing_key FROM dossier_scans WHERE root_url=?", (root_url,))
+        ]
+
+    def dossier_summary(self, region: str, limit: int = 20) -> dict[str, Any]:
+        """Aggregate in SQL and decode only a bounded diagnostic page."""
+        if limit <= 0:
+            raise ValueError("Dossier diagnostic limit must be positive")
+        where = "substr(filing_key,instr(filing_key,':')+1,?)=?"
+        args = (len(region) + 1, region + ":")
+        counts = dict(
+            self.conn.execute(
+                "SELECT COALESCE(json_extract(data,'$.state'),'unknown'),COUNT(*) FROM dossier_scans WHERE "
+                + where
+                + " GROUP BY 1",
+                args,
+            ).fetchall()
+        )
+        rows = self.conn.execute(
+            "SELECT filing_key,root_url,data FROM dossier_scans WHERE "
+            + where
+            + " AND COALESCE(json_extract(data,'$.state'),'unknown') <> 'complete' ORDER BY root_url LIMIT ?",
+            (*args, limit),
+        )
+        incomplete_n = sum(count for state, count in counts.items() if state != "complete")
+        return {
+            "by_state": counts,
+            "incomplete_n": incomplete_n,
+            "incomplete": [{"filing_key": r[0], "root_url": r[1], **json.loads(r[2])} for r in rows],
+            "truncated": incomplete_n > limit,
+        }
 
     def record_dossier_edge(
         self, key: str, root_url: str, parent_url: str, url: str, state: str, document_id: str | None = None

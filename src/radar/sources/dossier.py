@@ -224,11 +224,7 @@ def scan_dossier(
 def dossier_number(db: Database, source: SourceKind, region: str, root_url: str, title: str, page: str) -> str:
     """A page's existing identity is immutable even when its attachment names change."""
     prefix = f"{source.value}:{region}:"
-    existing = [
-        row["filing_key"]
-        for row in db.dossier_scans()
-        if row["root_url"] == canonical_url(root_url) and row["filing_key"].startswith(prefix)
-    ]
+    existing = [key for key in db.dossier_keys_for_root(canonical_url(root_url)) if key.startswith(prefix)]
     if len(existing) == 1:
         return str(existing[0]).removeprefix(prefix)
     if number := normalize_filing_number(title):
