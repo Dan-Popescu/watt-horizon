@@ -6,7 +6,7 @@ submissions require reconciliation; a local lease never proves remote failure.
 
 import dataclasses
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -116,18 +116,19 @@ class LlmQueue:
     def in_flight(self) -> list[tuple[str, dict[str, Any]]]:
         return self.jobs.in_flight()
 
+    def iter_in_flight(self) -> Iterator[tuple[str, dict[str, Any]]]:
+        return self.jobs.iter_in_flight()
+
     def summary(self) -> dict[str, Any]:
         return self.jobs.summary()
 
     def active_count(self) -> int:
-        states = self.summary()["states"]
-        return sum(int(states.get(s, 0)) for s in ("pending", "submitting", "in_flight", "received"))
+        self.jobs.expire_claims()
+        return self.jobs.count_states("pending", "submitting", "in_flight", "received")
 
     def blocked_count(self) -> int:
-        states = self.summary()["states"]
-        return sum(
-            int(states.get(s, 0)) for s in ("blocked", "budget_blocked", "uncertain", "parse_failed", "await_parser")
-        )
+        self.jobs.expire_claims()
+        return self.jobs.count_states("blocked", "budget_blocked", "uncertain", "parse_failed", "await_parser")
 
     def resolve_uncertain(
         self, submission_id: str, *, provider_batch_id: str | None = None, confirm_not_accepted: bool = False
@@ -255,7 +256,7 @@ def submit(batches: BatchClient, queue: LlmQueue) -> list[str]:
     while True:
         submission, chunk = queue.jobs.claim(mode="batch", limit=MAX_PER_BATCH, max_bytes=MAX_BATCH_BYTES)
         if not chunk:
-            if queue.jobs.entries("pending"):
+            if queue.jobs.has_pending():
                 continue
             return ids
         requests = [{"custom_id": key, "params": entry["params"]} for key, entry in chunk]
@@ -280,7 +281,7 @@ def collect(batches: BatchClient, queue: LlmQueue, tasks: Iterable[LlmTask]) -> 
         "collection_errors": [],
         "filings": set(),
     }
-    for batch_id, batch in queue.in_flight():
+    for batch_id, batch in queue.iter_in_flight():
         try:
             if batches.retrieve(batch_id).processing_status != "ended":
                 report["running"] += 1
@@ -313,7 +314,7 @@ def collect(batches: BatchClient, queue: LlmQueue, tasks: Iterable[LlmTask]) -> 
                 queue.jobs.finish_batch(batch_id)
         except Exception as exc:
             report["collection_errors"].append(f"{batch_id}: {type(exc).__name__}: {exc}")
-    for key, entry in queue.jobs.entries("received", "parse_failed", "await_parser"):
+    for key, entry in queue.jobs.iter_entries("received", "parse_failed", "await_parser"):
         task = by_name.get(entry["task"])
         if task is None:
             queue.jobs.parse_failed(key, f"parser unavailable: {entry['task']}", missing_parser=True)
@@ -338,7 +339,7 @@ def wait(
 ) -> bool:
     deadline = time.monotonic() + timeout_s
     while True:
-        running = [i for i, _ in queue.in_flight() if batches.retrieve(i).processing_status != "ended"]
+        running = any(batches.retrieve(i).processing_status != "ended" for i in queue.jobs.iter_in_flight_ids())
         if not running:
             return True
         if time.monotonic() >= deadline:

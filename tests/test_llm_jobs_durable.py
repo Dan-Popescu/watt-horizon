@@ -290,3 +290,87 @@ def test_legacy_batch_import_keeps_source_and_does_not_resurrect_a_finished_batc
     reopened = queue_at(tmp_path)
     assert not reopened.in_flight() and not reopened.waiting("a")
     assert llm_batch.submit(fake, reopened) == [] and len(fake.created) == 1
+
+
+def test_job_iteration_decodes_lazily_and_allows_state_updates_between_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queue = queue_at(tmp_path)
+    for number in range(24):
+        queue.jobs.add(f"{number:064x}", {"payload": "x" * 64_000}, str(number))
+    original = json.loads
+    decoded: list[int] = []
+
+    def counted_loads(value: str) -> Any:
+        decoded.append(len(value))
+        return original(value)
+
+    monkeypatch.setattr("radar.store.llm_jobs.json.loads", counted_loads)
+    iterator = queue.jobs.iter_entries("pending", page_size=2)
+    assert decoded == []
+    first_key, first = next(iterator)
+    assert len(decoded) == 1 and len(first["payload"]) == 64_000
+    keys = [first_key]
+    queue.jobs.succeeded(first_key, {})
+    for key, _ in iterator:
+        keys.append(key)
+        queue.jobs.succeeded(key, {})
+    assert keys == [f"{number:064x}" for number in range(24)]
+    assert len(decoded) == 24 and not queue.jobs.has_pending()
+
+
+def test_submission_collection_and_wait_avoid_eager_compatibility_lists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queue = queue_at(tmp_path)
+    task, fake = LlmClassifier("m"), FakeBatches()
+    queue.add(task, item(), "a")
+
+    def eager_list_forbidden(*args: Any) -> Any:
+        raise AssertionError("orchestration must not materialise all durable jobs/batches")
+
+    monkeypatch.setattr(queue.jobs, "entries", eager_list_forbidden)
+    monkeypatch.setattr(queue.jobs, "in_flight", eager_list_forbidden)
+    monkeypatch.setattr(queue, "in_flight", eager_list_forbidden)
+    fake.ended.update(llm_batch.submit(fake, queue))
+    assert llm_batch.wait(fake, queue, timeout_s=0)
+    assert llm_batch.collect(fake, queue, [task])["answers"] == 1
+
+
+def test_batch_iterator_reads_one_membership_at_a_time_and_allows_finishing_batches(tmp_path: Path) -> None:
+    queue = queue_at(tmp_path)
+    task = LlmClassifier("m")
+    for number in range(5):
+        current = item(str(number), f"Batteries dossier {number}")
+        queue.add(task, current, current.filing_key)
+        submission, claimed = queue.jobs.claim(mode="batch", limit=1)
+        assert len(claimed) == 1
+        queue.jobs.submitted(submission, f"batch_{number}")
+    statements: list[str] = []
+    queue.jobs.conn.set_trace_callback(statements.append)
+    batches = queue.jobs.iter_in_flight(page_size=2)
+    assert statements == []
+    visited = []
+    for provider_id, batch in batches:
+        assert len(batch["entries"]) == 1
+        visited.append(provider_id)
+        queue.jobs.finish_batch(provider_id)
+    assert sorted(visited) == [f"batch_{number}" for number in range(5)]
+    assert not any("SELECT key,record" in statement for statement in statements)
+    assert any("LIMIT 2" in statement for statement in statements)
+    assert list(queue.jobs.iter_in_flight_ids()) == []
+
+
+def test_summary_caps_uncertain_details_and_preserves_complete_counts(tmp_path: Path) -> None:
+    queue = queue_at(tmp_path)
+    queue.jobs.conn.executemany(
+        "INSERT INTO submissions(id,mode,state,created,lease_until,error) VALUES (?,'batch','uncertain',?,0,'timeout')",
+        [(f"submission_{number:03d}", number) for number in range(105)],
+    )
+    statements: list[str] = []
+    queue.jobs.conn.set_trace_callback(statements.append)
+    summary = queue.summary()
+    assert len(summary["uncertain_submissions"]) == 100
+    assert summary["uncertain_submissions_total"] == 105 and summary["uncertain_submissions_truncated"]
+    assert any("GROUP BY state" in statement for statement in statements)
+    assert not any(statement == "SELECT state FROM jobs" for statement in statements)

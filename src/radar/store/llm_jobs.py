@@ -11,7 +11,6 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections import Counter
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -92,6 +91,9 @@ class LlmJobStore:
             "pricing_version TEXT, pricing_snapshot TEXT, actual_model TEXT, input_tokens INTEGER, output_tokens INTEGER, raw_response TEXT, "
             "PRIMARY KEY(submission_id, job_key));"
             "CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);"
+            "CREATE INDEX IF NOT EXISTS jobs_state_key ON jobs(state,key);"
+            "CREATE INDEX IF NOT EXISTS jobs_submission ON jobs(submission_id,key);"
+            "CREATE INDEX IF NOT EXISTS submissions_state_mode_id ON submissions(state,mode,id);"
             "CREATE INDEX IF NOT EXISTS dependencies_filing ON dependencies(filing);"
             "CREATE INDEX IF NOT EXISTS attempts_day ON attempts(day);"
             "CREATE INDEX IF NOT EXISTS attempts_campaign ON attempts(campaign);"
@@ -150,9 +152,39 @@ class LlmJobStore:
         )
 
     def entries(self, *states: str) -> list[tuple[str, dict[str, Any]]]:
+        return list(self.iter_entries(*states))
+
+    def has_pending(self) -> bool:
+        return self.conn.execute("SELECT 1 FROM jobs WHERE state='pending' LIMIT 1").fetchone() is not None
+
+    def count_states(self, *states: str) -> int:
+        if not states:
+            return 0
         marks = ",".join("?" for _ in states)
-        rows = self.conn.execute(f"SELECT key,record FROM jobs WHERE state IN ({marks}) ORDER BY key", states)
-        return [(r[0], json.loads(r[1])) for r in rows]
+        return int(self.conn.execute(f"SELECT COUNT(*) FROM jobs WHERE state IN ({marks})", states).fetchone()[0])
+
+    def iter_entries(self, *states: str, page_size: int = 100) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Read bounded keyset pages, releasing each cursor before callers update jobs."""
+        if page_size < 1:
+            raise ValueError("Job page size must be positive")
+        if not states:
+            return
+        marks = ",".join("?" for _ in states)
+        after: str | None = None
+        while True:
+            cursor = self.conn.execute(
+                f"SELECT key,record FROM jobs WHERE state IN ({marks}) AND (? IS NULL OR key>?) ORDER BY key LIMIT ?",
+                (*states, after, after, page_size),
+            )
+            try:
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
+            if not rows:
+                return
+            after = rows[-1][0]
+            for row in rows:
+                yield row[0], json.loads(row[1])
 
     def _spent(self, where: str, args: tuple[Any, ...]) -> int:
         row = self.conn.execute(
@@ -305,20 +337,40 @@ class LlmJobStore:
                 self.conn.execute("UPDATE jobs SET state='pending',error=NULL WHERE submission_id=?", (submission,))
 
     def in_flight(self) -> list[tuple[str, dict[str, Any]]]:
-        batches = self.conn.execute(
-            "SELECT id,provider_id FROM submissions WHERE state='in_flight' AND mode='batch' ORDER BY created,id"
-        ).fetchall()
-        return [
-            (
-                row[1],
-                {
-                    "entries": {
-                        r[0]: {} for r in self.conn.execute("SELECT key FROM jobs WHERE submission_id=?", (row[0],))
-                    }
-                },
+        return list(self.iter_in_flight())
+
+    def iter_in_flight_ids(self, *, page_size: int = 100) -> Iterator[str]:
+        if page_size < 1:
+            raise ValueError("Batch page size must be positive")
+        after: str | None = None
+        while True:
+            cursor = self.conn.execute(
+                "SELECT id,provider_id FROM submissions WHERE state='in_flight' AND mode='batch' "
+                "AND (? IS NULL OR id>?) ORDER BY id LIMIT ?",
+                (after, after, page_size),
             )
-            for row in batches
-        ]
+            try:
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
+            if not rows:
+                return
+            after = rows[-1][0]
+            for row in rows:
+                yield str(row[1])
+
+    def iter_in_flight(self, *, page_size: int = 100) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Materialise membership for one batch, never all outstanding request payloads."""
+        for provider_id in self.iter_in_flight_ids(page_size=page_size):
+            cursor = self.conn.execute(
+                "SELECT key FROM jobs WHERE submission_id=(SELECT id FROM submissions WHERE provider_id=?)",
+                (provider_id,),
+            )
+            try:
+                entries: dict[str, dict[str, Any]] = {row[0]: {} for row in cursor}
+            finally:
+                cursor.close()
+            yield provider_id, {"entries": entries}
 
     def received(self, key: str, message: dict[str, Any]) -> None:
         with self._transaction():
@@ -415,7 +467,7 @@ class LlmJobStore:
 
     def summary(self) -> dict[str, Any]:
         self.expire_claims()
-        states = dict(Counter(row[0] for row in self.conn.execute("SELECT state FROM jobs")))
+        states = dict(self.conn.execute("SELECT state,COUNT(*) FROM jobs GROUP BY state"))
         totals = self.conn.execute(
             "SELECT COUNT(*),SUM(CASE WHEN actual_micros IS NULL THEN reserved_micros ELSE 0 END),"
             "SUM(actual_micros),SUM(input_tokens),SUM(output_tokens),"
@@ -423,8 +475,13 @@ class LlmJobStore:
         ).fetchone()
         uncertain = [
             dict(r)
-            for r in self.conn.execute("SELECT id,mode,error FROM submissions WHERE state='uncertain' ORDER BY created")
+            for r in self.conn.execute(
+                "SELECT id,mode,error FROM submissions WHERE state='uncertain' ORDER BY created,id LIMIT 100"
+            )
         ]
+        uncertain_total = int(
+            self.conn.execute("SELECT COUNT(*) FROM submissions WHERE state='uncertain'").fetchone()[0]
+        )
         issues = [
             {"key": row[0], "state": row[1], "error": row[2]}
             for row in self.conn.execute(
@@ -440,6 +497,8 @@ class LlmJobStore:
             "output_tokens": totals[4] or 0,
             "unpriced_or_unsettled_attempts": totals[5] or 0,
             "uncertain_submissions": uncertain,
+            "uncertain_submissions_total": uncertain_total,
+            "uncertain_submissions_truncated": uncertain_total > len(uncertain),
             "issues": issues,
             "budget_basis": "operator-supplied prices; conservative reservations, not provider invoice guarantees",
         }
