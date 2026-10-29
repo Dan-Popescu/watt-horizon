@@ -209,6 +209,42 @@ def test_mrae_short_project_titles_do_not_inherit_previous_project() -> None:
     assert other.parent_reference is None
 
 
+def test_mrae_unnumbered_opinion_resets_adjacent_annex_identity(tmp_path: Path) -> None:
+    page = (
+        '<p>Projet de centrale de stockage par batteries A</p><a href="/a.pdf">012667/AP</a>'
+        '<p>Projet de centrale de stockage par batteries B</p><a href="/b.pdf">Avis</a> '
+        '<a href="/b-annexe.pdf">Annexe</a>'
+    )
+    first, second, annex = mrae.parse_opinions(page, ROOT)
+    assert first.parent_reference is None
+    assert second.parent_reference is None
+    assert annex.parent_reference == "Avis"
+    assert annex.parent_url == second.pdf_url
+    region = replace(get_region("hauts-de-france"), mrae_pages={2026: ROOT})
+    pdfs = {path: make_pdf([FILLER + f" Document {path}."]) for path in ("/a.pdf", "/b.pdf", "/b-annexe.pdf")}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/case":
+            return httpx.Response(200, text=page)
+        return httpx.Response(200, content=pdfs[request.url.path])
+
+    with (
+        Database(tmp_path / "db") as db,
+        PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http,
+    ):
+        result = mrae.collect_mrae(http, db, BlobStore(tmp_path / "blobs"), region, 2026)
+        assert result.documents == 3 and not result.errors
+        keys = db.filing_keys_with_documents()
+        assert len(keys) == 2
+        a_key = f"{SourceKind.MRAE_OPINION.value}:{region.slug}:012667"
+        b_key = next(key for key in keys if key != a_key)
+        assert [doc.url for doc in db.documents(a_key)] == ["https://example.test/a.pdf"]
+        assert {doc.url for doc in db.documents(b_key)} == {
+            "https://example.test/b.pdf",
+            "https://example.test/b-annexe.pdf",
+        }
+
+
 def test_prefecture_paces_globally_across_departments_and_restores_client(tmp_path: Path) -> None:
     clock = FakeClock()
     region = replace(get_region("hauts-de-france"), prefectures={"59": "https://a.test", "62": "https://b.test"})

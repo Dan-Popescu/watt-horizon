@@ -33,6 +33,7 @@ class Opinion:
     reference: str  # link text, e.g. "013143/AP"
     context: str  # project title and requester, from the text preceding the link
     parent_reference: str | None = None
+    parent_url: str | None = None
 
 
 def parse_opinions(page: str, page_url: str) -> list[Opinion]:
@@ -40,6 +41,7 @@ def parse_opinions(page: str, page_url: str) -> list[Opinion]:
     previous_end = 0
     previous_context = ""
     previous_reference = ""
+    previous_url = ""
     for url, text, pos in links(page, page_url):
         if not same_origin(url, page_url) or not (
             is_document_url(url) or re.search(r"dossier|annex|pi[eè]ce|[eé]tude", text, re.I)
@@ -51,15 +53,23 @@ def parse_opinions(page: str, page_url: str) -> list[Opinion]:
         if adjacent and previous_context:
             context = previous_context
         reference = re.sub(r"\s*pdf\s*-.*$", "", text, flags=re.IGNORECASE).strip()
-        parent = previous_reference if adjacent and re.search(r"annex|pi[eè]ce|dossier complet", text, re.I) else None
+        is_annex = bool(adjacent and re.search(r"annex|pi[eè]ce|dossier complet", text, re.I))
+        parent = previous_reference if is_annex else None
         opinions.append(
-            Opinion(pdf_url=canonical_url(url), reference=reference, context=context, parent_reference=parent)
+            Opinion(
+                pdf_url=canonical_url(url),
+                reference=reference,
+                context=context,
+                parent_reference=parent,
+                parent_url=previous_url if is_annex else None,
+            )
         )
         end = page.find("</a>", pos)
         previous_end = end + 4 if end >= 0 else pos
         previous_context = context
-        if normalize_filing_number(reference):
+        if not is_annex:
             previous_reference = reference
+            previous_url = canonical_url(url)
     return opinions
 
 
@@ -105,7 +115,7 @@ def collect_mrae(
             number = (
                 normalize_filing_number(op.reference)
                 or normalize_filing_number(op.parent_reference)
-                or "mrae-" + sha256(op.pdf_url.encode())[:10]
+                or "mrae-" + sha256((op.parent_url or op.pdf_url).encode())[:10]
             )
             remaining = max_documents - report.documents if max_documents is not None else dossier_limits.documents
             limits = DossierLimits(
