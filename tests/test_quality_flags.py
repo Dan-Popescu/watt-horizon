@@ -124,7 +124,9 @@ def test_audited_document_rescued_by_its_text(db: Database, blobs: BlobStore, lo
             filename="000003-decision.pdf",
             audit="near-miss:solar-wind",
         )
-    gold = GoldClassifier({"000003": GoldLabel("000003", Category.BESS_HYBRID)})
+    gold = GoldClassifier(
+        {"000003": GoldLabel("000003", Category.BESS_HYBRID)}, known_keys=db.filing_keys_with_documents()
+    )
     process_filings(db, Services(blobs=blobs, ocr=NullOcr(), classifier=gold, lookups=lookups))
     filing = db.filing("dreal_case_by_case:hauts-de-france:000003")
     assert filing is not None

@@ -136,7 +136,10 @@ def replay(directory: Path, workdir: Path) -> dict[str, Any]:
                     role=DocumentRole(d.role),
                 )  # fmt: skip
     with Database(workdir / "corpus.sqlite") as db:
-        gold = GoldClassifier({f.number: GoldLabel(f.number, Category(f.category)) for f in filings})
+        gold = GoldClassifier(
+            {f.number: GoldLabel(f.number, Category(f.category)) for f in filings},
+            known_keys=db.filing_keys_with_documents(),
+        )
         services = Services(blobs=blobs, ocr=NullOcr(), classifier=gold, lookups=StaticLookups(communes=communes))
         process_filings(db, services)
         projects = link_and_build(db)["projects"]

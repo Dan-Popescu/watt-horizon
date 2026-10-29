@@ -11,7 +11,7 @@ from radar.quality.rulebook import Rulebook
 GOLD = Path(__file__).parent.parent / "gold"
 CASES = load_all(GOLD / "cases")
 RULES = Rulebook.load(GOLD / "rules.json").effective()  # adopted rules count, as in production
-PARAMS = [pytest.param(case, name, id=f"{case.number}:{name}") for case in CASES for name in case.expected]
+PARAMS = [pytest.param(case, name, id=f"{case.identity}:{name}") for case in CASES for name in case.expected]
 
 
 @pytest.mark.parametrize(("case", "name"), PARAMS)
@@ -21,4 +21,4 @@ def test_case(case, name) -> None:  # type: ignore[no-untyped-def]
         if not ok:
             pytest.xfail("open case: known extraction error, see gold/cases")
         return
-    assert ok, f"regression on {case.number}:{name} (expected {case.expected[name]!r})"
+    assert ok, f"regression on {case.identity}:{name} (expected {case.expected[name]!r})"

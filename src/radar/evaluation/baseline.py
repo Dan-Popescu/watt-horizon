@@ -25,7 +25,14 @@ def _promotion_metrics(report: dict[str, Any]) -> dict[str, float]:
         "auto_accept.",
         "second_opinion.",
     )
-    return {key: value for key, value in metrics(report).items() if not key.startswith(diagnostic)}
+    output = {key: value for key, value in metrics(report).items() if not key.startswith(diagnostic)}
+    for name, score in report.get("fields_verified", {}).get("test", {}).items():
+        key = f"fields_verified.test.{name}.accuracy"
+        if (accuracy := score.get("independent_accuracy")) is None:
+            output.pop(key, None)
+        else:
+            output[key] = accuracy
+    return output
 
 
 def dataset_fingerprint(path: Path) -> str:
@@ -105,20 +112,24 @@ def assess_report(
         current = {}
         failures.append("invalid_report")
     test_scores = report.get("fields_verified", {}).get("test", {})
-    if not test_scores or any(score.get("n", 0) < min_samples for score in test_scores.values()):
+    if not test_scores or any(score.get("independent_n", 0) < min_samples for score in test_scores.values()):
         failures.append("independent_field_samples_missing")
     for name in required_fields:
         score = test_scores.get(name)
         if score is None:
             failures.append(f"required_field_missing:{name}")
             continue
-        value = score.get("accuracy")
+        value = score.get("independent_accuracy")
         if not isinstance(value, int | float) or not math.isfinite(value) or value < min_accuracy:
             failures.append(f"field_accuracy_below_threshold:{name}")
     if (recall := current.get("screening.recall")) is not None and recall < min_screening_recall:
         failures.append("screening_recall_below_threshold")
-    if report.get("gold", {}).get("labels_verified", 0) < min_samples:
+    if report.get("screening", {}).get("test_independent_n", 0) < min_samples:
         failures.append("verified_classification_samples_missing")
+    if report.get("screening", {}).get("test_target_independent_n", 0) < min_samples:
+        failures.append("independent_screening_targets_missing")
+    if "classifier" in report and report["classifier"].get("test_independent_n", 0) < min_samples:
+        failures.append("independent_classifier_samples_missing")
     if not report.get("partitions", {}).get("fingerprint"):
         failures.append("partition_manifest_missing")
     if not report.get("reference_fingerprint"):
@@ -135,6 +146,8 @@ def assess_report(
             failures.append(f"execution_{key}")
     if report.get("ocr", {}).get("failed_documents"):
         failures.append("ocr_execution_failed")
+    if report.get("validation", {}).get("missing_reference_filings_count", 0):
+        failures.append("reference_filings_missing")
     if report.get("cases", {}).get("regressed", 0):
         failures.append("regression_cases_failed")
     comparison: dict[str, list[dict[str, Any]]] = {"regressions": [], "improvements": []}
@@ -156,7 +169,9 @@ def assess_report(
             if before != now:
                 failures.append(reason)
         for name, old in previous_report.get("fields_verified", {}).get("test", {}).items():
-            if name not in test_scores or test_scores[name].get("n", 0) != old.get("n", 0):
+            if name not in test_scores or any(
+                test_scores[name].get(unit, 0) != old.get(unit, 0) for unit in ("n", "independent_n")
+            ):
                 failures.append(f"sample_population_changed:{name}")
     return {
         "status": "failed" if failures else "passed",

@@ -20,7 +20,8 @@ AUBENTON = "dreal_case_by_case:hauts-de-france:010504"
 
 def services(blobs: BlobStore, lookups: StaticLookups, aliases: Aliases | None = None) -> Services:
     gold = GoldClassifier(
-        {"010504": GoldLabel("010504", Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)}
+        {"010504": GoldLabel("010504", Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)},
+        known_keys=["dreal_case_by_case:hauts-de-france:010504", "dreal_case_by_case:hauts-de-france:2025-4009"],
     )
     return Services(blobs=blobs, ocr=NullOcr(), classifier=gold, lookups=lookups, aliases=aliases)
 

@@ -48,7 +48,9 @@ def test_aliases_are_applied_at_every_build(
 ) -> None:
     aliases = merge(Aliases(), {"developer": {"apal mw": "APAL MW (groupe APAL)"}})
     aliases.save(tmp_path / "aliases.json")
-    gold = GoldClassifier({"010504": GoldLabel("010504", Category.BESS)})
+    gold = GoldClassifier(
+        {"010504": GoldLabel("010504", Category.BESS)}, known_keys=loaded_db.filing_keys_with_documents()
+    )
     services = Services(
         blobs=blobs, ocr=NullOcr(), classifier=gold, lookups=lookups, aliases=Aliases.load(tmp_path / "aliases.json")
     )
@@ -59,7 +61,8 @@ def test_aliases_are_applied_at_every_build(
 
 def test_web_suggestions_apply(loaded_db: Database, blobs: BlobStore, lookups: StaticLookups) -> None:
     gold = GoldClassifier(
-        {"010504": GoldLabel("010504", Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)}
+        {"010504": GoldLabel("010504", Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)},
+        known_keys=loaded_db.filing_keys_with_documents(),
     )
     services = Services(blobs=blobs, ocr=NullOcr(), classifier=gold, lookups=lookups)
 

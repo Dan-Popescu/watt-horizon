@@ -10,6 +10,7 @@ from typing import Literal
 
 from radar.domain.fields import Value
 from radar.domain.models import Filing
+from radar.domain.references import canonical_reference_map
 from radar.domain.text import fold
 from radar.evaluation.gold import FIELDS, FieldGold, actual_fields
 from radar.evaluation.stats import wilson
@@ -39,6 +40,7 @@ class FieldScore:
     spurious: int = 0
     absent: int = 0
     errors: list[str] = field(default_factory=list)
+    groups: dict[str, bool] = field(default_factory=dict)
 
     @property
     def total(self) -> int:
@@ -54,6 +56,9 @@ class FieldScore:
             "accuracy": round(self.accuracy, 3) if self.accuracy is not None else None,
             "ci95": wilson(self.correct + self.absent, self.total),
             "n": self.total,
+            "independent_n": len(self.groups),
+            "independent_accuracy": sum(self.groups.values()) / len(self.groups) if self.groups else None,
+            "independent_ci95": wilson(sum(self.groups.values()), len(self.groups)),
             "correct": self.correct,
             "wrong": self.wrong,
             "missed": self.missed,
@@ -65,17 +70,20 @@ class FieldScore:
 
 def score_fields(filings: list[Filing], gold: dict[str, FieldGold], *, verified: bool) -> dict[str, FieldScore]:
     """Scores per field over gold filings with the given `verified` status."""
-    by_number = {f.number: f for f in filings}
+    by_key = {f.key: f for f in filings}
     scores = {name: FieldScore() for name in FIELDS}
-    for number, reference in gold.items():
+    for key, reference in canonical_reference_map(filings, gold).items():
         if reference.verified is not verified:
             continue
-        filing = by_number.get(number)
+        filing = by_key.get(key)
         actual = actual_fields(filing) if filing else dict.fromkeys(FIELDS)
         for name, expected in reference.expected.items():
             outcome = compare(expected, actual.get(name))
             score = scores[name]
             setattr(score, outcome, getattr(score, outcome) + 1)
+            if filing is not None:
+                group = filing.strata.get("evaluation_group", filing.key)
+                score.groups[group] = score.groups.get(group, True) and outcome in {"correct", "absent"}
             if outcome not in {"correct", "absent"}:
-                score.errors.append(f"{number}: {outcome} (attendu {expected!r}, extrait {actual.get(name)!r})")
+                score.errors.append(f"{key}: {outcome} (attendu {expected!r}, extrait {actual.get(name)!r})")
     return {name: s for name, s in scores.items() if s.total}

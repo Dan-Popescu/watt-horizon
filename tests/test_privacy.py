@@ -57,7 +57,7 @@ def test_stored_filing_has_no_person_names(
             title="Formulaire de demande d’examen au cas par cas, stockage d’énergie par batteries",
             filename="000001-cerfa.pdf",
         )
-    gold = GoldClassifier({"000001": GoldLabel("000001", Category.BESS)})
+    gold = GoldClassifier({"000001": GoldLabel("000001", Category.BESS)}, known_keys=db.filing_keys_with_documents())
     process_filings(db, Services(blobs=blobs, ocr=NullOcr(), classifier=gold, lookups=lookups))
     filing = db.filing("dreal_case_by_case:hauts-de-france:000001")
     assert filing is not None and "DUPONT" not in filing.model_dump_json()

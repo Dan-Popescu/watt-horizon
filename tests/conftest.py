@@ -175,7 +175,10 @@ def loaded_db(db: Database, blobs: BlobStore, lookups: StaticLookups, tmp_path: 
         )
     gold = {"010504": GoldLabel("010504", Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)}
     services = Services(
-        blobs=blobs, ocr=TranscriptOcr(tmp_path / "tr"), classifier=GoldClassifier(gold), lookups=lookups
+        blobs=blobs,
+        ocr=TranscriptOcr(tmp_path / "tr"),
+        classifier=GoldClassifier(gold, known_keys=db.filing_keys_with_documents()),
+        lookups=lookups,
     )
     report = process_filings(db, services)
     assert report.processed == 3 and not report.failed

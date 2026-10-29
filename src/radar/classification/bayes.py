@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from radar.domain.enums import Category
 from radar.domain.models import Filing
+from radar.domain.references import canonical_reference_map
 from radar.domain.text import fold
 from radar.evaluation.stats import partition_of
 
@@ -132,11 +133,12 @@ def train(examples: list[tuple[tuple[str, ...], Category]]) -> BayesModel | None
 def trusted_examples(filings: list[Filing], labels: dict[str, Category]) -> list[tuple[tuple[str, ...], Category]]:
     """(vocabulary, category) for filings whose category a human set or verified: the second opinion's training set."""
     out = []
+    resolved = canonical_reference_map(filings, labels)
     for f in filings:
         if partition_of(f) != "dev":
             continue
         human = f.classification.category if f.classification.method == "human" else None
-        label = human or labels.get(f.number)
+        label = human or resolved.get(f.key)
         if label is not None and f.vocabulary:
             out.append((f.vocabulary, label))
     return out

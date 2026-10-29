@@ -6,6 +6,7 @@ File format (JSON Lines), one filing per line:
 """
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,7 @@ class GoldLabel:
     note: str = ""
     annotator: str = ""
     verified: bool = False
+    filing_key: str | None = None
 
 
 def load_gold(path: Path) -> dict[str, GoldLabel]:
@@ -36,19 +38,37 @@ def load_gold(path: Path) -> dict[str, GoldLabel]:
                 row.get("note", ""),
                 row.get("annotator", ""),
                 bool(row.get("verified", False)),
+                row.get("filing_key"),
             )
-            labels[label.number] = label
+            identity = label.filing_key or label.number
+            if identity in labels and labels[identity] != label:
+                raise ValueError(f"Conflicting classification references for {identity!r}")
+            labels[identity] = label
     return labels
 
 
 class GoldClassifier:
     name = "gold"
 
-    def __init__(self, labels: dict[str, GoldLabel]) -> None:
-        self.labels = labels
+    def __init__(self, labels: dict[str, GoldLabel], *, known_keys: Iterable[str] = ()) -> None:
+        self.labels: dict[str, GoldLabel] = {}
+        for identity, label in labels.items():
+            key = label.filing_key or identity
+            if key in self.labels and self.labels[key] != label:
+                raise ValueError(f"Conflicting classification references for {key!r}")
+            self.labels[key] = label
+        self.by_number: dict[str, set[str]] = {}
+        for key in known_keys:
+            self.by_number.setdefault(key.rsplit(":", 1)[-1], set()).add(key)
 
     def classify(self, item: ClassificationInput) -> Classification | None:
-        label = self.labels.get(item.number)
-        if label is None:
+        label = self.labels.get(item.filing_key)
+        if label is None and item.number in self.labels:
+            candidates = self.by_number.get(item.number, set())
+            if len(candidates) > 1:
+                raise ValueError(f"Ambiguous legacy classification number {item.number!r}; qualify its filing_key")
+            if candidates == {item.filing_key}:
+                label = self.labels[item.number]
+        if label is None or label.number != item.number:
             return None
         return Classification(category=label.category, method="gold", confidence="reviewed", quote=label.note)

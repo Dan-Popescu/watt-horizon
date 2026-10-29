@@ -96,7 +96,7 @@ def suggest(cases: list[Case], field_name: str, limit: int = 5, rules: Sequence[
             if outcome == "correct":
                 s.correct += 1
                 if case in failing:
-                    s.fixes.append(case.number)
+                    s.fixes.append(case.identity)
             elif outcome == "spurious":
                 s.spurious += 1
             elif outcome == "wrong":

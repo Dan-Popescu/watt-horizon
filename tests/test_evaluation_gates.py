@@ -1,16 +1,22 @@
 """Independent evaluation populations and explicit approval gates."""
 
+import json
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from radar.domain.enums import SourceKind
+from radar.classification.base import ClassificationInput
+from radar.classification.gold import GoldClassifier, GoldLabel, load_gold
+from radar.domain.enums import Category, SourceKind
 from radar.domain.models import Filing
 from radar.evaluation.baseline import approve_baseline, approved_for_dataset, assess_report, dataset_fingerprint
+from radar.evaluation.fields import score_fields
+from radar.evaluation.gold import FieldGold
 from radar.evaluation.partitions import build_manifest, load_manifest, save_manifest, with_partitions
-from radar.evaluation.report import compare
+from radar.evaluation.report import ReportInputs, build_report, compare
 from radar.evaluation.stats import partition_of
+from radar.pipeline.importers import import_gold
 from radar.store.db import Database
 
 SMALL_PROFILE = {"min_samples": 1, "required_fields": ("power_mw",)}
@@ -66,9 +72,13 @@ def test_missing_required_metric_is_a_regression() -> None:
 def candidate_report() -> dict[str, object]:
     return {
         "gold": {"fields_verified": 1, "labels_verified": 1},
-        "screening": {"recall_on_gold": 1.0},
+        "screening": {"recall_on_gold": 1.0, "test_independent_n": 10, "test_target_independent_n": 10},
         "completeness": {},
-        "fields_verified": {"dev": {}, "calibration": {}, "test": {"power_mw": {"n": 10, "accuracy": 1.0}}},
+        "fields_verified": {
+            "dev": {},
+            "calibration": {},
+            "test": {"power_mw": {"n": 10, "accuracy": 1.0, "independent_n": 10, "independent_accuracy": 1.0}},
+        },
         "fields_draft": {},
         "blind": {},
         "field_calibration": {"ece": None, "auto_accept_share": None},
@@ -128,14 +138,92 @@ def test_publication_profile_requires_critical_fields_and_actual_quality() -> No
     report = candidate_report()
     report["gold"] = {"labels_verified": 40, "fields_verified": 40}
     fields = {
-        name: {"n": 40, "accuracy": 1.0} for name in ("developer", "commune", "power_mw", "filed_on", "review_decision")
+        name: {"n": 40, "accuracy": 1.0, "independent_n": 40, "independent_accuracy": 1.0}
+        for name in ("developer", "commune", "power_mw", "filed_on", "review_decision")
     }
     report["fields_verified"] = {"test": fields}
+    report["screening"] = {"recall_on_gold": 1.0, "test_independent_n": 40, "test_target_independent_n": 40}
     assert assess_report(report)["status"] == "passed"
     fields["power_mw"]["accuracy"] = 0.01
+    fields["power_mw"]["independent_accuracy"] = 0.01
     assert "field_accuracy_below_threshold:power_mw" in assess_report(report)["failures"]
     fields["power_mw"]["accuracy"] = 1.0
+    fields["power_mw"]["independent_accuracy"] = 1.0
     del fields["developer"]
     assert "required_field_missing:developer" in assess_report(report)["failures"]
     report["screening"] = {"recall_on_gold": 0.01}
     assert "screening_recall_below_threshold" in assess_report(report)["failures"]
+
+
+def test_correlated_filings_do_not_supply_thirty_independent_observations() -> None:
+    filings = [
+        filing(str(i)).model_copy(
+            update={"strata": {"evaluation_partition": "test", "evaluation_group": "one-project"}}
+        )
+        for i in range(30)
+    ]
+    gold = {f.key: FieldGold(f.number, {"developer": None}, verified=True) for f in filings}
+    score = score_fields(filings, gold, verified=True)["developer"].as_dict()
+    assert score["n"] == 30 and score["independent_n"] == 1
+    report = candidate_report()
+    report["fields_verified"] = {"test": {"developer": score}}
+    gate = assess_report(report, required_fields=("developer",))
+    assert "independent_field_samples_missing" in gate["failures"]
+
+
+def test_ambiguous_legacy_numbers_cannot_cross_source_or_region() -> None:
+    a = filing("same")
+    b = a.model_copy(update={"key": "mrae:other:same", "region": "other"})
+    reference = FieldGold("same", {"developer": None}, verified=True)
+    with pytest.raises(ValueError, match="Ambiguous"):
+        score_fields([a, b], {"same": reference}, verified=True)
+    scores = score_fields([a, b], {a.key: reference, b.key: reference}, verified=True)
+    assert scores["developer"].as_dict()["n"] == 2
+
+
+def test_gold_classifier_requires_context_for_legacy_number_fallback() -> None:
+    a = filing("same")
+    label = GoldLabel("same", Category.BESS)
+    item = ClassificationInput(a.key, a.number, a.title, "")
+    assert GoldClassifier({"same": label}).classify(item) is None
+    assert GoldClassifier({"same": label}, known_keys=[a.key]).classify(item) is not None
+    ambiguous = GoldClassifier({"same": label}, known_keys=[a.key, "mrae:other:same"])
+    with pytest.raises(ValueError, match="Ambiguous"):
+        ambiguous.classify(item)
+    assert GoldClassifier({a.key: label}).classify(item) is not None
+
+
+def test_report_and_gate_count_distinct_projects_for_labels_and_fields() -> None:
+    records = [
+        filing(str(i)).model_copy(
+            update={"strata": {"evaluation_partition": "test", "evaluation_group": "one-project"}}
+        )
+        for i in range(30)
+    ]
+    report = build_report(
+        ReportInputs(
+            filings=records,
+            labels={f.key: GoldLabel(f.number, Category.BESS, verified=True) for f in records},
+            field_gold={f.key: FieldGold(f.number, {"developer": None}, verified=True) for f in records},
+        )
+    )
+    assert report["screening"]["test_targets"] == 30
+    assert report["screening"]["test_independent_n"] == 1
+    assert report["screening"]["test_target_independent_n"] == 1
+    assert report["fields_verified"]["test"]["developer"]["n"] == 30
+    assert report["fields_verified"]["test"]["developer"]["independent_n"] == 1
+    assert (
+        "verified_classification_samples_missing" in assess_report(report, required_fields=("developer",))["failures"]
+    )
+
+
+def test_gold_import_preserves_canonical_identity_and_review_status(tmp_path: Path) -> None:
+    source, target = tmp_path / "input.jsonl", tmp_path / "labels.jsonl"
+    key = "mrae:other:2025-8646"
+    source.write_text(
+        json.dumps({"number": "2025-8646", "category": "bess", "filing_key": key, "verified": True}) + "\n",
+        encoding="utf-8",
+    )
+    assert import_gold(source, target) == 1
+    labels = load_gold(target)
+    assert labels[key].verified and labels[key].filing_key == key

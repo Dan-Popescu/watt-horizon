@@ -43,7 +43,7 @@ def test_validation_snapshot_never_adopts_rebuilt_machine_values() -> None:
     approved = correction(observed, "validated", json.dumps(observed.machine.values))
     rebuilt = with_machine(observed.model_copy(update={"power": Power(mw_max=80.0, status=PowerStatus.KNOWN)}))
     _, references = reviewed_references([rebuilt], [approved])
-    assert references[rebuilt.number].expected["power_mw"] == 50.0
+    assert references[rebuilt.key].expected["power_mw"] == 50.0
     assert verified_values(rebuilt, latest([approved]))["power_mw"] == 50.0
 
 
@@ -53,7 +53,7 @@ def test_legacy_validation_without_snapshot_does_not_create_truth() -> None:
     explicit = correction(observed, "power_mw", 60.0)
     labels, references = reviewed_references([observed], [legacy, explicit])
     assert not labels
-    assert references[observed.number].expected == {"power_mw": 60.0}
+    assert references[observed.key].expected == {"power_mw": 60.0}
     assert verified_values(observed, latest([legacy])) == {}
 
 

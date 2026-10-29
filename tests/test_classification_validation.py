@@ -32,7 +32,7 @@ def test_gold_and_chain(tmp_path) -> None:  # type: ignore[no-untyped-def]
     path = tmp_path / "gold.jsonl"
     path.write_text('{"number": "2025-8646", "category": "bess", "note": "CS 116"}\n', encoding="utf-8")
     labels = load_gold(path)
-    chain = ChainClassifier(GoldClassifier(labels))
+    chain = ChainClassifier(GoldClassifier({"k": labels["2025-8646"]}))
     item = ClassificationInput(filing_key="k", number="2025-8646", title="t", text="x")
     result = chain.classify(item)
     assert result is not None and result.category is Category.BESS and result.method == "gold"

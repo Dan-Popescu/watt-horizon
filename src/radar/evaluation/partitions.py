@@ -108,6 +108,8 @@ def build_manifest(
     for key in records:
         grouped.setdefault(root(key), []).append(key)
     cutoff = test_after or (date.fromisoformat(previous.test_after) if previous and previous.test_after else None)
+    if previous and previous.test_after and test_after and previous.test_after != test_after.isoformat():
+        raise ValueError("The temporal evaluation cutoff is frozen; create a new campaign")
     result = PartitionManifest(
         assignments=dict(previous.assignments) if previous else {},
         groups=dict(previous.groups) if previous else {},
@@ -120,8 +122,15 @@ def build_manifest(
         group = min((previous.groups.get(key, key) if previous else key) for key in keys)
         if old:
             chosen = next(iter(old))
-        elif cutoff and any((first_seen or {}).get(key, date.min) > cutoff for key in keys):
-            chosen = "test"
+        elif cutoff:
+            if first_seen is None or any(key not in first_seen for key in keys):
+                raise ValueError("Temporal evaluation requires first_seen for every new group member")
+            earliest = min(first_seen[key] for key in keys)
+            chosen = (
+                "test"
+                if earliest > cutoff
+                else ("calibration" if any(partition_of(records[key]) == "calibration" for key in keys) else "dev")
+            )
         else:
             # Any known legacy test member keeps the entire connected group held out.
             parts = {partition_of(records[key]) for key in keys}

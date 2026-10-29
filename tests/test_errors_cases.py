@@ -21,7 +21,12 @@ AUBENTON = "dreal_case_by_case:hauts-de-france:010504"
 
 def services(blobs: BlobStore, lookups: StaticLookups) -> Services:
     gold = {"010504": GoldLabel("010504", Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)}
-    return Services(blobs=blobs, ocr=NullOcr(), classifier=GoldClassifier(gold), lookups=lookups)
+    return Services(
+        blobs=blobs,
+        ocr=NullOcr(),
+        classifier=GoldClassifier(gold, known_keys=[f"dreal_case_by_case:hauts-de-france:{number}" for number in gold]),
+        lookups=lookups,
+    )
 
 
 def test_error_analysis(loaded_db: Database, blobs: BlobStore, lookups: StaticLookups) -> None:
@@ -55,16 +60,16 @@ def test_cases_replay_and_lifecycle(
     filing = filing.model_copy(update={"strata": filing.strata | {"evaluation_partition": "dev"}})
     _, verified = reviewed_references(loaded_db.filings(), loaded_db.corrections())
     documents = loaded_db.documents(AUBENTON)
-    case = cases.make_case(filing, documents, read_documents(documents, svc), verified["010504"].expected)
+    case = cases.make_case(filing, documents, read_documents(documents, svc), verified[AUBENTON].expected)
     assert case.status["power_mw"] == "open" and case.status["substation"] == "fixed"  # rules say 100, human 120
     assert "department" not in case.expected  # not replayable by the rules alone
     assert cases.replay(case)["energy_mwh"] == 200.0
 
     cases.save(case, tmp_path)
-    assert cases.load(tmp_path / "010504.json") == case
+    assert cases.load(cases.case_path(case, tmp_path)) == case
     cases.save(replace(case, expected={**case.expected, "power_mw": 100.0}), tmp_path)  # "the rules were improved"
     result = cases.refresh(tmp_path)
-    assert result["newly_fixed"] == ["010504:power_mw"] and not result["regressed"]
-    broken = cases.load(tmp_path / "010504.json")
+    assert result["newly_fixed"] == [f"{AUBENTON}:power_mw"] and not result["regressed"]
+    broken = cases.load(cases.case_path(case, tmp_path))
     cases.save(replace(broken, expected={**broken.expected, "substation": "Autre poste"}), tmp_path)
-    assert cases.refresh(tmp_path)["regressed"] == ["010504:substation"]  # a fixed field failing again
+    assert cases.refresh(tmp_path)["regressed"] == [f"{AUBENTON}:substation"]  # a fixed field failing again

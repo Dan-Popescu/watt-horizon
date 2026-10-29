@@ -42,7 +42,7 @@ def test_unknown_template_is_flagged(db: Database, blobs: BlobStore, lookups: St
             url="https://example.org/f.pdf", title="Formulaire de demande d’examen au cas par cas, batteries",
             filename="000009-cerfa.pdf",
         )  # fmt: skip
-    gold = GoldClassifier({"000009": GoldLabel("000009", Category.BESS)})
+    gold = GoldClassifier({"000009": GoldLabel("000009", Category.BESS)}, known_keys=db.filing_keys_with_documents())
     known = Registry({"decision:text-0": {}})
     process_filings(db, Services(blobs=blobs, ocr=NullOcr(), classifier=gold, lookups=lookups, templates=known))
     filing = db.filing("dreal_case_by_case:hauts-de-france:000009")

@@ -8,6 +8,7 @@ from typing import Any
 from radar.domain.enums import TARGET_CATEGORIES, Category
 from radar.domain.fields import machine_values
 from radar.domain.models import Correction, Filing
+from radar.domain.references import canonical_reference_map
 from radar.evaluation.fields import compare
 from radar.evaluation.gold import FieldGold, actual_fields
 from radar.evaluation.stats import wilson
@@ -23,8 +24,10 @@ def _rate(k: int, n: int) -> dict[str, Any]:
 def by_stratum(filings: Iterable[Filing], gold: dict[str, FieldGold]) -> dict[str, dict[str, dict[str, Any]]]:
     """Field accuracy pooled over all verified fields, per value of each stratum (a weak layout shows up here)."""
     counts: dict[str, dict[str, list[int]]] = {key: {} for key in STRATA}
-    for f in filings:
-        reference = gold.get(f.number)
+    records = list(filings)
+    references = canonical_reference_map(records, gold)
+    for f in records:
+        reference = references.get(f.key)
         if reference is None or not reference.verified:
             continue
         actual = actual_fields(f)
@@ -40,11 +43,11 @@ def calibration(filings: Iterable[Filing], numbers_with_errors: set[str], review
     """Share of reviewed filings with at least one error, per MACHINE confidence. "high" should be near 0."""
     counts: dict[str, list[int]] = {}
     for f in filings:
-        if f.number not in reviewed:
+        if f.key not in reviewed and f.number not in reviewed:
             continue
         level = (f.machine.confidence if f.machine and f.machine.confidence else f.confidence.value) or "?"
         slot = counts.setdefault(level, [0, 0])
-        slot[0] += f.number in numbers_with_errors
+        slot[0] += f.key in numbers_with_errors or f.number in numbers_with_errors
         slot[1] += 1
     return {level: _rate(k, n) for level, (k, n) in sorted(counts.items())}
 
@@ -56,16 +59,16 @@ def reviewed_errors(filings: Iterable[Filing], corrections: Iterable[Correction]
     reviewed = set(labels) | set(references)
     wrong = set()
     for filing in records:
-        reference = references.get(filing.number)
+        reference = references.get(filing.key)
         actual = actual_fields(filing)
         if reference and any(
             compare(value, actual.get(name)) not in {"correct", "absent"} for name, value in reference.expected.items()
         ):
-            wrong.add(filing.number)
-        label = labels.get(filing.number)
+            wrong.add(filing.key)
+        label = labels.get(filing.key)
         category = filing.machine.classification.category if filing.machine else filing.classification.category
         if label and category != label.category:
-            wrong.add(filing.number)
+            wrong.add(filing.key)
     return wrong, reviewed
 
 
@@ -95,17 +98,17 @@ def recall_estimate(
     audited = [
         f
         for f in filings
-        if f.number in labels and any(g.code == "audit_sample" and g.detail == "random" for g in f.flags)
+        if f.key in labels and any(g.code == "audit_sample" and g.detail == "random" for g in f.flags)
     ]
     kept = [f for f in filings if not any(g.code == "audit_sample" for g in f.flags)]
-    kept_targets = sum(labels[f.number].category in TARGET_CATEGORIES for f in kept if f.number in labels)
-    found = sum(labels[f.number].category in TARGET_CATEGORIES for f in audited)
+    kept_targets = sum(labels[f.key].category in TARGET_CATEGORIES for f in kept if f.key in labels)
+    found = sum(labels[f.key].category in TARGET_CATEGORIES for f in audited)
     rejected = listing.get("rejected", 0)
     out: dict[str, Any] = {
         "rejected_items": rejected,
         "random_audited_reviewed": len(audited),
         "targets_found": found,
-        "kept_unverified": sum(f.number not in labels for f in kept),
+        "kept_unverified": sum(f.key not in labels for f in kept),
     }
     if listing.get("audit_policy_version") != 2:
         return {**out, "recall": None, "why": "legacy_random_population_not_representative"}

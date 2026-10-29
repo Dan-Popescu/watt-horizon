@@ -140,6 +140,8 @@ def import_gold(source: Path, target: Path) -> int:
                     "category": category.value,
                     "note": row.get("note", ""),
                     "annotator": row.get("annotateur") or row.get("annotator", ""),
+                    "verified": bool(row.get("verified", False)),
+                    "filing_key": row.get("filing_key"),
                 },
                 ensure_ascii=False,
             )

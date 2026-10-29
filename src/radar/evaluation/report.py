@@ -15,11 +15,12 @@ from radar.classification import bayes
 from radar.classification.gold import GoldLabel
 from radar.domain.enums import TARGET_CATEGORIES
 from radar.domain.models import Correction, Filing, Link, LinkDecision
+from radar.domain.references import canonical_reference_map
 from radar.evaluation import rigor
 from radar.evaluation.classification import ClassifierReport, screening_report
 from radar.evaluation.fields import score_fields
 from radar.evaluation.gold import FieldGold
-from radar.evaluation.partitions import PartitionManifest
+from radar.evaluation.partitions import PartitionManifest, with_partitions
 from radar.evaluation.stats import partition_of, split_of
 from radar.linking import review as link_review
 from radar.quality import agreement, model_check
@@ -85,7 +86,7 @@ def completeness(filings: list[Filing]) -> dict[str, float]:
 
 def _fields_by_split(filings: list[Filing], gold: dict[str, FieldGold]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
-    assigned = {f.number: partition_of(f) for f in filings}
+    assigned = {f.key: partition_of(f) for f in filings}
     for split in ("dev", "calibration", "test"):
         part = {n: g for n, g in gold.items() if assigned.get(n, split_of(n)) == split}
         scores = score_fields(filings, part, verified=True)
@@ -108,7 +109,7 @@ def _field_calibration(filings: list[Filing], corrections: list[Correction]) -> 
 
 
 def _draft_fields(filings: list[Filing], gold: dict[str, FieldGold]) -> dict[str, Any]:
-    visible = {f.number for f in filings if partition_of(f) == "dev"}
+    visible = {f.key for f in filings if partition_of(f) == "dev"}
     details = score_fields(filings, {n: g for n, g in gold.items() if n in visible}, verified=False)
     return {
         name: score.as_dict(with_errors=False) | {"errors": details[name].errors if name in details else []}
@@ -117,11 +118,17 @@ def _draft_fields(filings: list[Filing], gold: dict[str, FieldGold]) -> dict[str
 
 
 def build_report(inputs: ReportInputs) -> dict[str, Any]:
-    filings = inputs.filings
-    screening = screening_report(filings, {n: label for n, label in inputs.labels.items() if label.verified})
-    test_numbers = {f.number for f in filings if partition_of(f) == "test"}
+    filings = (
+        with_partitions(inputs.filings, inputs.partition_manifest) if inputs.partition_manifest else inputs.filings
+    )
+    labels = canonical_reference_map(filings, inputs.labels)
+    field_gold = canonical_reference_map(filings, inputs.field_gold)
+    known_keys = {f.key for f in filings}
+    dev_keys = {f.key for f in filings if partition_of(f) == "dev"}
+    screening = screening_report(filings, {n: label for n, label in labels.items() if label.verified})
+    test_numbers = {f.key for f in filings if partition_of(f) == "test"}
     independent_screening = screening_report(
-        filings, {n: label for n, label in inputs.labels.items() if label.verified and n in test_numbers}
+        filings, {n: label for n, label in labels.items() if label.verified and n in test_numbers}
     )
     errors = analyse(filings, inputs.corrections)
     with_errors, reviewed = rigor.reviewed_errors(filings, inputs.corrections)
@@ -133,25 +140,28 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
     report: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "gold": {
-            "labels": len(inputs.labels),
-            "labels_verified": sum(label.verified for label in inputs.labels.values()),
-            "fields": len(inputs.field_gold),
-            "fields_verified": sum(g.verified for g in inputs.field_gold.values()),
+            "labels": len(labels),
+            "labels_verified": sum(label.verified for label in labels.values()),
+            "fields": len(field_gold),
+            "fields_verified": sum(g.verified for g in field_gold.values()),
             "reviewed_filings": len(reviewed),
         },
         "screening": {
             "recall_on_gold": screening.recall,
             "test_recall": independent_screening.recall,
             "test_targets": independent_screening.gold_targets,
+            "test_independent_n": independent_screening.independent_n,
+            "test_target_independent_n": independent_screening.independent_target_n,
+            "test_group_recall": independent_screening.independent_recall,
             "precision": round(screening.precision, 3) if screening.precision is not None else None,
-            "missed": [n for n in screening.missed if any(f.number == n and partition_of(f) == "dev" for f in filings)],
+            "missed": [n for n in screening.missed if n in dev_keys],
             "by_method": screening.by_method,
             "recall_estimate": rigor.recall_estimate(filings, inputs.corrections, inputs.listing),
         },
         "completeness": completeness(filings),
-        "fields_verified": _fields_by_split(filings, inputs.field_gold),
-        "fields_draft": _draft_fields(filings, inputs.field_gold),
-        "by_stratum": rigor.by_stratum(filings, inputs.field_gold),
+        "fields_verified": _fields_by_split(filings, field_gold),
+        "fields_draft": _draft_fields(filings, field_gold),
+        "by_stratum": rigor.by_stratum(filings, field_gold),
         "calibration": rigor.calibration(filings, with_errors, reviewed),
         "blind": rigor.blind_accuracy(filings, inputs.corrections),
         "flags": {
@@ -161,9 +171,7 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
             "by_flag": errors.by_flag,
         },
         "second_opinion": bayes.summary(
-            bayes.train(
-                bayes.trusted_examples(filings, {n: g.category for n, g in inputs.labels.items() if g.verified})
-            )
+            bayes.train(bayes.trusted_examples(filings, {n: g.category for n, g in labels.items() if g.verified}))
         ),
         "linking": asdict(link_review.report(filings, inputs.links, inputs.link_decisions)),
         "agreement": asdict(
@@ -178,7 +186,16 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
         "privacy": {"leaks": inputs.privacy_leaks},
         "ocr": inputs.ocr or {"skipped": "no OCR engine available here (Tesseract runs in the Docker image)"},
         "caveats": [TEST_SPLIT_CAVEAT],
-        "validation": {"reconstruction_failures": inputs.failures},
+        "validation": {
+            "reconstruction_failures": inputs.failures,
+            "missing_reference_filings_count": len(
+                (
+                    {key for key, label in labels.items() if label.verified}
+                    | {key for key, reference in field_gold.items() if reference.verified}
+                )
+                - known_keys
+            ),
+        },
         "partitions": {
             "fingerprint": inputs.partition_manifest.fingerprint if inputs.partition_manifest else None,
             "version": inputs.partition_manifest.version if inputs.partition_manifest else None,
@@ -197,12 +214,10 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
             json.dumps(
                 {
                     "labels": sorted(
-                        (n, label.category.value)
-                        for n, label in inputs.labels.items()
-                        if label.verified and n in test_numbers
+                        (n, label.category.value) for n, label in labels.items() if label.verified and n in test_numbers
                     ),
                     "fields": sorted(
-                        (n, g.expected) for n, g in inputs.field_gold.items() if g.verified and n in test_numbers
+                        (n, g.expected) for n, g in field_gold.items() if g.verified and n in test_numbers
                     ),
                 },
                 sort_keys=True,
@@ -211,14 +226,22 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
         ).hexdigest(),
     }
     if inputs.classifier is not None:
-        report["classifier"] = {**asdict(inputs.classifier), "accuracy": inputs.classifier.accuracy}
+        report["classifier"] = {
+            **asdict(inputs.classifier),
+            "accuracy": inputs.classifier.accuracy,
+            "test_independent_accuracy": inputs.classifier.test_independent_accuracy,
+        }
     return report
 
 
 def metrics(report: dict[str, Any]) -> dict[str, float]:
     """Flat numeric metrics used for the comparison with the previous run."""
     out: dict[str, float] = {}
-    if (recall := report["screening"].get("test_recall", report["screening"]["recall_on_gold"])) is not None:
+    if (
+        recall := report["screening"].get(
+            "test_group_recall", report["screening"].get("test_recall", report["screening"]["recall_on_gold"])
+        )
+    ) is not None:
         out["screening.recall"] = recall
     out.update({f"completeness.{k}": v for k, v in report["completeness"].items()})
     for split, scores in report["fields_verified"].items():
@@ -260,7 +283,8 @@ def metrics(report: dict[str, Any]) -> dict[str, float]:
     # Agreement between reviewers is not compared: it measures the references, not the code.
     if (loo := report["second_opinion"].get("loo_accuracy")) is not None:
         out["second_opinion.loo_accuracy"] = loo
-    if (accuracy := report.get("classifier", {}).get("accuracy")) is not None:
+    classifier = report.get("classifier", {})
+    if (accuracy := classifier.get("test_independent_accuracy", classifier.get("accuracy"))) is not None:
         out["classifier.accuracy"] = accuracy
     return out
 

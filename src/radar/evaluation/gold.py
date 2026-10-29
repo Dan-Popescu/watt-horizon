@@ -14,6 +14,7 @@ from pathlib import Path
 
 from radar.domain.fields import Value, machine_values
 from radar.domain.models import Filing
+from radar.domain.references import canonical_reference_map
 
 FIELDS: tuple[str, ...] = (
     "developer",
@@ -36,6 +37,7 @@ class FieldGold:
     annotator: str = ""
     verified: bool = False
     note: str = ""
+    filing_key: str | None = None
 
 
 def actual_fields(filing: Filing) -> dict[str, Value]:
@@ -54,7 +56,11 @@ def load_field_gold(path: Path) -> dict[str, FieldGold]:
             unknown = set(row["expected"]) - set(FIELDS)
             if unknown:
                 raise ValueError(f"{path}: unknown fields {sorted(unknown)} for {row['number']}")
-            items[row["number"]] = FieldGold(**row)
+            reference = FieldGold(**row)
+            identity = reference.filing_key or reference.number
+            if identity in items and items[identity] != reference:
+                raise ValueError(f"Conflicting field references for {identity!r}")
+            items[identity] = reference
     return items
 
 
@@ -69,8 +75,10 @@ def write_field_gold(path: Path, items: Iterable[FieldGold]) -> None:
 def draft(filings: Iterable[Filing], existing: dict[str, FieldGold], version: str) -> list[FieldGold]:
     """Unverified drafts from current extractions, for filings without a reference yet. A human must confirm
     each value (review page) before it counts as verified: a draft only detects regressions."""
+    records = list(filings)
+    resolved = canonical_reference_map(records, existing)
     return [
-        FieldGold(number=f.number, expected=actual_fields(f), annotator=f"draft:extraction-{version}")
-        for f in filings
-        if f.number not in existing
+        FieldGold(number=f.number, expected=actual_fields(f), annotator=f"draft:extraction-{version}", filing_key=f.key)
+        for f in records
+        if f.key not in resolved
     ]

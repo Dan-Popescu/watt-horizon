@@ -96,7 +96,9 @@ def test_pipeline_asks_llm_only_for_what_rules_missed(db: Database, blobs: BlobS
     services = Services(
         blobs=blobs,
         ocr=NullOcr(),
-        classifier=GoldClassifier({"000002": GoldLabel("000002", Category.BESS)}),
+        classifier=GoldClassifier(
+            {"000002": GoldLabel("000002", Category.BESS)}, known_keys=db.filing_keys_with_documents()
+        ),
         lookups=lookups,
         extractor=LlmExtractor("model-x", client=client),  # type: ignore[arg-type]
     )

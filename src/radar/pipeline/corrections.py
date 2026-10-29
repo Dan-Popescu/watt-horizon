@@ -234,10 +234,17 @@ def reviewed_references(
         reviewer = max(latest_by_field.values(), key=lambda c: c.created_at).author
         values = approved_values(latest_by_field)
         if "category" in values:
-            labels[filing.number] = GoldLabel(
-                filing.number, Category(str(values["category"])), "", f"review:{reviewer}", verified=True
+            labels[filing.key] = GoldLabel(
+                filing.number,
+                Category(str(values["category"])),
+                "",
+                f"review:{reviewer}",
+                verified=True,
+                filing_key=filing.key,
             )
         expected = {k: v for k, v in values.items() if k != "category"}
         if expected:
-            fields[filing.number] = FieldGold(filing.number, expected, f"review:{reviewer}", verified=True)
+            fields[filing.key] = FieldGold(
+                filing.number, expected, f"review:{reviewer}", verified=True, filing_key=filing.key
+            )
     return labels, fields

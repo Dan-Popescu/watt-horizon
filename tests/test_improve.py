@@ -1,6 +1,7 @@
 """From a bad example to a fix: locate the verified value, induce validated rule candidates, write a ticket,
 and keep the located passage as evidence of the human correction."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -53,6 +54,14 @@ def test_ticket_is_agent_ready(tmp_path: Path) -> None:
         assert needle in text
     [path] = write([ticket], tmp_path)
     assert path.name == "substation.md" and path.read_text(encoding="utf-8") == text
+
+
+def test_canonical_case_identity_survives_suggestions_and_tickets() -> None:
+    canonical = [replace(c, filing_key=f"dreal:north:{c.number}") for c in CASES]
+    [best, *_] = suggest(canonical, "substation")
+    assert best.fixes == ["dreal:north:1", "dreal:north:2"]
+    [ticket] = tickets(canonical)
+    assert [f.number for f in ticket.failures] == ["dreal:north:1", "dreal:north:2"]
 
 
 def test_human_value_gets_the_document_passage_as_evidence(loaded_db: Database) -> None:

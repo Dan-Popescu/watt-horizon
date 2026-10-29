@@ -104,9 +104,25 @@ def candidate_report() -> dict[str, Any]:
     """A synthetic independently evaluated candidate, unrelated to production data."""
     return {
         "gold": {"labels_verified": 1},
-        "screening": {"recall_on_gold": 1.0},
+        "screening": {
+            "recall_on_gold": 1.0,
+            "test_recall": 1.0,
+            "test_independent_n": 10,
+            "test_target_independent_n": 10,
+            "test_group_recall": 1.0,
+        },
         "completeness": {},
-        "fields_verified": {"dev": {}, "test": {"power_mw": {"n": 10, "accuracy": 1.0}}},
+        "fields_verified": {
+            "dev": {},
+            "test": {
+                "power_mw": {
+                    "n": 10,
+                    "accuracy": 1.0,
+                    "independent_n": 10,
+                    "independent_accuracy": 1.0,
+                }
+            },
+        },
         "fields_draft": {},
         "blind": {},
         "field_calibration": {"ece": None, "auto_accept_share": None},

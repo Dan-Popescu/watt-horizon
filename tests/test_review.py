@@ -29,7 +29,12 @@ T0 = datetime(2026, 10, 12, 9, tzinfo=UTC)
 @pytest.fixture
 def services(blobs: BlobStore, lookups: StaticLookups) -> Services:
     gold = {"010504": GoldLabel("010504", Category.BESS), "2025-4009": GoldLabel("2025-4009", Category.DATACENTER)}
-    return Services(blobs=blobs, ocr=NullOcr(), classifier=GoldClassifier(gold), lookups=lookups)
+    return Services(
+        blobs=blobs,
+        ocr=NullOcr(),
+        classifier=GoldClassifier(gold, known_keys=[f"dreal_case_by_case:hauts-de-france:{number}" for number in gold]),
+        lookups=lookups,
+    )
 
 
 def correction(field: str, value: str | float | None, minutes: int = 0, cid: int = 1) -> Correction:
@@ -91,8 +96,8 @@ def test_review_loop_end_to_end(loaded_db: Database, services: Services) -> None
     assert filing is not None and filing.power.mw_max == 120.0 and filing.reviewed_at is not None
     assert "Paul" not in filing.evidence["power"].quote  # notes are GDPR-scrubbed too
     labels, fields = reviewed_references(loaded_db.filings(), loaded_db.corrections())
-    assert labels["010504"].verified and labels["010504"].category is Category.BESS
-    assert fields["010504"].expected["power_mw"] == 120.0 and fields["010504"].verified
+    assert labels[AUBENTON_KEY].verified and labels[AUBENTON_KEY].category is Category.BESS
+    assert fields[AUBENTON_KEY].expected["power_mw"] == 120.0 and fields[AUBENTON_KEY].verified
     score = score_fields(loaded_db.filings(), fields, verified=True)["power_mw"]
     assert score.wrong == 1  # the machine said 100: evaluation measures the machine, not the correction
     [item] = [i for i in review_items(loaded_db, {}) if i.key == AUBENTON_KEY]

@@ -14,6 +14,7 @@ from radar.classification.rules import screen
 from radar.domain.enums import TARGET_CATEGORIES, Category, DocumentRole
 from radar.domain.models import Classification, Filing
 from radar.domain.privacy import PersonScrubber
+from radar.domain.references import canonical_reference_map
 from radar.evaluation.stats import partition_of
 from radar.pipeline.filings import Services, classification_text, decision_first, read_documents
 from radar.store.db import Database
@@ -35,6 +36,20 @@ class ScreeningReport:
     kept_gold: int = 0  # gold-labelled filings kept by layer 1 (precision denominator)
     missed: list[str] = field(default_factory=list)
     by_method: dict[str, int] = field(default_factory=dict)  # how every filing got its category
+    groups: set[str] = field(default_factory=set)
+    target_groups: dict[str, bool] = field(default_factory=dict)
+
+    @property
+    def independent_n(self) -> int:
+        return len(self.groups)
+
+    @property
+    def independent_target_n(self) -> int:
+        return len(self.target_groups)
+
+    @property
+    def independent_recall(self) -> float | None:
+        return sum(self.target_groups.values()) / len(self.target_groups) if self.target_groups else None
 
     @property
     def recall(self) -> float | None:
@@ -48,17 +63,22 @@ class ScreeningReport:
 
 def screening_report(filings: list[Filing], gold: dict[str, GoldLabel]) -> ScreeningReport:
     report = ScreeningReport(by_method=dict(Counter(machine_classification(f).method for f in filings)))
-    by_number = {f.number: f for f in filings}
-    for number, label in gold.items():
-        filing = by_number.get(number)
+    by_key = {f.key: f for f in filings}
+    for key, label in canonical_reference_map(filings, gold).items():
+        filing = by_key.get(key)
         kept = filing is not None and not dropped_by_screen(filing)
         report.kept_gold += kept
+        group = filing.strata.get("evaluation_group", filing.key) if filing else None
+        if group:
+            report.groups.add(group)
         if label.category in TARGET_CATEGORIES:
             report.gold_targets += 1
+            if group:
+                report.target_groups[group] = report.target_groups.get(group, False) or kept
             if kept:
                 report.screened_in += 1
             else:
-                report.missed.append(number)
+                report.missed.append(key)
     return report
 
 
@@ -71,10 +91,16 @@ class ClassifierReport:
     quotes_verified: int = 0
     confusion: dict[str, dict[str, int]] = field(default_factory=dict)  # gold -> predicted -> count
     errors: list[str] = field(default_factory=list)
+    test_independent_n: int = 0
+    test_independent_correct: int = 0
 
     @property
     def accuracy(self) -> float | None:
         return self.correct / self.evaluated if self.evaluated else None
+
+    @property
+    def test_independent_accuracy(self) -> float | None:
+        return self.test_independent_correct / self.test_independent_n if self.test_independent_n else None
 
 
 def evaluate_classifier(
@@ -83,8 +109,11 @@ def evaluate_classifier(
     if "gold" in classifier.name.split("+"):
         raise ValueError("A reference classifier cannot be evaluated against its own gold labels")
     report = ClassifierReport(classifier=classifier.name)
-    for filing in db.filings():
-        label = gold.get(filing.number)
+    filings = db.filings()
+    references = canonical_reference_map(filings, gold)
+    test_groups: dict[str, bool] = {}
+    for filing in filings:
+        label = references.get(filing.key)
         if label is None or not label.verified or dropped_by_screen(filing):
             continue
         documents = db.documents(filing.key)
@@ -112,4 +141,9 @@ def evaluate_classifier(
         elif partition_of(filing) == "dev":
             report.errors.append(f"{filing.number}: attendu {label.category.value}, prédit {predicted}")
         report.quotes_verified += bool(result and result.quote_verified)
+        if partition_of(filing) == "test":
+            group = filing.strata.get("evaluation_group", filing.key)
+            test_groups[group] = test_groups.get(group, True) and bool(result and result.category is label.category)
+    report.test_independent_n = len(test_groups)
+    report.test_independent_correct = sum(test_groups.values())
     return report

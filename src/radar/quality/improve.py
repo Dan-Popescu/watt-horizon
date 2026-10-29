@@ -64,7 +64,7 @@ def tickets(cases: list[Case], rules: Sequence[LearnedRule] = ()) -> list[Ticket
             else:
                 context = "value not found verbatim in the stored text (OCR? other wording? check the PDF)"
             out.setdefault(name, Ticket(name)).failures.append(
-                Failure(case.number, case.expected[name], got[name], context)
+                Failure(case.identity, case.expected[name], got[name], context)
             )
     for ticket in out.values():
         ticket.suggestions = suggest(cases, ticket.field, rules=rules)
