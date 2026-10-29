@@ -3,10 +3,12 @@
 from pathlib import Path
 
 import pytest
+from tools import compare_reading
 from tools.compare_reading import associations, compare, load_documents
 
 from radar.quality.corpus import CorpusDocument, CorpusFiling
 from radar.reading.pdf import PdfContent
+from radar.store.cache import KeyValueCache
 
 
 def test_comparison_counts_lost_number_unit_associations_not_just_numbers() -> None:
@@ -36,3 +38,33 @@ def test_corpus_cannot_read_a_document_outside_its_pdf_directory(tmp_path: Path)
     filing = CorpusFiling("constructed", "unclassified", [CorpusDocument("../private.pdf", "other", "", "")])
     with pytest.raises(ValueError, match="escapes"):
         load_documents(tmp_path, [filing])
+
+
+@pytest.mark.parametrize("durations,expected", [((2, 6), 4), ((2, 10, 6), 6), ((9,), 9)])
+def test_pass_reports_actual_median_for_even_and_odd_document_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, durations: tuple[int, ...], expected: int
+) -> None:
+    documents = {f"{index}.pdf": str(index).encode() for index in range(len(durations))}
+    filing = CorpusFiling(
+        "constructed-timing",
+        "unclassified",
+        [CorpusDocument(name, "other", "Constructed timing fixture", "") for name in documents],
+    )
+    content = PdfContent(1, {}, ("Réseau public.",), ())
+    monkeypatch.setattr(compare_reading.PdfReader, "read", lambda *_: content)
+    ticks = [0]
+    elapsed = 0
+    for duration in durations:
+        ticks.extend((elapsed, elapsed + duration))
+        elapsed += duration
+    ticks.append(elapsed)
+    clock = iter(ticks)
+    monkeypatch.setattr(compare_reading, "perf_counter", lambda: next(clock))
+    cache = KeyValueCache(tmp_path / "cache.sqlite")
+    try:
+        result = compare_reading.measure_pass([filing], documents, cache, tables=False, secondary=False, use_ocr=False)
+    finally:
+        cache.close()
+    assert result["failures"] == {}
+    assert result["documents"] == len(durations)
+    assert result["document_elapsed_median_s"] == expected

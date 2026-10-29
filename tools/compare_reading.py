@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
+from statistics import median
 from time import perf_counter
 from typing import Any
 
@@ -145,7 +146,7 @@ def measure_pass(
         "documents": len(readings),
         "filings_extracted": len(values),
         "coverage": dict(counters),
-        "document_elapsed_median_s": round(sorted(durations)[len(durations) // 2], 6) if durations else None,
+        "document_elapsed_median_s": round(median(durations), 6) if durations else None,
         "document_elapsed_max_s": round(max(durations), 6) if durations else None,
         "readings": readings,
         "failures": failures,
