@@ -33,6 +33,7 @@ from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
 from radar.extraction.llm import ExtractionInput, FieldExtractor
 from radar.extraction.substation import is_voltage_only
+from radar.extraction.supporting import extract_supporting
 from radar.pipeline.corrections import apply_corrections, with_machine
 from radar.quality.arbiter import Arbiter, comparable
 from radar.quality.confidence import Calibration, raw_scores
@@ -203,6 +204,17 @@ def extract_facts(
         if facts.mwh is None and isinstance(hit.value, float):
             facts.mwh = hit.value
             facts.evidence.setdefault("power", hit.evidence)
+    # Supplementary documents fill only a wholly missing quantity statement. Keep the
+    # original form/decision precedence and its shared MW/MWh evidence intact.
+    if facts.mw_max is None and facts.mw_min is None and facts.mwh is None:
+        supplemental = extract_supporting(
+            (doc_id, content)
+            for (doc_id, role, _), content in zip(documents, contents, strict=True)
+            if role in {DocumentRole.OPINION, DocumentRole.OTHER}
+        )
+        facts.fill_from(supplemental)
+        if supplemental.mw_max is not None:
+            candidates["power_mw"] = [Candidate(source="supporting:page", value=supplemental.mw_max)]
     titles = [title for _, _, title in documents]
     facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(titles)
     return Extraction(form, decision, facts, candidates, support)
@@ -417,7 +429,9 @@ def _llm_fallback(
     text = classification_text(facts.description, decision_first(documents, texts))
     found = extractor.extract(ExtractionInput(key, title, text, missing))
     for name, (value, quote) in found.items():
-        doc = next((d.id for d, t in zip(documents, texts, strict=True) if contains_quote(t, quote)), documents[0].id)
+        doc = next((d.id for d, t in zip(documents, texts, strict=True) if contains_quote(t, quote)), None)
+        if doc is None:
+            continue  # A concatenation crossing document boundaries is not a source citation.
         evidence = Evidence(document_id=doc, locator=extractor.name, quote=quote)
         typed = date.fromisoformat(str(value)) if name == "filed_on" else value
         if name in {"power_mw", "power_mw_min", "energy_mwh"}:

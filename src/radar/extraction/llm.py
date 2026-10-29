@@ -20,7 +20,7 @@ from radar.store.cache import KeyValueCache, cache_key
 if TYPE_CHECKING:
     import anthropic
 
-PROMPT_VERSION = "2026-10-29"  # bump on any change to SYSTEM_PROMPT, FIELD_HINTS or OUTPUT_SCHEMA
+PROMPT_VERSION = "2026-10-29b"  # includes passage-selection policy changes
 MAX_INPUT_CHARS = 20_000
 FIELD_HINTS: dict[str, str] = {
     "developer": "société qui porte le projet (dénomination), jamais une personne physique",
@@ -159,8 +159,8 @@ CLUES: dict[str, str] = {
     "developer": r"soci[ée]t[ée]|d[ée]nomination|porteur|p[ée]titionnaire|ma[îi]tre d.ouvrage",
     "siret": r"siret|siren",
     "commune": r"commune|lieu-dit|localit[ée]",
-    "power_mw": r"\bMW|puissance",
-    "power_mw_min": r"\bMW|puissance",
+    "power_mw": r"\b[kMG]?W(?:ac|dc|c)?\b|puissance",
+    "power_mw_min": r"\b[kMG]?W(?:ac|dc|c)?\b|puissance",
     "energy_mwh": r"MWh|capacit[ée]",
     "substation": r"poste|raccord",
     "filed_on": r"d[ée]pos[ée]|complet le|re[çc]u le",
@@ -168,20 +168,85 @@ CLUES: dict[str, str] = {
 WINDOW = 400
 
 
-def select_passages(text: str, fields: tuple[str, ...], budget: int = MAX_INPUT_CHARS // 2) -> str:
-    """Merged windows of ±WINDOW chars around every clue of the requested fields, in document order."""
-    spans: list[tuple[int, int]] = []
-    for name in fields:
-        for m in re.finditer(CLUES.get(name, r"$^"), text, re.IGNORECASE):
-            spans.append((max(0, m.start() - WINDOW), min(len(text), m.end() + WINDOW)))
-    merged: list[list[int]] = []
-    for a, b in sorted(spans):
-        if merged and a <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], b)
+@dataclass(frozen=True)
+class PassageSelection:
+    text: str
+    ranges: tuple[tuple[int, int], ...]
+    source_chars: int
+    matched_clues: int
+    covered_clues: int
+
+    @property
+    def omitted_chars(self) -> int:
+        return self.source_chars - sum(end - start for start, end in self.ranges)
+
+
+def _merge_ranges(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
-            merged.append([a, b])
-    out = " […] ".join(text[a:b] for a, b in merged)
-    return out[:budget] if out else text[:budget]
+            merged.append((start, end))
+    return merged
+
+
+def plan_passages(text: str, fields: tuple[str, ...], budget: int = MAX_INPUT_CHARS // 2) -> PassageSelection:
+    """Fair budget across fields and document positions, with explicit omitted-input accounting.
+
+    Keep bounded first/last clue candidates in 32 position buckets per pattern. This
+    scans the entire text without retaining one allocation per repeated keyword.
+    Selection is a retrieval heuristic, never a claim that omitted text is irrelevant.
+    """
+    if budget <= 0:
+        raise ValueError("Passage budget must be positive")
+    patterns = list(dict.fromkeys(CLUES[name] for name in fields if name in CLUES))
+    queues: list[list[tuple[int, int]]] = []
+    matched = 0
+    for pattern in patterns:
+        buckets: dict[int, list[tuple[int, int]]] = {}
+        for hit in re.finditer(pattern, text, re.IGNORECASE):
+            matched += 1
+            bucket = min(31, hit.start() * 32 // max(len(text), 1))
+            point = (hit.start(), hit.end())
+            if bucket not in buckets:
+                buckets[bucket] = [point, point]
+            else:
+                buckets[bucket][1] = point
+        points = sorted({point for pair in buckets.values() for point in pair})
+        # Alternate the head and tail, then the middle positions: late annexes get a
+        # chance before repetitive early clues consume the budget.
+        ordered: list[tuple[int, int]] = []
+        while points:
+            ordered.append(points.pop(0))
+            if points:
+                ordered.append(points.pop())
+        queues.append(ordered)
+    spans: list[tuple[int, int]] = []
+    width = min(WINDOW, max(20, budget // max(1, len(patterns)) // 4 - 10))
+    for index in range(max((len(queue) for queue in queues), default=0)):
+        for queue in queues:
+            if index >= len(queue):
+                continue
+            start, end = queue[index]
+            candidate = (max(0, start - width), min(len(text), end + width))
+            proposed = _merge_ranges([*spans, candidate])
+            size = sum(b - a for a, b in proposed) + max(0, len(proposed) - 1) * len(" […] ")
+            if size <= budget:
+                spans = proposed
+    if not spans:
+        spans = [(0, min(len(text), budget))] if text else []
+    selected = " […] ".join(text[start:end] for start, end in spans)
+    covered = sum(
+        any(start <= hit.start() and hit.end() <= end for start, end in spans)
+        for pattern in patterns
+        for hit in re.finditer(pattern, text, re.IGNORECASE)
+    )
+    return PassageSelection(selected, tuple(spans), len(text), matched, covered)
+
+
+def select_passages(text: str, fields: tuple[str, ...], budget: int = MAX_INPUT_CHARS // 2) -> str:
+    return plan_passages(text, fields, budget).text
 
 
 class LlmExtractor:
