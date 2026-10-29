@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from radar.quality import cases
+from radar.quality.documentary_metrics import build_quality_loop
 from radar.quality.errors import analyse
 from radar.quality.flags import FLAGS
 from radar.quality.triage import triage
@@ -61,4 +62,5 @@ def quality_overview(db: Database, cases_dir: Path, today: date | None = None) -
             "flag_recall": errors.flag_recall,
         },
         "cases": {"open": case_status.get("open", 0), "fixed": case_status.get("fixed", 0)},
+        "documentary": build_quality_loop(db, jobs_path=db.path.parent / "llm-jobs.sqlite"),
     }

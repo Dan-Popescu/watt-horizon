@@ -1394,9 +1394,29 @@ async function loadQuality() {
     q.trend.length ? acc_("Évolution", `${q.trend.length} évaluations`, `<table class="t"><tr><th>Date</th>${Object.keys(q.trend[0]).filter((k) => k !== "at").map((k) => `<th>${esc(k)}</th>`).join("")}</tr>${q.trend.map((t) =>
       `<tr><td>${esc((t.at || "").slice(5, 16).replace("T", " "))}</td>${Object.keys(t).filter((k) => k !== "at").map((k) => `<td>${esc(t[k] ?? "—")}</td>`).join("")}</tr>`).join("")}</table>`) : "",
   ] : [];
+  const documentary = q.documentary;
+  if (documentary) {
+    const ds = Object.entries(documentary.sources || {});
+    const unfinished = (source) => ["partial", "blocked", "failed", "running", "unknown"].reduce((sum, state) => sum + (source.dossiers?.[state] || 0), 0);
+    const pendingAudits = ds.reduce((sum, [, source]) => sum + (source.random_audit?.not_human_reviewed_global || 0), 0);
+    const partial = ds.reduce((sum, [, source]) => sum + unfinished(source), 0);
+    if (pendingAudits) todo.push([`${esc(pendingAudits)} audit(s) aléatoire(s) sélectionné(s) attendent une catégorie vérifiée humainement.`, '<button class="btn" data-go="review">Relire</button>']);
+    if (partial) todo.push([`${esc(partial)} parcours de dossier restent incomplets, bloqués ou en erreur.`, "<code>radar coverage</code>"]);
+    if (!documentary.quality_measured) todo.push(["La qualité documentaire n'est pas encore mesurée sur des champs vérifiés. Préparer une campagne de relecture représentative.", "<code>radar campaign prepare --help</code>"]);
+    const cost = documentary.model_cost || {}, work = documentary.reading || {}, feedback = documentary.human_feedback || {};
+    const money = (value) => value == null ? "—" : `${num(value)} USD`;
+    const table = `<table class="t"><tr><th>Source</th><th>Listes : retenus / vus</th><th>Audits aléatoires relus / sélectionnés</th><th>Dossiers incomplets</th><th>Périmètres achevés périmés</th></tr>${ds.map(([source, item]) =>
+      `<tr><td>${esc(source)}</td><td>${item.listings ? `${esc(item.listings.kept)} / ${esc(item.listings.seen)}` : "—"}</td><td>${item.random_audit ? `${esc(item.random_audit.reviewed)} / ${esc(item.random_audit.selected_global)}` : "—"}</td><td>${esc(unfinished(item))}</td><td>${item.coverage ? esc(item.coverage.stale_complete_scopes) : "—"}</td></tr>`).join("") || '<tr><td colspan="5" class="sub">Aucune observation de collecte disponible.</td></tr>'}</table>`;
+    details.push(acc_("Couverture documentaire et relectures", documentary.quality_measured ? "observations vérifiées disponibles" : "qualité non mesurée", table +
+      `<div class="sub" style="margin-top:8px">Les comptes des listes et audits portent sur toutes les régions. Une relecture priorisée ou incomplète ne donne pas un rappel global.</div>
+      <table class="t"><tr><td>Documents avec pages encore illisibles</td><td>${esc(work.unread_document_ids ?? "—")}</td></tr>
+      <tr><td>Usage IA au tarif enregistré</td><td>${money(cost.priced_usage_usd)}${cost.status === "partial" ? ' <span class="sub">usage ou tarifs incomplets</span>' : ""}</td></tr>
+      <tr><td>Temps de relecture déclaré</td><td>${feedback.declared_review_seconds == null ? "—" : `${esc(Math.round(feedback.declared_review_seconds / 60))} min`}</td></tr></table>
+      <div class="sub">Le coût indiqué exclut l'hébergement et ne remplace pas la facture du fournisseur. Les compteurs de lecture décrivent les dernières observations des dossiers, avec réutilisation possible de PDF partagés.</div>`));
+  }
   $("quality").innerHTML = `<div class="stats">${stats.join("")}</div>
     <div class="eyebrow">À faire</div>
-    <ul class="todo">${todo.map(([text, action]) => `<li><span>${text}</span>${action}</li>`).join("") || '<li><span>Rien d\'urgent. Tout est sous contrôle.</span></li>'}</ul>
+    <ul class="todo">${todo.map(([text, action]) => `<li><span>${text}</span>${action}</li>`).join("") || '<li><span>Aucune action priorisée par les observations disponibles.</span></li>'}</ul>
     ${details.length ? `<div class="eyebrow">Détails</div>${details.join("")}` : ""}`;
   $("quality").querySelectorAll("[data-go]").forEach((b) => b.onclick = () => show(b.dataset.go));
 }
