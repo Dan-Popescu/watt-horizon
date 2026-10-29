@@ -12,7 +12,7 @@ from urllib.parse import unquote, urldefrag, urlparse
 
 from radar.domain.enums import DocumentRole, SourceKind
 from radar.domain.ids import filing_key, normalize_filing_number, sha256
-from radar.net.http import PoliteHttp, SiteBlockedError
+from radar.net.http import PoliteHttp, RequestBudgetError, SiteBlockedError
 from radar.pipeline.ingest import ingest_pdf
 from radar.sources.html import links
 from radar.store.blobs import BlobStore
@@ -104,6 +104,7 @@ def scan_dossier(
     ingest: Callable[[bytes, str, str], str],
     *,
     initial_page: str | None = None,
+    initial_data: bytes | None = None,
     limits: DossierLimits = DEFAULT_DOSSIER_LIMITS,
     min_interval_s: float | None = None,
 ) -> DossierReport:
@@ -113,6 +114,8 @@ def scan_dossier(
     ``complete`` means enumerated recognized same-origin attachments, never every possible external annex.
     """
     root_url = canonical_url(root_url)
+    if initial_page is not None and initial_data is not None:
+        raise ValueError("Supply one initial dossier representation, never both text and bytes")
     queue = deque([(root_url, root_url, "", 0)])
     seen: set[str] = set()
     terminal: dict[str, tuple[str, str | None]] = {}
@@ -145,7 +148,9 @@ def scan_dossier(
             seen.add(url)
             edge(parent, url, "fetching")
             data = (
-                initial_page.encode()
+                initial_data
+                if url == root_url and initial_data is not None
+                else initial_page.encode()
                 if url == root_url and initial_page is not None
                 else http.get_bytes(url, min_interval_s=min_interval_s, same_origin_redirects=True)
             )
@@ -205,6 +210,12 @@ def scan_dossier(
         if not report.documents:
             report.errors.append(f"no recognized documents: {root_url}")
         report.state = "partial" if limited or report.errors else "complete"
+    except RequestBudgetError as exc:
+        report.state = "partial"
+        report.errors.append(f"{type(exc).__name__}: {exc}")
+        edge(parent, url, "budget")
+        persist()
+        raise
     except SiteBlockedError as exc:
         report.state = "blocked"
         report.errors.append(f"{type(exc).__name__}: {exc}")
@@ -249,6 +260,7 @@ def collect_dossier(
     title: str,
     audit: str | None = None,
     initial_page: str | None = None,
+    initial_data: bytes | None = None,
     root_role: DocumentRole | None = None,
     limits: DossierLimits = DEFAULT_DOSSIER_LIMITS,
     min_interval_s: float | None = None,
@@ -278,6 +290,7 @@ def collect_dossier(
         root_url,
         ingest,
         initial_page=initial_page,
+        initial_data=initial_data,
         limits=limits,
         min_interval_s=min_interval_s,
     )

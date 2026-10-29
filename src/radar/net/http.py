@@ -10,7 +10,9 @@ import ssl
 import time
 import urllib.parse
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -31,6 +33,17 @@ class ResponseLimitError(ValueError):
 
 class ResponseDeadlineError(httpx.TimeoutException):
     """The budget for the whole operation, including redirects and retries, is exhausted."""
+
+
+class RequestBudgetError(ValueError):
+    """No physical HTTP attempt may be started within the current scoped budget."""
+
+
+@dataclass
+class RequestBudget:
+    limit: int
+    requests: int = 0
+    on_request: Callable[[], None] | None = None
 
 
 class _RetryResponseError(Exception):
@@ -82,6 +95,36 @@ class PoliteHttp:
         self._clock, self._sleep = clock, sleep
         self._last_request: dict[str, float] = {}
         self.blocked_hosts: set[str] = set()
+        self._request_budgets: list[RequestBudget] = []
+
+    @contextmanager
+    def request_budget(
+        self, max_requests: int, *, on_request: Callable[[], None] | None = None
+    ) -> Iterator[RequestBudget]:
+        """Nestable admission on physical attempts, including redirects and retries.
+
+        Observers may durably record an attempt before sending it. A process crash
+        after admission leaves a conservative request count, never a free retry.
+        This serialized client does not support concurrent use across threads.
+        """
+        if max_requests < 0:
+            raise ValueError("HTTP request budget cannot be negative")
+        budget = RequestBudget(max_requests, on_request=on_request)
+        self._request_budgets.append(budget)
+        try:
+            yield budget
+        finally:
+            if self._request_budgets[-1] is not budget:
+                raise RuntimeError("HTTP request budgets must exit in nesting order")
+            self._request_budgets.pop()
+
+    def _admit_request(self) -> None:
+        if any(budget.requests >= budget.limit for budget in self._request_budgets):
+            raise RequestBudgetError("Physical HTTP request budget exhausted")
+        for budget in self._request_budgets:
+            if budget.on_request:
+                budget.on_request()
+            budget.requests += 1
 
     def close(self) -> None:
         self._client.close()
@@ -190,6 +233,7 @@ class PoliteHttp:
                 raise SiteBlockedError(host, "already blocked in this run")
             self._pace(host, interval, deadline, current)
             timeout = min(self.timeout_s, self._remaining(deadline, current))
+            self._admit_request()
             try:
                 with self._client.stream("GET", current, timeout=timeout) as response:
                     self._remaining(deadline, current)

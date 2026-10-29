@@ -17,7 +17,9 @@ from radar.domain.models import Signal
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.sources.base import CollectReport
 from radar.sources.html import strip_tags
+from radar.sources.leads import remember_press_lead
 from radar.store.db import Database
+from radar.store.discovery import DiscoveryStore
 
 FEEDS: dict[str, str] = {
     "pv magazine France": "https://www.pv-magazine.fr/feed/",
@@ -96,7 +98,14 @@ def to_signal(item: FeedItem, source_name: str, communes: Iterable[str]) -> Sign
     )
 
 
-def collect_press(http: PoliteHttp, db: Database, communes: Iterable[str]) -> CollectReport:
+def collect_press(
+    http: PoliteHttp,
+    db: Database,
+    communes: Iterable[str],
+    *,
+    lead_store: DiscoveryStore | None = None,
+    region: str = "hauts-de-france",
+) -> CollectReport:
     report, names = CollectReport(), list(communes)
     for source_name, url in FEEDS.items():
         try:
@@ -110,4 +119,9 @@ def collect_press(http: PoliteHttp, db: Database, communes: Iterable[str]) -> Co
                 with db.transaction():
                     db.upsert_signal(signal)
                 report.signals += 1
+            elif lead_store is not None and TOPIC.search(f"{item.title} {item.summary}"):
+                with db.transaction():
+                    remember_press_lead(
+                        lead_store, region=region, url=item.link, title=item.title, summary=item.summary, feed_url=url
+                    )
     return report
