@@ -73,6 +73,15 @@ def candidate_report() -> dict[str, object]:
     return {
         "gold": {"fields_verified": 1, "labels_verified": 1},
         "screening": {"recall_on_gold": 1.0, "test_independent_n": 10, "test_target_independent_n": 10},
+        "stored_classification": {
+            "evaluated": 10,
+            "correct": 10,
+            "no_answer": 0,
+            "independent_n": 10,
+            "independent_correct": 10,
+            "independent_accuracy": 1.0,
+            "non_independent": 0,
+        },
         "completeness": {},
         "fields_verified": {
             "dev": {},
@@ -143,6 +152,7 @@ def test_publication_profile_requires_critical_fields_and_actual_quality() -> No
     }
     report["fields_verified"] = {"test": fields}
     report["screening"] = {"recall_on_gold": 1.0, "test_independent_n": 40, "test_target_independent_n": 40}
+    report["stored_classification"] = {"independent_n": 40, "independent_accuracy": 1.0, "non_independent": 0}
     assert assess_report(report)["status"] == "passed"
     fields["power_mw"]["accuracy"] = 0.01
     fields["power_mw"]["independent_accuracy"] = 0.01

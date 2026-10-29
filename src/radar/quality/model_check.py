@@ -19,6 +19,7 @@ from radar.domain.models import Correction, Filing
 from radar.evaluation.fields import compare
 from radar.evaluation.stats import partition_of, wilson
 from radar.pipeline.corrections import approved_values, latest
+from radar.quality.arbiter import observation_groups
 from radar.store.cache import KeyValueCache, cache_key
 
 if TYPE_CHECKING:
@@ -183,7 +184,7 @@ class Reliability:
         return asdict(self) | {
             "agree_interval": [round(x, 3) for x in interval] if interval else None,
             "proven": self.proven,
-            "rule": f">= {MIN_SEEN} reviewed « agree » and lower bound >= {RELIABLE}",
+            "rule": f">= {MIN_SEEN} independent reviewed groups per field and lower bound >= {RELIABLE}",
         }
 
 
@@ -192,7 +193,8 @@ def reliability(filings: list[Filing], corrections: list[Correction]) -> Reliabi
     by_key: dict[str, list[Correction]] = {}
     for c in corrections:
         by_key.setdefault(c.filing_key, []).append(c)
-    out = Reliability()
+    groups = observation_groups(filings)
+    outcomes: dict[tuple[str, str, str], bool] = {}
     for f in filings:
         if partition_of(f) != "calibration":
             continue
@@ -205,16 +207,21 @@ def reliability(filings: list[Filing], corrections: list[Correction]) -> Reliabi
                 continue  # never looked at by a human
             machine = f.machine.values.get(name)
             kept = compare(expected[name], machine) in {"correct", "absent"}
-            agree_seen, agree_right, disagree_seen, disagree_right = out.by_field.get(name, (0, 0, 0, 0))
-            if verdict == "agree":
-                out.agree_seen += 1
-                out.agree_right += kept
-                agree_seen += 1
-                agree_right += kept
-            elif verdict == "disagree":
-                out.disagree_seen += 1
-                out.disagree_right += not kept
-                disagree_seen += 1
-                disagree_right += not kept
-            out.by_field[name] = (agree_seen, agree_right, disagree_seen, disagree_right)
+            if verdict in {"agree", "disagree"}:
+                key = (groups[f.key], name, verdict)
+                outcomes[key] = outcomes.get(key, True) and (kept if verdict == "agree" else not kept)
+    out = Reliability()
+    for (_, name, verdict), right in outcomes.items():
+        agree_seen, agree_right, disagree_seen, disagree_right = out.by_field.get(name, (0, 0, 0, 0))
+        if verdict == "agree":
+            out.agree_seen += 1
+            out.agree_right += right
+            agree_seen += 1
+            agree_right += right
+        else:
+            out.disagree_seen += 1
+            out.disagree_right += right
+            disagree_seen += 1
+            disagree_right += right
+        out.by_field[name] = (agree_seen, agree_right, disagree_seen, disagree_right)
     return out

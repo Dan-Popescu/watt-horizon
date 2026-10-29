@@ -96,12 +96,46 @@ def verified_values(filing: Filing, decisions: dict[str, Correction]) -> dict[st
     return approved_values(decisions)
 
 
+def observation_groups(filings: Iterable[Filing]) -> dict[str, str]:
+    """Independent observation identities: known projects and shared PDFs stay together.
+
+    A caller without a saved manifest still cannot inflate its sample by assigning
+    different group names to copies of the same source document.
+    """
+    records = list(filings)
+    parents = {f.key: f.key for f in records}
+
+    def root(key: str) -> str:
+        while parents[key] != key:
+            parents[key] = parents[parents[key]]
+            key = parents[key]
+        return key
+
+    def join(first: str, second: str) -> None:
+        a, b = root(first), root(second)
+        if a != b:
+            low, high = sorted((a, b))
+            parents[high] = low
+
+    groups: dict[str, str] = {}
+    documents: dict[str, str] = {}
+    for filing in records:
+        if group := filing.strata.get("evaluation_group"):
+            join(groups.setdefault(group, filing.key), filing.key)
+        for document_id in set(filing.document_ids):
+            if document_id:
+                join(documents.setdefault(document_id, filing.key), filing.key)
+    return {key: root(key) for key in parents}
+
+
 def learn(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Arbiter:
-    """Reliability of each source from human-verified values (validated filings and corrected fields)."""
+    """Reliability per independent project/source decision, conservative on conflicts."""
+    filings = list(filings)
+    groups = observation_groups(filings)
     by_key: dict[str, list[Correction]] = {}
     for c in corrections:
         by_key.setdefault(c.filing_key, []).append(c)
-    stats: dict[tuple[str, str], tuple[int, int]] = {}
+    outcomes: dict[tuple[str, str, str], bool] = {}
     for f in filings:
         if partition_of(f) != "dev":
             continue
@@ -114,8 +148,12 @@ def learn(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Arbit
                 continue
             for candidate in options:
                 ok = compare(expected[name], candidate.value) in {"correct", "absent"}
-                correct, seen = stats.get((name, candidate.source), (0, 0))
-                stats[(name, candidate.source)] = (correct + ok, seen + 1)
+                key = (groups[f.key], name, candidate.source)
+                outcomes[key] = outcomes.get(key, True) and ok
+    stats: dict[tuple[str, str], tuple[int, int]] = {}
+    for (_, name, source), correct in outcomes.items():
+        successes, seen = stats.get((name, source), (0, 0))
+        stats[(name, source)] = (successes + correct, seen + 1)
     return Arbiter(stats)
 
 

@@ -17,7 +17,7 @@ from radar.domain.models import Check, Correction, Filing, Flag
 from radar.evaluation.fields import compare
 from radar.evaluation.stats import partition_of, wilson
 from radar.pipeline.corrections import latest
-from radar.quality.arbiter import verified_values
+from radar.quality.arbiter import observation_groups, verified_values
 
 SCORED = ("developer", "siret", "commune", "power_mw", "energy_mwh", "substation", "filed_on", "review_decision")
 EDGES = (0.0, 0.5, 0.7, 0.8, 0.9, 0.95, 1.0001)
@@ -98,6 +98,7 @@ class Calibration:
                 "present": present,
                 "bin": f"{lo:.2f}-{min(hi, 1.0):.2f}",
                 "seen": n,
+                "sample_unit": "independent_group",
                 "accuracy": round(k / n, 3) if n else None,
                 "ci95": wilson(k, n),
             }
@@ -123,7 +124,7 @@ class Calibration:
 
         Unknown decision groups stay raw rather than borrowing another field's evidence.
         """
-        held_out = [p for p in pairs if p.partition == "test"]
+        held_out = _independent_observations([p for p in pairs if p.partition == "test"])
         if not held_out:
             return None
         total = 0.0
@@ -146,6 +147,34 @@ class FieldObservation:
     raw: float
     correct: bool
     partition: str
+    group: str
+    observation_count: int = 1
+
+
+def _independent_observations(pairs: list[FieldObservation]) -> list[FieldObservation]:
+    """One trial per group, decision type and score bin; every constituent must be right."""
+    grouped: dict[tuple[str, str, str, bool, int], list[FieldObservation]] = {}
+    for item in pairs:
+        bin_index = next((i for i, (lo, hi) in enumerate(pairwise(EDGES)) if lo <= item.raw < hi), None)
+        if bin_index is None:
+            raise ValueError("Field confidence must be a finite score between zero and one")
+        key = (item.partition, item.group, item.field_name, item.present, bin_index)
+        grouped.setdefault(key, []).append(item)
+    independent = []
+    for (partition, group, name, present, _), items in sorted(grouped.items()):
+        count = sum(p.observation_count for p in items)
+        independent.append(
+            FieldObservation(
+                name,
+                present,
+                sum(p.raw * p.observation_count for p in items) / count,
+                all(p.correct for p in items),
+                partition,
+                group,
+                count,
+            )
+        )
+    return independent
 
 
 def observations(filings: Iterable[Filing], corrections: Iterable[Correction]) -> list[tuple[float, bool]]:
@@ -156,7 +185,9 @@ def observations(filings: Iterable[Filing], corrections: Iterable[Correction]) -
 def field_observations(
     filings: Iterable[Filing], corrections: Iterable[Correction], *, partition: str | None = None
 ) -> list[FieldObservation]:
-    """Human-verified machine decisions, retaining field, presence and independent population."""
+    """Independent human-verified decisions, retaining field, presence and raw sample count."""
+    filings = list(filings)
+    groups = observation_groups(filings)
     by_key: dict[str, list[Correction]] = {}
     for c in corrections:
         by_key.setdefault(c.filing_key, []).append(c)
@@ -179,9 +210,10 @@ def field_observations(
                         raw,
                         compare(expected[name], machine.get(name)) in {"correct", "absent"},
                         assigned,
+                        groups[f.key],
                     )
                 )
-    return pairs
+    return _independent_observations(pairs)
 
 
 def calibrate(filings: Iterable[Filing], corrections: Iterable[Correction]) -> Calibration:

@@ -19,6 +19,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +74,7 @@ from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
 from radar.store.db import Database
 from radar.store.llm_jobs import BudgetLimits
+from radar.store.readiness import candidate_readiness
 from radar.store.snapshots import backup_dataset, restore_dataset
 from radar.validation.lookups import JsonCache, ReferenceCommunes
 from radar.wiring import batch_client, make_classifier, make_http, make_services
@@ -291,6 +293,9 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
             if llm is None:
                 return {"error": "No model classifier: set RADAR_LLM_MODEL (and ANTHROPIC_API_KEY), not offline."}
             classifier = evaluate_classifier(llm, db, services, labels)
+        readiness = candidate_readiness(s.data_dir)
+        failures = dict(db.last_runs().get("process", {}).get("stats", {}).get("failed", {}))
+        failures.update({f"readiness:{reason}": reason for reason in readiness["reasons"]})
         eval_services = make_services(s, None, llm="cached")
         report = build_report(
             ReportInputs(
@@ -308,7 +313,7 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
                 links=db.links(),
                 link_decisions=db.current_link_decisions(),
                 partition_manifest=manifest,
-                failures=db.last_runs().get("process", {}).get("stats", {}).get("failed", {}),
+                failures=failures,
             )
         )
         report["robustness"] = robustness.check_robustness(corpus_documents(db, eval_services)).summary()
@@ -443,7 +448,14 @@ def cmd_web(args: argparse.Namespace, s: Settings) -> Any:
         mcp_host=args.public_host or args.host,
         review=review_mode,
         quality=(lambda db: quality_overview(db, s.cases_dir)) if args.review else None,
-        document=BlobStore(s.blobs_dir).get if args.review else None,
+        document=partial(BlobStore(s.blobs_dir).get, max_bytes=s.pdf_max_bytes) if args.review else None,
+        evidence_limits={
+            "max_bytes": s.pdf_max_bytes,
+            "max_pages": s.pdf_max_pages,
+            "max_pixels": min(s.ocr_max_pixels, 8_000_000),
+            "max_source_image_pixels": s.ocr_max_pixels,
+            "document_timeout_s": min(s.pdf_timeout_s, 15),
+        },
     )
     print(f"http://{args.host}:{args.port}  (MCP: /mcp)", file=sys.stderr)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

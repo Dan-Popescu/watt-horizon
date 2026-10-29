@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from radar.store.locking import ProcessBusyError as ProcessBusyError
 from radar.store.locking import process_lock as process_lock
+from radar.store.readiness import candidate_readiness
 from radar.store.snapshots import SnapshotError, seal_snapshot, snapshot_database, sync_directory, verify_snapshot
 
 
@@ -70,6 +71,9 @@ def publish_dataset(db_path: Path, publications_dir: Path, *, baseline_path: Pat
     target = versions / version
     try:
         with process_lock(db_path.parent):
+            readiness = candidate_readiness(db_path.parent)
+            if not readiness["ready"]:
+                raise SnapshotError("Candidate processing is incomplete: " + ", ".join(readiness["reasons"]))
             snapshot_database(db_path, staging / "radar.sqlite")
             fingerprint = dataset_fingerprint(staging / "radar.sqlite")
             approval = approved_for_dataset(baseline_path, fingerprint)

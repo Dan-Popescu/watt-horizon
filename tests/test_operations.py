@@ -104,6 +104,7 @@ def candidate_report() -> dict[str, Any]:
     """A synthetic independently evaluated candidate, unrelated to production data."""
     return {
         "gold": {"labels_verified": 1},
+        "stored_classification": {"independent_n": 10, "independent_accuracy": 1.0, "non_independent": 0},
         "screening": {
             "recall_on_gold": 1.0,
             "test_recall": 1.0,

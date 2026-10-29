@@ -70,6 +70,6 @@ def execute_processing(
         db.finish_run(run_id, {"failed": {"run": f"{type(exc).__name__}: {exc}"}, "status": "failed"})
         raise
     result["duration_s"] = round(time.monotonic() - started, 4)
-    result["cpu_s"] = round(time.process_time() - cpu_started, 4)
+    result["cpu_parent_s"] = round(time.process_time() - cpu_started, 4)
     db.finish_run(run_id, result)
     return result

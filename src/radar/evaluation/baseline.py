@@ -130,11 +130,19 @@ def assess_report(
         failures.append("independent_screening_targets_missing")
     if "classifier" in report and report["classifier"].get("test_independent_n", 0) < min_samples:
         failures.append("independent_classifier_samples_missing")
+    stored = report.get("stored_classification", {})
+    if stored.get("independent_n", 0) < min_samples:
+        failures.append("independent_stored_classification_samples_missing")
+    if stored.get("non_independent", 0):
+        failures.append("non_independent_stored_classification")
+    accuracy = stored.get("independent_accuracy")
+    if not isinstance(accuracy, int | float) or not math.isfinite(accuracy) or accuracy < min_accuracy:
+        failures.append("stored_classification_accuracy_below_threshold")
     if not report.get("partitions", {}).get("fingerprint"):
         failures.append("partition_manifest_missing")
     if not report.get("reference_fingerprint"):
         failures.append("reference_identity_missing")
-    for metric in ("screening.recall", "privacy.leaks", "integrity.quote_not_found"):
+    for metric in ("screening.recall", "stored_classification.accuracy", "privacy.leaks", "integrity.quote_not_found"):
         if metric not in current or not math.isfinite(current[metric]):
             failures.append(f"required_metric_unavailable:{metric}")
     if current.get("privacy.leaks", 1) != 0:

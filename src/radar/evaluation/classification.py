@@ -7,6 +7,7 @@
 
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import Any
 
 from radar.classification.base import ClassificationInput, Classifier
 from radar.classification.gold import GoldLabel
@@ -80,6 +81,54 @@ def screening_report(filings: list[Filing], gold: dict[str, GoldLabel]) -> Scree
             else:
                 report.missed.append(key)
     return report
+
+
+def stored_classification_report(filings: list[Filing], gold: dict[str, GoldLabel]) -> dict[str, Any]:
+    """Measure test labels against frozen machine outputs, never human overrides or gold fallback.
+
+    A group with any reference-derived prediction is excluded from independent accuracy and explicitly
+    flagged. Unknown/abstaining machine outputs remain failures rather than disappearing from the sample.
+    """
+    references = canonical_reference_map(filings, gold)
+    groups: dict[str, tuple[bool, bool]] = {}  # independent, every classification correct
+    evaluated = correct = no_answer = non_independent = 0
+    methods: Counter[str] = Counter()
+    confusion: dict[str, dict[str, int]] = {}
+    for filing in filings:
+        label = references.get(filing.key)
+        if partition_of(filing) != "test" or label is None or not label.verified:
+            continue
+        evaluated += 1
+        classification = filing.machine.classification if filing.machine is not None else None
+        method = classification.method if classification else "missing_machine_output"
+        kinds = {part.split(":", 1)[0].strip().lower() for part in method.split("+")}
+        independent = classification is not None and not kinds & {"gold", "human", "reference", "reviewed"}
+        missing = classification is None or classification.category in {Category.UNCLASSIFIED, Category.NEEDS_REVIEW}
+        no_answer += missing
+        match = bool(classification and classification.category is label.category and independent and not missing)
+        correct += match
+        if not independent:
+            non_independent += 1
+            methods[method] += 1
+        predicted = classification.category.value if classification and not missing else "no_answer"
+        row = confusion.setdefault(label.category.value, {})
+        row[predicted] = row.get(predicted, 0) + 1
+        group = filing.strata.get("evaluation_group", filing.key)
+        was_independent, was_correct = groups.get(group, (True, True))
+        groups[group] = was_independent and independent, was_correct and match
+    eligible = [right for independent, right in groups.values() if independent]
+    return {
+        "evaluated": evaluated,
+        "correct": correct,
+        "no_answer": no_answer,
+        "independent_n": len(eligible),
+        "independent_correct": sum(eligible),
+        "independent_accuracy": sum(eligible) / len(eligible) if eligible else None,
+        "non_independent": non_independent,
+        "non_independent_groups": sum(not independent for independent, _ in groups.values()),
+        "non_independent_methods": dict(methods),
+        "confusion": confusion,
+    }
 
 
 @dataclass

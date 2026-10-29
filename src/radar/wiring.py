@@ -8,6 +8,8 @@ from radar.classification.base import ChainClassifier, Classifier
 from radar.classification.gold import GoldClassifier, load_gold
 from radar.classification.terms import ScreenTerms
 from radar.config import Settings
+from radar.domain.references import canonical_reference_map
+from radar.evaluation.stats import partition_of
 from radar.extraction.llm import FieldExtractor
 from radar.net.http import PoliteHttp
 from radar.pipeline.filings import Services
@@ -121,6 +123,11 @@ def make_classifier(
         if settings.db_path.is_file():
             with Database(settings.db_path, read_only=True) as db:
                 known_keys = db.filing_keys_with_documents()
+                filings = db.filings()
+            dev_keys = {filing.key for filing in filings if partition_of(filing) == "dev"}
+            gold = {key: label for key, label in canonical_reference_map(filings, gold).items() if key in dev_keys}
+        else:
+            gold = {}
         classifiers.append(GoldClassifier(gold, known_keys=known_keys))
     return ChainClassifier(*classifiers) if classifiers else None
 

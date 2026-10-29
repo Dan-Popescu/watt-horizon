@@ -17,7 +17,7 @@ from radar.domain.enums import TARGET_CATEGORIES
 from radar.domain.models import Correction, Filing, Link, LinkDecision
 from radar.domain.references import canonical_reference_map
 from radar.evaluation import rigor
-from radar.evaluation.classification import ClassifierReport, screening_report
+from radar.evaluation.classification import ClassifierReport, screening_report, stored_classification_report
 from radar.evaluation.fields import score_fields
 from radar.evaluation.gold import FieldGold
 from radar.evaluation.partitions import PartitionManifest, with_partitions
@@ -159,6 +159,7 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
             "recall_estimate": rigor.recall_estimate(filings, inputs.corrections, inputs.listing),
         },
         "completeness": completeness(filings),
+        "stored_classification": stored_classification_report(filings, labels),
         "fields_verified": _fields_by_split(filings, field_gold),
         "fields_draft": _draft_fields(filings, field_gold),
         "by_stratum": rigor.by_stratum(filings, field_gold),
@@ -237,6 +238,8 @@ def build_report(inputs: ReportInputs) -> dict[str, Any]:
 def metrics(report: dict[str, Any]) -> dict[str, float]:
     """Flat numeric metrics used for the comparison with the previous run."""
     out: dict[str, float] = {}
+    if (accuracy := report.get("stored_classification", {}).get("independent_accuracy")) is not None:
+        out["stored_classification.accuracy"] = accuracy
     if (
         recall := report["screening"].get(
             "test_group_recall", report["screening"].get("test_recall", report["screening"]["recall_on_gold"])

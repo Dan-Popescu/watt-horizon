@@ -153,7 +153,7 @@ def test_pre_review_input_and_reliability() -> None:
     at = datetime(2026, 10, 13, tzinfo=UTC)
     filings = [
         _filing(0.5, {"developer": "agree"}).model_copy(
-            update={"key": f"k:{i}", "strata": {"evaluation_partition": "calibration"}}
+            update={"key": f"k:{i}", "document_ids": (f"d:{i}",), "strata": {"evaluation_partition": "calibration"}}
         )
         for i in range(40)
     ]

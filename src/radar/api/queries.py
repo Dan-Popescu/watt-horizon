@@ -76,7 +76,9 @@ def iter_project_summaries(
         for project in rows:
             yield _summary(project)
     finally:
-        rows.close()
+        close = getattr(rows, "close", None)
+        if close is not None:
+            close()
 
 
 def search_projects(
