@@ -1,5 +1,6 @@
 """Constructed official-site layouts test qualification; no live verification is claimed."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,13 +8,17 @@ import httpx
 import pytest
 
 from radar.net.http import PoliteHttp, SiteBlockedError
+from radar.sources import catalog as source_catalog
 from radar.sources.catalog import (
+    CatalogLimitError,
     RegionConfig,
+    SourceCandidate,
     adopt,
     annual_links,
     discover,
     import_regions,
     load_catalog,
+    save_catalog,
     status,
 )
 from radar.sources.coverage import inventory
@@ -232,3 +237,105 @@ def test_adoption_block_is_recorded_without_activating_the_candidate(tmp_path: P
     checked = load_catalog(path).candidates[0]
     assert checked.state == "blocked" and "429" in (checked.qualification_error or "")
     assert "2024-r7.html" not in get_region("hauts-de-france", path).dreal_listings
+
+
+def candidate(url: str, label: str = "Known annual source") -> SourceCandidate:
+    identity = hashlib.sha256(f"dreal:hauts-de-france:2024:{url}".encode()).hexdigest()[:24]
+    return SourceCandidate(
+        id=identity,
+        region="hauts-de-france",
+        source="dreal",
+        year=2024,
+        url=url,
+        parent_url=BASE + "parent-" + "b" * 300 + ".html",
+        link_text=label,
+        observed_at="2026-10-29T08:00:00+00:00",
+        parent_sha256="a" * 64,
+    )
+
+
+def test_oversized_catalog_write_preserves_previous_readable_file(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.json"
+    original = load_catalog(path)
+    save_catalog(path, original)
+    before = path.read_bytes()
+    oversized = original.model_copy(
+        update={
+            "candidates": tuple(candidate(BASE + "2024-" + "a" * 300 + f"-{i}.html", "é" * 500) for i in range(4000))
+        }
+    )
+    with pytest.raises(CatalogLimitError, match="configuration budget"):
+        save_catalog(path, oversized)
+    assert path.read_bytes() == before
+    assert load_catalog(path) == original
+
+
+def test_catalog_budget_matches_exact_serialized_utf8_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "catalog.json"
+    catalog = load_catalog(path).model_copy(update={"last_discovery": {"note": "évaluation " * 30}})
+    exact = json.dumps(catalog.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, indent=2).encode() + b"\n"
+    monkeypatch.setattr(source_catalog, "MAX_CATALOG_BYTES", len(exact))
+    save_catalog(path, catalog)
+    assert path.read_bytes() == exact
+    monkeypatch.setattr(source_catalog, "MAX_CATALOG_BYTES", len(exact) - 1)
+    with pytest.raises(CatalogLimitError):
+        save_catalog(path, catalog)
+    assert path.read_bytes() == exact
+
+
+def test_discovery_retains_previous_candidates_and_fitting_new_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "catalog.json"
+    previous = load_catalog(path).model_copy(update={"candidates": (candidate(BASE + "existing-2024.html"),)})
+    save_catalog(path, previous)
+    monkeypatch.setattr(source_catalog, "MAX_CATALOG_BYTES", 4000)
+    page = "".join(f'<a href="2024-r{100 + i}.html">Examen au cas par cas 2024 ' + "x" * 300 + "</a>" for i in range(5))
+    with PoliteHttp(
+        "t", default_interval_s=0, transport=httpx.MockTransport(lambda request: httpx.Response(200, text=page))
+    ) as http:
+        report = discover(http, path, "hauts-de-france", "dreal", max_pages=1)
+    saved = load_catalog(path)
+    assert saved.regions == previous.regions and saved.candidates[0] == previous.candidates[0]
+    assert 0 < report["new_candidates"] < 5
+    assert len(saved.candidates) == report["new_candidates"] + 1
+    assert report["candidate_overflow"] == 5 - report["new_candidates"]
+    assert report["status"] == "partial" and report["catalog_budget_reached"] and report["catalog_saved"]
+    assert path.stat().st_size <= 4000 and saved.last_discovery == report
+
+
+def test_discovery_preserves_original_when_even_diagnostics_do_not_fit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "catalog.json"
+    save_catalog(path, load_catalog(path))
+    before = path.read_bytes()
+    monkeypatch.setattr(source_catalog, "MAX_CATALOG_BYTES", len(before))
+    with PoliteHttp(
+        "t",
+        default_interval_s=0,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text='<a href="2024-r7.html">2024</a>')),
+    ) as http:
+        report = discover(http, path, "hauts-de-france", "dreal", max_pages=1)
+    assert report["status"] == "partial" and not report["catalog_saved"]
+    assert report["new_candidates"] == 0 and report["candidate_overflow"] == 1
+    assert path.read_bytes() == before and load_catalog(path).candidates == ()
+
+
+def test_oversized_import_is_rejected_before_parsing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path, incoming = tmp_path / "catalog.json", tmp_path / "too-big.json"
+    save_catalog(path, load_catalog(path))
+    before = path.read_bytes()
+    monkeypatch.setattr(source_catalog, "MAX_CATALOG_BYTES", 2000)
+    incoming.write_bytes(b" " * 2001)
+    with pytest.raises(CatalogLimitError, match="configuration budget"):
+        import_regions(path, incoming)
+    assert path.read_bytes() == before

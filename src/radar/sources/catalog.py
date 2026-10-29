@@ -5,6 +5,7 @@ This catalog configures connectors; it never certifies coverage or human accurac
 """
 
 import hashlib
+import json
 import re
 from collections import deque
 from dataclasses import asdict
@@ -29,6 +30,28 @@ _YEAR = re.compile(r"(?<![a-z0-9])(?:19|20)\d{2}(?!\d)")
 _DREAL = re.compile(r"cas par cas|examen au cas")
 _MRAE = re.compile(r"\bavis\b.{0,120}\bprojets?\b|\bprojets?\b.{0,120}\bavis\b")
 _SECTION = re.compile(r"cas.par.cas|avis.{0,120}projet|projet.{0,120}avis", re.I)
+MAX_CATALOG_BYTES = 5 * 1024 * 1024
+
+
+class CatalogLimitError(ValueError):
+    """A configuration cannot be stored and subsequently reloaded within its byte budget."""
+
+
+def _read_configuration(path: Path) -> bytes:
+    with path.open("rb") as stream:
+        data = stream.read(MAX_CATALOG_BYTES + 1)
+    if len(data) > MAX_CATALOG_BYTES:
+        raise CatalogLimitError("Source catalog exceeds its 5 MiB configuration budget")
+    return data
+
+
+def _check_serialized_size(payload: object) -> None:
+    # Match atomic_json's exact formatting, including UTF-8 and its trailing newline.
+    size = 1
+    for part in json.JSONEncoder(ensure_ascii=False, sort_keys=True, indent=2).iterencode(payload):
+        size += len(part.encode("utf-8"))
+        if size > MAX_CATALOG_BYTES:
+            raise CatalogLimitError("Source catalog exceeds its 5 MiB configuration budget")
 
 
 def official_url(url: str) -> str:
@@ -159,14 +182,14 @@ class SourceCatalog(StrictModel):
 
 def load_catalog(path: Path) -> SourceCatalog:
     if path.exists():
-        if path.stat().st_size > 5 * 1024 * 1024:
-            raise ValueError("Source catalog exceeds its 5 MiB configuration budget")
-        return SourceCatalog.model_validate_json(path.read_text(encoding="utf-8"))
+        return SourceCatalog.model_validate_json(_read_configuration(path))
     return SourceCatalog(regions=tuple(RegionConfig(**asdict(region)) for region in REGIONS.values()))
 
 
 def save_catalog(path: Path, catalog: SourceCatalog) -> None:
-    atomic_json(path, catalog.model_dump(mode="json"))
+    payload = catalog.model_dump(mode="json")
+    _check_serialized_size(payload)
+    atomic_json(path, payload)
 
 
 def configured_regions(path: Path) -> dict[str, Region]:
@@ -186,7 +209,7 @@ def status(path: Path) -> dict[str, Any]:
 
 def import_regions(path: Path, configuration: Path) -> dict[str, Any]:
     """Add explicitly supplied regional seeds without replacing existing qualified mappings."""
-    incoming = SourceCatalog.model_validate_json(configuration.read_text(encoding="utf-8"))
+    incoming = SourceCatalog.model_validate_json(_read_configuration(configuration))
     if incoming.candidates or incoming.last_discovery:
         raise ValueError("Region import accepts configuration only, never fabricated observation or adoption records")
     catalog = load_catalog(path)
@@ -258,6 +281,51 @@ def annual_links(
             continue
         found[url] = year, url, label
     return list(found.values())
+
+
+def _save_discovery(
+    path: Path, catalog: SourceCatalog, candidates: dict[str, SourceCandidate], report: dict[str, Any]
+) -> None:
+    """Keep prior mappings and observations; persist the largest new prefix fitting the byte budget."""
+    existing = {candidate.id for candidate in catalog.candidates}
+    additions = tuple(candidate for key, candidate in candidates.items() if key not in existing)
+    report["catalog_saved"] = True
+    report["catalog_budget_reached"] = False
+    report["candidate_overflow"] = 0
+
+    def updated(count: int) -> SourceCatalog:
+        report["new_candidates"] = count
+        report["candidate_overflow"] = len(additions) - count
+        return catalog.model_copy(
+            update={
+                "candidates": catalog.candidates + additions[:count],
+                "last_discovery": report,
+            }
+        )
+
+    try:
+        save_catalog(path, updated(len(additions)))
+        return
+    except CatalogLimitError:
+        report["catalog_budget_reached"] = True
+        if report["status"] not in {"blocked", "failed"}:
+            report["status"] = "partial"
+    low, high, fitting = 0, len(additions), -1
+    while low <= high:
+        count = (low + high) // 2
+        try:
+            _check_serialized_size(updated(count).model_dump(mode="json"))
+        except CatalogLimitError:
+            high = count - 1
+        else:
+            fitting = count
+            low = count + 1
+    if fitting < 0:
+        # Even new diagnostics do not fit. Never sacrifice a prior observation.
+        updated(0)
+        report["catalog_saved"] = False
+        return
+    save_catalog(path, updated(fitting))
 
 
 def discover(
@@ -356,7 +424,7 @@ def discover(
     report["observed_at"] = datetime.now(UTC).isoformat()
     report["observed_years"] = sorted(observed_years)
     report["unmatched_years"] = sorted(set(years) - observed_years)
-    save_catalog(path, catalog.model_copy(update={"candidates": tuple(candidates.values()), "last_discovery": report}))
+    _save_discovery(path, catalog, candidates, report)
     return report
 
 
