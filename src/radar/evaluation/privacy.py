@@ -7,14 +7,27 @@ from radar.store.blobs import BlobStore
 from radar.store.db import Database
 
 
+class PrivacyAuditIncompleteError(RuntimeError):
+    """A source could not be checked; absence of a completed audit must never count as zero leaks."""
+
+
 def audit_privacy(db: Database, blobs: BlobStore, reader: PdfReader | None = None) -> list[str]:
     """Names from form person fields, civility names, e-mails and phones still present in stored texts."""
     leaks: list[str] = []
     reader = reader or PdfReader()
     for filing in db.filings():
-        forms = [
-            reader.read(d.id, blobs.get(d.id)).fields for d in db.documents(filing.key) if d.role is DocumentRole.FORM
-        ]
+        forms = []
+        for document in db.documents(filing.key):
+            if document.role is not DocumentRole.FORM:
+                continue
+            try:
+                data = blobs.get(document.id, max_bytes=reader.max_bytes)
+                forms.append(reader.read(document.id, data).fields)
+            except (ValueError, OSError, RuntimeError) as exc:
+                raise PrivacyAuditIncompleteError(
+                    f"privacy audit incomplete: document {document.id} "
+                    f"could not be checked ({type(exc).__name__}; source unreadable or outside resource limits)"
+                ) from exc
         audit = PersonScrubber.for_filing(forms, [filing.developer, filing.legal_name])
         texts = {
             "title": filing.title,

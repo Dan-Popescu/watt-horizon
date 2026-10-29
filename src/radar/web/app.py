@@ -10,6 +10,7 @@ import hmac
 import sqlite3
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from pathlib import Path
+from threading import BoundedSemaphore
 from typing import Any
 
 import anyio
@@ -95,6 +96,7 @@ def build_app(
     review: tuple[Rebuild, Callable[[], dict[str, GoldLabel]]] | None = None,
     quality: Callable[[Database], dict[str, Any]] | None = None,
     document: Callable[[str], bytes] | None = None,
+    evidence_limits: dict[str, int] | None = None,
 ) -> Starlette:
     """`mcp_host`: the host clients use; MCP rejects other Host headers (DNS-rebinding protection).
     `review`: enables the internal review endpoints (rebuild function, draft gold labels loader).
@@ -103,6 +105,8 @@ def build_app(
 
     def dataset_path() -> Path:
         return Path(db_path() if callable(db_path) else db_path)
+
+    evidence_slots = BoundedSemaphore(1)
 
     def endpoint(fn: Callable[[Database, Request], Any], *, write: bool = False) -> Callable[[Request], Response]:
         def handle(request: Request) -> Response:
@@ -314,11 +318,22 @@ def build_app(
         ev = filing.evidence.get(request.path_params["field"]) if filing else None
         if ev is None or ev.document_id == "human":
             return _json({"error": "no document evidence for this field"}, 404)
+        busy = JSONResponse(
+            {"error": "Un aperçu PDF est déjà en cours. Réessayez dans un instant."},
+            status_code=503,
+            headers={**NO_STORE, "Retry-After": "1"},
+        )
+        if not evidence_slots.acquire(blocking=False):
+            return busy
         try:
             data = document(ev.document_id)
+            view = pageview.render(data, ev.quote, ev.locator, **(evidence_limits or {}))
         except FileNotFoundError:
             return _json({"error": "document file missing (blobs)"}, 404)
-        view = pageview.render(data, ev.quote, ev.locator)
+        except pageview.PageViewBusyError:
+            return busy
+        finally:
+            evidence_slots.release()
         headers = {
             **NO_STORE,
             "X-Radar-Page": str(view.page),
