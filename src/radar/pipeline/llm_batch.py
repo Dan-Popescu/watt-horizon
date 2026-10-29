@@ -1,28 +1,26 @@
-"""Message Batches for scheduled runs: half price, nobody waiting (most batches end within an hour, at most 24 h).
+"""One durable lifecycle for direct, batch and cached model work.
 
-In batch mode a model request that misses the cache is not sent: it is queued (`LlmQueue`, in derived.sqlite)
-and the filing is built without that answer. `submit` sends the queue as one batch; `collect` (next run, or
-`--wait`) writes each answer into the SAME cache the direct calls use, under the same key (the request itself),
-so the following build reads it like any cached answer. A filing with a request in flight never stores its input
-fingerprint, so it is rebuilt once the answer is there. Review rebuilds stay on direct calls (someone is waiting).
-
-Errored, expired or cancelled requests are simply dropped from the queue: the next build misses the cache again
-and queues them again.
+Paid jobs and provider responses survive disposable-cache deletion. Ambiguous
+submissions require reconciliation; a local lease never proves remote failure.
 """
 
 import dataclasses
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Protocol
 
 from radar.classification.base import ClassificationInput
 from radar.domain.models import Classification
 from radar.extraction.llm import Extracted, ExtractionInput
 from radar.store.cache import KeyValueCache
+from radar.store.llm_jobs import BudgetLimits, LlmJobStore, TokenPricing
 
-PENDING = "llm-pending"  # key -> {task, item, params, filing}
-BATCHES = "llm-batches"  # batch id -> {custom_id: entry}
-MAX_PER_BATCH = 10_000  # the API accepts 100k / 256 MB; smaller batches end sooner
+PENDING = "llm-pending"  # legacy namespaces, imported without deleting their source
+BATCHES = "llm-batches"
+MAX_PER_BATCH = 10_000
+MAX_BATCH_BYTES = 32 * 1024 * 1024
 
 
 class LlmTask(Protocol):
@@ -35,12 +33,11 @@ class LlmTask(Protocol):
 
 
 def encode_answer(namespace: str, answer: Any) -> Any:
-    """Cache format shared with CachedClassifier / CachedExtractor / CachedVerifier."""
     if namespace == "classification":
         return {"result": answer.model_dump(mode="json") if answer else None}
     if namespace == "extraction":
         return {name: [value, quote] for name, (value, quote) in answer.items()}
-    return answer  # model checks: plain JSON
+    return answer
 
 
 def decode_answer(namespace: str, stored: Any) -> Any:
@@ -51,77 +48,138 @@ def decode_answer(namespace: str, stored: Any) -> Any:
     return stored
 
 
-def _encode_item(item: Any) -> dict[str, Any]:
-    return dataclasses.asdict(item)
-
-
 def _decode_item(namespace: str, raw: dict[str, Any]) -> Any:
     if namespace == "classification":
         return ClassificationInput(**raw)
     if namespace == "extraction":
         return ExtractionInput(**{**raw, "fields": tuple(raw["fields"])})
-    from radar.quality.model_check import CheckInput  # deferred: quality imports this module's codecs
+    from radar.quality.model_check import CheckInput
 
     return CheckInput.from_json(raw)
 
 
-class LlmQueue:
-    def __init__(self, cache: KeyValueCache) -> None:
-        self.cache = cache
-        self._waiting: set[str] = {e["filing"] for _, e in cache.items(PENDING)}
-        for _, batch in cache.items(BATCHES):
-            self._waiting |= {e["filing"] for e in batch["entries"].values()}
+def _json_value(value: Any) -> Any:
+    """Persist SDK models and the simple fake responses used by offline tests."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: _json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(v) for v in value]
+    if isinstance(value, SimpleNamespace):
+        return {k: _json_value(v) for k, v in vars(value).items()}
+    return value
 
-    def add(self, task: LlmTask, item: Any, filing_key: str) -> None:
-        key = task.key(item)
-        self.cache.put(
-            PENDING,
-            key,
-            {"task": task.name, "namespace": task.NAMESPACE, "item": _encode_item(item), "params": task.request(item),
-             "filing": filing_key},
+
+def _message(value: Any) -> Any:
+    if isinstance(value, dict):
+        return SimpleNamespace(**{k: _message(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return [_message(v) for v in value]
+    return value
+
+
+class LlmQueue:
+    def __init__(
+        self,
+        cache: KeyValueCache,
+        *,
+        jobs_path: Path | str | None = None,
+        limits: BudgetLimits | None = None,
+        pricing: Mapping[str, TokenPricing] | None = None,
+        campaign: str = "default",
+    ) -> None:
+        self.cache = cache
+        self.jobs = LlmJobStore(
+            jobs_path or cache.path.with_name("llm-jobs.sqlite"), limits=limits, pricing=pricing, campaign=campaign
+        )
+        self.jobs.import_legacy(str(cache.path.resolve()), cache.items(PENDING), cache.items(BATCHES))
+
+    def add(self, task: LlmTask, item: Any, filing_key: str, *, answer: Any = None) -> None:
+        self.jobs.add(
+            task.key(item),
+            {"task": task.name, "namespace": task.NAMESPACE, "item": dataclasses.asdict(item),
+             "params": task.request(item), "filing": filing_key},
+            filing_key, answer,
         )  # fmt: skip
-        self._waiting.add(filing_key)
 
     def queued(self, key: str) -> bool:
-        if self.cache.get(PENDING, key) is not None:
-            return True
-        return any(key in batch["entries"] for _, batch in self.cache.items(BATCHES))
+        job = self.jobs.get(key)
+        return job is not None and job["state"] != "succeeded"
 
     def waiting(self, filing_key: str) -> bool:
-        """True while a request of this filing is queued or in flight: its build is provisional."""
-        return filing_key in self._waiting
+        return self.jobs.waiting(filing_key)
 
     def pending(self) -> list[tuple[str, dict[str, Any]]]:
-        return self.cache.items(PENDING)
+        return self.jobs.entries("pending", "budget_blocked")
 
     def in_flight(self) -> list[tuple[str, dict[str, Any]]]:
-        return self.cache.items(BATCHES)
+        return self.jobs.in_flight()
+
+    def summary(self) -> dict[str, Any]:
+        return self.jobs.summary()
+
+    def active_count(self) -> int:
+        states = self.summary()["states"]
+        return sum(int(states.get(s, 0)) for s in ("pending", "submitting", "in_flight", "received"))
+
+    def blocked_count(self) -> int:
+        states = self.summary()["states"]
+        return sum(
+            int(states.get(s, 0)) for s in ("blocked", "budget_blocked", "uncertain", "parse_failed", "await_parser")
+        )
+
+    def resolve_uncertain(
+        self, submission_id: str, *, provider_batch_id: str | None = None, confirm_not_accepted: bool = False
+    ) -> None:
+        self.jobs.resolve_uncertain(
+            submission_id, provider_batch_id=provider_batch_id, confirm_not_accepted=confirm_not_accepted
+        )
+
+    def parse_saved(self, key: str, task: LlmTask) -> bool:
+        job = self.jobs.get(key)
+        if job is None or job["raw_message"] is None:
+            return False
+        try:
+            item = _decode_item(job["record"]["namespace"], job["record"]["item"])
+            answer = task.parse(_message(job["raw_message"]), item)
+            encoded = encode_answer(task.NAMESPACE, answer)
+            self.jobs.succeeded(key, encoded, parser_name=task.name)
+            self.cache.put(task.NAMESPACE, key, encoded)
+        except Exception as exc:
+            self.jobs.parse_failed(key, f"{type(exc).__name__}: {exc}")
+            return False
+        return True
 
 
 class Deferred:
-    """Wraps a paid task in batch mode: answer from the cache, else queue the request and answer « not yet »."""
-
-    def __init__(self, inner: Any, cache: KeyValueCache, queue: LlmQueue | None) -> None:
+    def __init__(self, inner: Any, cache: KeyValueCache, queue: LlmQueue | None, *, cache_only: bool = False) -> None:
         self.inner, self.cache, self.queue = inner, cache, queue
+        self.cache_only = cache_only
         self.name = inner.name
         self.NAMESPACE = inner.NAMESPACE
-        self.pending = False  # the last call queued a request (TieredClassifier waits for it)
+        self.pending = False
 
     def key(self, item: Any) -> str:
         return str(self.inner.key(item))
 
     def _answer(self, item: Any, filing_key: str) -> tuple[bool, Any]:
-        key = self.inner.key(item)
-        if (hit := self.cache.get(self.NAMESPACE, key)) is not None:
-            self.pending = False
-            return True, decode_answer(self.NAMESPACE, hit)
-        if self.queue is None:  # cache-only mode: no call, no queue
-            self.pending = False
-            return False, None
-        if not self.queue.queued(key):
-            self.queue.add(self.inner, item, filing_key)
-        self.pending = True
-        return False, None
+        key = self.key(item)
+        hit = self.cache.get(self.NAMESPACE, key)
+        if self.queue is not None:
+            if self.cache_only and hit is None and self.queue.jobs.get(key) is None:
+                self.pending = False
+                return False, None
+            self.queue.add(self.inner, item, filing_key, answer=hit)
+            job = self.queue.jobs.get(key)
+            if job and job["state"] in {"received", "parse_failed", "await_parser"}:
+                self.queue.parse_saved(key, self.inner)
+                job = self.queue.jobs.get(key)
+            if job and job["answer"] is not None:
+                hit = job["answer"]
+                self.cache.put(self.NAMESPACE, key, hit)
+        self.pending = hit is None and self.queue is not None and not self.cache_only
+        return (True, decode_answer(self.NAMESPACE, hit)) if hit is not None else (False, None)
 
 
 class DeferredClassifier(Deferred):
@@ -144,52 +202,129 @@ class DeferredVerifier(Deferred):
         return dict(answer) if known else {}
 
 
-class BatchClient(Protocol):
-    """The subset of `anthropic.Anthropic().messages.batches` used here (a fake in tests)."""
+class Tracked(Deferred):
+    """Direct execution uses the same reservation, accounting and raw-response journal."""
 
+    def _answer(self, item: Any, filing_key: str) -> tuple[bool, Any]:
+        known, answer = super()._answer(item, filing_key)
+        if known or self.queue is None or self.cache_only:
+            return known, answer
+        key = self.key(item)
+        submission, claimed = self.queue.jobs.claim(mode="direct", limit=1, key=key)
+        if not claimed:
+            return False, None
+        try:
+            client = self.inner.client
+            if hasattr(client, "with_options"):
+                client = client.with_options(max_retries=0)
+            response = client.beta.messages.create(
+                **self.inner.request(item), betas=["server-side-fallback-2026-07-01"], fallbacks="default"
+            )
+        except Exception as exc:
+            self.queue.jobs.uncertain(submission, f"{type(exc).__name__}: {exc}")
+            return False, None
+        self.queue.jobs.received(key, _json_value(response))
+        if self.queue.parse_saved(key, self.inner):
+            self.pending = False
+            job = self.queue.jobs.get(key)
+            return True, decode_answer(self.NAMESPACE, job["answer"] if job else None)
+        return False, None
+
+
+class TrackedClassifier(Tracked, DeferredClassifier):
+    pass
+
+
+class TrackedExtractor(Tracked, DeferredExtractor):
+    pass
+
+
+class TrackedVerifier(Tracked, DeferredVerifier):
+    pass
+
+
+class BatchClient(Protocol):
     def create(self, *, requests: list[dict[str, Any]]) -> Any: ...
     def retrieve(self, batch_id: str) -> Any: ...
     def results(self, batch_id: str) -> Iterable[Any]: ...
 
 
 def submit(batches: BatchClient, queue: LlmQueue) -> list[str]:
-    """Send every queued request (custom_id = cache key, 64 hex chars); returns the batch ids."""
-    pending = queue.pending()
-    ids = []
-    for start in range(0, len(pending), MAX_PER_BATCH):
-        chunk = pending[start : start + MAX_PER_BATCH]
-        batch = batches.create(requests=[{"custom_id": key, "params": entry["params"]} for key, entry in chunk])
-        queue.cache.put(BATCHES, batch.id, {"entries": dict(chunk)})
-        for key, _ in chunk:
-            queue.cache.delete(PENDING, key)
-        ids.append(batch.id)
-    return ids
+    """Reserve before network work. A missing response is uncertain, never automatically resent."""
+    ids: list[str] = []
+    while True:
+        submission, chunk = queue.jobs.claim(mode="batch", limit=MAX_PER_BATCH, max_bytes=MAX_BATCH_BYTES)
+        if not chunk:
+            if queue.jobs.entries("pending"):
+                continue
+            return ids
+        requests = [{"custom_id": key, "params": entry["params"]} for key, entry in chunk]
+        try:
+            batch = batches.create(requests=requests)
+            queue.jobs.submitted(submission, str(batch.id))
+        except Exception as exc:
+            queue.jobs.uncertain(submission, f"{type(exc).__name__}: {exc}")
+            continue
+        ids.append(str(batch.id))
 
 
 def collect(batches: BatchClient, queue: LlmQueue, tasks: Iterable[LlmTask]) -> dict[str, Any]:
-    """Write the answers of every ended batch into the cache. Returns counts and the filings to rebuild."""
     by_name = {t.name: t for t in tasks}
-    report: dict[str, Any] = {"ended": 0, "running": 0, "answers": 0, "failed": 0, "filings": set()}
+    report: dict[str, Any] = {
+        "ended": 0,
+        "running": 0,
+        "answers": 0,
+        "failed": 0,
+        "parse_failed": 0,
+        "await_parser": 0,
+        "collection_errors": [],
+        "filings": set(),
+    }
     for batch_id, batch in queue.in_flight():
-        if batches.retrieve(batch_id).processing_status != "ended":
-            report["running"] += 1
-            continue
-        report["ended"] += 1
-        for result in batches.results(batch_id):
-            entry = batch["entries"].get(result.custom_id)
-            task = by_name.get(entry["task"]) if entry else None
-            if entry is None or task is None:
+        try:
+            if batches.retrieve(batch_id).processing_status != "ended":
+                report["running"] += 1
                 continue
-            if result.result.type != "succeeded":  # errored / expired / canceled: re-queued by the next build
-                report["failed"] += 1
-                continue
-            item = _decode_item(entry["namespace"], entry["item"])
-            answer = task.parse(result.result.message, item)
-            queue.cache.put(task.NAMESPACE, result.custom_id, encode_answer(task.NAMESPACE, answer))
+            report["ended"] += 1
+            seen: set[str] = set()
+            for result in batches.results(batch_id):
+                key = str(getattr(result, "custom_id", ""))
+                if key not in batch["entries"]:
+                    report["collection_errors"].append(f"{batch_id}: unknown result {key}")
+                    continue
+                seen.add(key)
+                job = queue.jobs.get(key)
+                if job and job["state"] == "succeeded" and job["raw_message"] is not None:
+                    continue
+                try:
+                    if result.result.type != "succeeded":
+                        queue.jobs.failed(key, str(result.result.type), _json_value(result.result))
+                        report["failed"] += 1
+                        continue
+                    queue.jobs.received(key, _json_value(result.result.message))
+                except Exception as exc:
+                    # Preserve an unusable result too; repairing its parser must not repay it.
+                    queue.jobs.received(key, {"unusable_provider_result": _json_value(result)})
+                    queue.jobs.parse_failed(key, f"{type(exc).__name__}: {exc}")
+            missing = set(batch["entries"]) - seen
+            if missing:
+                report["collection_errors"].append(f"{batch_id}: {len(missing)} results missing; collection retained")
+            else:
+                queue.jobs.finish_batch(batch_id)
+        except Exception as exc:
+            report["collection_errors"].append(f"{batch_id}: {type(exc).__name__}: {exc}")
+    for key, entry in queue.jobs.entries("received", "parse_failed", "await_parser"):
+        task = by_name.get(entry["task"])
+        if task is None:
+            queue.jobs.parse_failed(key, f"parser unavailable: {entry['task']}", missing_parser=True)
+            report["await_parser"] += 1
+        elif queue.parse_saved(key, task):
             report["answers"] += 1
-            report["filings"].add(entry["filing"])
-        queue.cache.delete(BATCHES, batch_id)
+            report["filings"].update(queue.jobs.filings(key))
+        else:
+            report["parse_failed"] += 1
     report["filings"] = sorted(report["filings"])
+    report["jobs"] = queue.summary()
     return report
 
 
@@ -201,12 +336,11 @@ def wait(
     timeout_s: float = 4 * 3600,
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
-    """Block until every in-flight batch has ended (True) or the timeout passes (False)."""
     deadline = time.monotonic() + timeout_s
     while True:
         running = [i for i, _ in queue.in_flight() if batches.retrieve(i).processing_status != "ended"]
         if not running:
             return True
-        if time.monotonic() > deadline:
+        if time.monotonic() >= deadline:
             return False
-        sleep(every_s)
+        sleep(min(every_s, max(0, deadline - time.monotonic())))

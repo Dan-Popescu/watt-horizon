@@ -151,9 +151,21 @@ def test_pre_review_input_and_reliability() -> None:
     assert build_input(_filing(0.95), {"d": text}, {"developer": "ALPHA SAS"}) is None
 
     at = datetime(2026, 10, 13, tzinfo=UTC)
-    filings = [_filing(0.5, {"developer": "agree"}).model_copy(update={"key": f"k:{i}"}) for i in range(40)]
+    filings = [
+        _filing(0.5, {"developer": "agree"}).model_copy(
+            update={"key": f"k:{i}", "strata": {"evaluation_partition": "calibration"}}
+        )
+        for i in range(40)
+    ]
     validated = [
-        Correction(filing_key=f.key, field="validated", value="{}", author="Dan", created_at=at) for f in filings
+        Correction(
+            filing_key=f.key,
+            field="validated",
+            value=json.dumps({"developer": "ALPHA SAS"}),
+            author="Dan",
+            created_at=at,
+        )
+        for f in filings
     ]
     rel = reliability(filings, validated)
     assert (rel.agree_seen, rel.agree_right) == (40, 40) and rel.proven
