@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import subprocess
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
@@ -21,7 +20,8 @@ from typing import Protocol
 
 import pymupdf
 
-from radar.reading.pdf import PdfContent
+from radar.reading.pdf import DEFAULT_MAX_BYTES, PdfContent
+from radar.reading.workers import run_bounded
 from radar.store.cache import KeyValueCache
 
 
@@ -41,6 +41,7 @@ def _with_pages(content: PdfContent, texts: dict[int, str], label: str) -> PdfCo
         content,
         ocr_texts={**content.ocr_texts, **texts},
         ocr_engines={**content.ocr_engines, **dict.fromkeys(texts, label)},
+        ocr_errors={page: error for page, error in content.ocr_errors.items() if page not in texts},
     )
 
 
@@ -79,21 +80,46 @@ def tesseract_version() -> str | None:
 
 
 OCR_PARALLEL_MIN_PAGES = 4
-OCR_MAX_WORKERS = 8
+OCR_MAX_WORKERS = 2
+OCR_MAX_PAGES = 100
+OCR_MAX_PIXELS = 40_000_000
 
 
-def _ocr_page(data: bytes, number: int, language: str, dpi: int) -> str:
+def _ocr_page(data: bytes, number: int, language: str, dpi: int, max_pixels: int = OCR_MAX_PIXELS) -> str:
     """OCR of one page (1-based); module-level so a worker process can run it."""
     with pymupdf.open(stream=data, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
         page = doc[number - 1]
+        if page.rect.width * page.rect.height * (dpi / 72) ** 2 > max_pixels:
+            raise ValueError("OCR page exceeds rendered pixel limit")
         textpage = page.get_textpage_ocr(language=language, dpi=dpi, full=True)
         return str(page.get_text(textpage=textpage))
 
 
 class TesseractOcr:
-    def __init__(self, language: str = "fra", dpi: int = 300) -> None:
+    def __init__(
+        self,
+        language: str = "fra",
+        dpi: int = 300,
+        *,
+        max_workers: int = OCR_MAX_WORKERS,
+        max_pages: int = OCR_MAX_PAGES,
+        max_bytes: int = DEFAULT_MAX_BYTES,
+        max_pixels: int = OCR_MAX_PIXELS,
+        document_timeout_s: float = 60,
+    ) -> None:
+        if min(dpi, max_workers, max_pages, max_bytes, max_pixels) <= 0:
+            raise ValueError("OCR resource limits must be positive")
         self.language, self.dpi = language, dpi
-        self.label = f"tesseract-{tesseract_version()}:{language}@{dpi}dpi"
+        self.max_workers, self.max_pages, self.max_bytes, self.max_pixels = (
+            max_workers,
+            max_pages,
+            max_bytes,
+            max_pixels,
+        )
+        if document_timeout_s <= 0:
+            raise ValueError("OCR timeout must be positive")
+        self.document_timeout_s = document_timeout_s
+        self.label = f"tesseract-{tesseract_version()}:{language}@{dpi}dpi:pages={max_pages}:pixels={max_pixels}:bytes={max_bytes}:timeout={document_timeout_s:g}"
 
     @staticmethod
     def available() -> bool:
@@ -102,17 +128,32 @@ class TesseractOcr:
     def complete(self, document_id: str, data: bytes, content: PdfContent) -> PdfContent:
         if not content.unread_scanned_pages:
             return content
-        pages = list(content.unread_scanned_pages)
-        workers = min(OCR_MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1), len(pages))
-        if len(pages) >= OCR_PARALLEL_MIN_PAGES and workers >= 2:  # ~2.5 s per page: worth a process pool
-            with ProcessPoolExecutor(workers) as pool:
-                done = pool.map(
-                    _ocr_page, [data] * len(pages), pages, [self.language] * len(pages), [self.dpi] * len(pages)
-                )
-                texts = dict(zip(pages, done, strict=True))
-        else:
-            texts = {number: _ocr_page(data, number, self.language, self.dpi) for number in pages}
-        return _with_pages(content, texts, self.label)
+        if len(data) > self.max_bytes:
+            return replace(
+                content, ocr_errors=dict.fromkeys(content.unread_scanned_pages, "OCR document exceeds byte limit")
+            )
+        # Keep the document budget stable across cached/partial retries: it must not advance to another 100 pages.
+        allowed = set(content.scanned_pages[: self.max_pages])
+        pages = [p for p in content.unread_scanned_pages if p in allowed]
+        errors = {p: "OCR page budget exceeded" for p in content.unread_scanned_pages if p not in allowed}
+        if not pages:
+            return replace(content, ocr_errors=content.ocr_errors | errors)
+        workers = min(self.max_workers, max(1, (os.cpu_count() or 2) - 1), len(pages))
+        texts: dict[int, str] = {}
+        jobs = ((str(p), (data, p, self.language, self.dpi, self.max_pixels)) for p in pages)
+        concurrency = workers if len(pages) >= OCR_PARALLEL_MIN_PAGES else 1
+        for number, result in run_bounded(
+            _ocr_page,
+            jobs,
+            max_workers=concurrency,
+            timeout_s=self.document_timeout_s,
+            total_timeout_s=self.document_timeout_s,
+        ):
+            if result.error or result.value is None:
+                errors[int(number)] = result.error or "OCR worker returned no text"
+            else:
+                texts[int(number)] = result.value
+        return _with_pages(replace(content, ocr_errors=content.ocr_errors | errors), texts, self.label)
 
 
 class CachedOcr:
@@ -126,10 +167,12 @@ class CachedOcr:
         if not content.unread_scanned_pages:
             return content
         key = f"{document_id}:{self.label}:{','.join(map(str, content.unread_scanned_pages))}"
+        original_pages = set(content.ocr_texts)
         if (hit := self.cache.get(self.NAMESPACE, key)) is not None:
-            return _with_pages(content, {int(page): text for page, text in hit.items()}, self.label)
+            content = _with_pages(content, {int(page): text for page, text in hit.items()}, self.label)
         done = self.inner.complete(document_id, data, content)
-        new = {p: t for p, t in done.ocr_texts.items() if p not in content.ocr_texts}
+        # Cache successes, never an OCR failure. A partial hit must retry still unread eligible pages.
+        new = {p: t for p, t in done.ocr_texts.items() if p not in original_pages}
         self.cache.put(self.NAMESPACE, key, {str(p): t for p, t in new.items()})
         return done
 
@@ -149,11 +192,27 @@ class ChainOcr:
         return content
 
 
-def make_ocr(transcripts_dir: Path | None, use_tesseract: bool = True, cache: KeyValueCache | None = None) -> OcrEngine:
+def make_ocr(
+    transcripts_dir: Path | None,
+    use_tesseract: bool = True,
+    cache: KeyValueCache | None = None,
+    *,
+    max_workers: int = OCR_MAX_WORKERS,
+    max_pages: int = OCR_MAX_PAGES,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+    max_pixels: int = OCR_MAX_PIXELS,
+    document_timeout_s: float = 60,
+) -> OcrEngine:
     engines: list[OcrEngine] = []
     if transcripts_dir is not None:
         engines.append(TranscriptOcr(transcripts_dir))  # verified text first, never cached (files may be edited)
     if use_tesseract and TesseractOcr.available():
-        tesseract = TesseractOcr()
+        tesseract = TesseractOcr(
+            max_workers=max_workers,
+            max_pages=max_pages,
+            max_bytes=max_bytes,
+            max_pixels=max_pixels,
+            document_timeout_s=document_timeout_s,
+        )
         engines.append(CachedOcr(tesseract, cache) if cache else tesseract)
     return ChainOcr(*engines) if engines else NullOcr()

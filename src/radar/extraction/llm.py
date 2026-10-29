@@ -9,16 +9,18 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date
+from math import isclose
 from typing import TYPE_CHECKING, Any, Protocol
 
 from radar.domain.ids import luhn_ok
-from radar.domain.text import contains_quote, fold, parse_number
+from radar.domain.quantities import measurements, normalized_value
+from radar.domain.text import contains_quote, fold, squash
 from radar.store.cache import KeyValueCache, cache_key
 
 if TYPE_CHECKING:
     import anthropic
 
-PROMPT_VERSION = "2026-10-13"  # bump on any change to SYSTEM_PROMPT, FIELD_HINTS or OUTPUT_SCHEMA
+PROMPT_VERSION = "2026-10-29"  # bump on any change to SYSTEM_PROMPT, FIELD_HINTS or OUTPUT_SCHEMA
 MAX_INPUT_CHARS = 20_000
 FIELD_HINTS: dict[str, str] = {
     "developer": "société qui porte le projet (dénomination), jamais une personne physique",
@@ -34,6 +36,9 @@ SYSTEM_PROMPT = (
     "Tu extrais des informations de documents administratifs français. Pour chaque champ demandé, donne la valeur "
     "et une citation EXACTE et courte du document qui la contient. Si l'information n'est pas dans le document, "
     "réponds null pour la valeur et la citation. N'invente rien, ne déduis rien."
+    " Respecte les unités : MW est une puissance et MWh une capacité. Cite uniquement le projet concerné, "
+    "pas un exemple ou un équipement existant. Pour la puissance, retiens la borne maximale (MWac si indiqué) ; "
+    "pour la date de dépôt, ne cite jamais la date de décision. Les valeurs numériques sont normalisées en MW ou MWh."
 )
 MONTHS_FR = (
     "janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet", "aout", "septembre", "octobre", "novembre", "decembre",
@@ -74,9 +79,7 @@ def parse_value(name: str, raw: str) -> str | float | None:
     """Typed value, or None when it does not parse (the answer is then dropped)."""
     raw = raw.strip()
     if name in {"power_mw", "power_mw_min", "energy_mwh"}:
-        m = re.search(r"\d[\d\s  ]*(?:[.,]\d+)?", raw)
-        value = parse_number(m[0]) if m else 0.0
-        return value if 0 < value < 100_000 else None
+        return normalized_value(raw, "energy" if name == "energy_mwh" else "power")
     if name == "siret":
         digits = re.sub(r"\D", "", raw)
         return digits if len(digits) == 14 and luhn_ok(digits) else None
@@ -90,11 +93,23 @@ def parse_value(name: str, raw: str) -> str | float | None:
 
 def value_in_quote(name: str, value: str | float, quote: str) -> bool:
     if isinstance(value, float):
-        numbers = [parse_number(m) for m in re.findall(r"\d[\d  ]*(?:[.,]\d+)?", quote)]
-        return any(abs(n - value) < 1e-6 for n in numbers)
+        dimension = "energy" if name == "energy_mwh" else "power"
+        candidates = [m for m in measurements(quote) if m.dimension == dimension and m.basis not in {"dc", "c"}]
+        if not candidates or re.search(
+            r"\b(?:existant\w*|actuel\w*|ancien\w*|transformateur\w*|hypotheti\w*|exemple|autre projet|projet voisin)\b",
+            fold(quote),
+        ):
+            return False
+        expected = [m.low if name == "power_mw_min" else m.high for m in candidates]
+        # A quote with conflicting values of the same dimension does not establish one unambiguous scalar.
+        return bool(expected) and all(isclose(n, value, rel_tol=1e-8, abs_tol=1e-10) for n in expected)
     if name == "siret":
         return str(value) in re.sub(r"\D", "", quote)
     if name == "filed_on":
+        if not re.search(r"\b(?:depos\w*|depot|complet\w*|recu\w*)\b", fold(quote)):
+            return False
+        if re.search(r"\b(?:decision|arrete|deliberation)\b", fold(quote)):
+            return False
         y, m, d = str(value).split("-")
         digits = re.sub(r"\D", "", quote)
         written = re.search(rf"\b0?{int(d)}(?:er)?\s+{MONTHS_FR[int(m) - 1]}\s+{y}\b", fold(quote))
@@ -102,16 +117,39 @@ def value_in_quote(name: str, value: str | float, quote: str) -> bool:
     return fold(str(value)) in fold(quote)
 
 
+def _source_contexts(text: str, quote: str) -> list[str]:
+    """Preserve the containing sentence, including units or object qualifiers omitted by a short quote."""
+    text, quote = squash(text), squash(quote)
+    normalized = text.lower()
+    start = normalized.find(quote.lower())
+    contexts = []
+    while start >= 0:
+        end = start + len(quote)
+        before = list(re.finditer(r"[.;](?:\s|$)", text[:start]))
+        after = re.search(r"[.;](?:\s|$)", text[end:])
+        left = before[-1].end() if before else 0
+        right = end if re.search(r"[.;]\s*$", quote) else end + after.start() if after else len(text)
+        contexts.append(text[left:right])
+        start = normalized.find(quote.lower(), end)
+    return contexts
+
+
 def verify(answer: dict[str, Any], item: ExtractionInput) -> Extracted:
     kept: Extracted = {}
     for name in item.fields:
         entry = answer.get(name) or {}
+        if not isinstance(entry, dict):
+            continue
         raw, quote = entry.get("value"), entry.get("quote")
-        if not raw or not quote or not contains_quote(item.text, quote):
+        if not raw or not isinstance(quote, str) or not contains_quote(item.text, quote):
             continue
         value = parse_value(name, str(raw))
         if value is not None and value_in_quote(name, value, quote):
-            kept[name] = (value, quote[:300])
+            if isinstance(value, float) and not all(
+                value_in_quote(name, value, context) for context in _source_contexts(item.text, quote)
+            ):
+                continue
+            kept[name] = (value, quote)  # Truncating can remove the very value/unit whose presence was verified.
     return kept
 
 
