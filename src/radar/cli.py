@@ -30,6 +30,7 @@ from radar.classification.terms import ScreenTerms
 from radar.config import Settings, load_settings
 from radar.domain.privacy import PersonScrubber
 from radar.domain.references import canonical_reference_map
+from radar.evaluation import campaign, campaign_compare, campaign_review
 from radar.evaluation.baseline import (
     REQUIRED_FIELDS,
     approve_baseline,
@@ -41,6 +42,7 @@ from radar.evaluation.classification import evaluate_classifier
 from radar.evaluation.gold import draft as draft_field_gold
 from radar.evaluation.gold import load_field_gold, write_field_gold
 from radar.evaluation.ocr import evaluate_ocr
+from radar.evaluation.partitions import load_manifest as load_partition_manifest
 from radar.evaluation.privacy import audit_privacy
 from radar.evaluation.report import ReportInputs, build_report
 from radar.evaluation.report import metrics as eval_metrics
@@ -390,6 +392,55 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
 def cmd_stats(_: argparse.Namespace, s: Settings) -> Any:
     with Database(s.db_path) as db:
         return {**queries.dataset_info(db).model_dump(mode="json"), "operations": operational_status(s.data_dir)}
+
+
+def cmd_campaign(args: argparse.Namespace, s: Settings) -> Any:
+    """Private offline annotation packets and paired comparisons; never call a model provider."""
+    if args.action == "discovery":
+        from radar.evaluation.discovery import evaluate
+
+        with Database(s.db_path) as db:
+            return evaluate(db, Path(args.reference))
+    if args.action == "prepare":
+        with Database(s.db_path) as db:
+            return campaign.prepare(
+                db,
+                Path(args.out),
+                limit=args.limit,
+                double_rate=args.double_rate,
+                previous=load_partition_manifest(s.partitions_path),
+            )
+    manifest = campaign.load_campaign(Path(args.directory))
+    if args.action == "snapshot":
+        with Database(s.db_path) as db:
+            return campaign_compare.snapshot(db, manifest, Path(args.out), args.name)
+    services = make_services(s, None, llm="cached")
+    report, references = campaign_review.validate(
+        manifest,
+        [Path(path) for path in args.annotations],
+        BlobStore(s.blobs_dir),
+        read=lambda key, data: services.ocr.complete(key, data, services.reader.read(key, data)),
+    )
+    if args.action == "validate":
+        return report
+    baseline = campaign_compare.load_snapshot(Path(args.baseline), manifest)
+    candidate = campaign_compare.load_snapshot(Path(args.candidate), manifest)
+    result = campaign_compare.comparison(manifest, references, baseline, candidate)
+    result["annotation"] = report
+    if args.strict and (
+        not result["quality_measured"]
+        or report["pending_fields"]
+        or report["disagreements"]
+        or report["document_relevance"].get("pending", 0)
+        or report["document_relevance"].get("disputed", 0)
+        or any(
+            field["paired_groups"]["regressed_exact"]
+            for partition in result["partitions"].values()
+            for field in partition.values()
+        )
+    ):
+        result["error"] = "Campaign is unmeasured, incomplete, disputed or has exact grouped regressions"
+    return result
 
 
 def cmd_backup(args: argparse.Namespace, s: Settings) -> Any:
@@ -1030,6 +1081,36 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("version", nargs="?", help="activate: existing immutable version")
     dataset.add_argument("--dir", required=True, help="private dataset publication directory")
     dataset.add_argument("--baseline", help="publish: approved evaluation reference path")
+    annotation = sub.add_parser("campaign", help="private blinded annotation and offline extractor comparisons")
+    annotation_actions = annotation.add_subparsers(dest="action", required=True)
+    prepare = annotation_actions.add_parser(
+        "prepare", help="freeze grouped document inventory and blank reviewer packets"
+    )
+    prepare.add_argument("--out", required=True, help="new private campaign directory")
+    prepare.add_argument(
+        "--limit", type=int, default=100, help="maximum independent groups, including all their filings"
+    )
+    prepare.add_argument("--double-rate", type=float, default=0.1, help="share of groups assigned two blind reviews")
+    discovery = annotation_actions.add_parser(
+        "discovery", help="measure discovery against a verified external inventory"
+    )
+    discovery.add_argument("--reference", required=True, help="private verified discovery-reference JSON")
+    for action in ("validate", "snapshot", "compare"):
+        operation = annotation_actions.add_parser(action)
+        operation.add_argument("directory", help="frozen private campaign directory")
+        if action == "snapshot":
+            operation.add_argument("--out", required=True, help="new raw machine snapshot JSON file")
+            operation.add_argument("--name", required=True, help="extractor variant name")
+        else:
+            operation.add_argument(
+                "--annotations", nargs="+", required=True, help="completed blind JSONL reviewer packets"
+            )
+        if action == "compare":
+            operation.add_argument("--baseline", required=True)
+            operation.add_argument("--candidate", required=True)
+            operation.add_argument(
+                "--strict", action="store_true", help="fail on incomplete references or grouped exact regressions"
+            )
     for name, text in (
         ("link", "propose links, rebuild projects"),
         ("stats", "dataset counts, freshness, caveats"),
@@ -1071,6 +1152,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
     "backup": cmd_backup,
     "restore": cmd_restore,
     "dataset": cmd_dataset,
+    "campaign": cmd_campaign,
 }
 
 
