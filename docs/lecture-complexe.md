@@ -10,6 +10,8 @@ Chaque `PdfTable` conserve la page, l'indice du tableau, son rectangle et les ce
 
 Les avis et annexes peuvent combler une déclaration de quantité entièrement manquante avec une ligne explicite portant son unité et identifiant le projet. Les formulaires et décisions conservent leur priorité. Les phases et scénarios ne sont ni additionnés ni réduits à une valeur scalaire.
 
+La promotion des lignes réutilise les mêmes contrôles de contexte que les observations : phase ou scénario dans une colonne séparée, état existant/exemple, type d'actif et contradiction d'unité entre cellule et en-tête empêchent l'acceptation automatique. Lorsqu'une page possède des tableaux reconnus, sa version textuelle aplatie ne fournit pas de mesure scalaire : ses lectures littérales sont conservées, mais celles qui sembleraient directement éligibles gardent un contexte inconnu ; seules ses lignes structurées peuvent alimenter la promotion automatique. Cette abstention conservatrice peut laisser une quantité narrative sur cette page à la relecture humaine.
+
 ## Observations de quantités
 
 `Filing.quantity_observations` conserve les bornes normalisées MW/MWh, l'unité AC/DC/crête, la citation, sa page et, le cas échéant, tableau/ligne/colonne. Le type d'actif (stockage, centre de données, solaire, raccordement, équipement…), son état proposé/existant/exemple/inconnu, la phase et le scénario restent séparés. Leur identification est une heuristique destinée à la relecture, pas une conclusion métier certifiée. Des contextes multiples ou incomplets restent explicites.

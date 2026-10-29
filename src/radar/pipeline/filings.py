@@ -327,6 +327,7 @@ def build_filing(
         or observation.asset in {"connection", "equipment", "mixed"}
         or observation.state in {"existing", "example"}
         or not observation.unit_in_cell
+        or (observation.source_kind == "table" and not observation.eligible)
     ]
     if (contextual or len(observations) >= MAX_OBSERVATIONS) and classification.category in TARGET_CATEGORIES:
         flags.append(

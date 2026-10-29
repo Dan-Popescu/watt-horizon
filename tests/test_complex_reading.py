@@ -95,6 +95,38 @@ def test_phase_column_and_grouped_header_values_are_preserved() -> None:
     assert all(not o.eligible for o in observations)
 
 
+@pytest.mark.parametrize(
+    "headers,row",
+    [
+        (("Installation", "Phase", "Puissance"), ("Projet de stockage", "1", "30 MW")),
+        (("Installation", "Phase de construction", "Puissance"), ("Projet de stockage", "1", "30 MW")),
+        (("Installation", "Scenario", "Puissance"), ("Projet de stockage", "A", "30 MW")),
+        (("Installation", "Etat", "Puissance"), ("Projet de stockage", "existant", "30 MW")),
+        (("Installation", "Actif", "Puissance"), ("Projet de stockage", "photovoltaïque", "30 MW")),
+        (("Installation existante", "Puissance"), ("Projet de stockage", "30 MW")),
+        (("Exemple d'installation", "Puissance"), ("Projet de stockage", "30 MW")),
+        (("Installation", "Puissance (MWh)"), ("Projet de stockage", "30 MW")),
+        (("Installation", "Puissance (MWdc)"), ("Projet de stockage", "30 MW")),
+        (("Installation", "Puissance (kW)"), ("Projet de stockage", "30 MW")),
+    ],
+)
+@pytest.mark.parametrize("flat_text", ["", "Projet de stockage 1 30 MW"])
+def test_table_context_never_bypasses_scalar_promotion_guards(headers, row, flat_text: str) -> None:
+    content = PdfContent(1, {}, (flat_text,), (), tables=(PdfTable(1, 1, (headers, row), (0, 0, 100, 100)),))
+    observations = observe_quantities([("doc", content)])
+    assert observations and all(not observation.eligible for observation in observations)
+    result = extract_supporting([("doc", content)])
+    assert result.mw_max is None and result.mwh is None
+
+
+def test_clear_proposed_storage_table_row_still_supplies_literal_quantities() -> None:
+    rows = (("Installation", "Puissance", "Capacite"), ("Projet de stockage", "30 MW", "60 MWh"))
+    content = PdfContent(1, {}, ("",), (), tables=(PdfTable(1, 1, rows, (0, 0, 100, 100)),))
+    result = extract_supporting([("doc", content)])
+    assert result.mw_max == 30 and result.mwh == 60
+    assert result.evidence["power"].locator == "page:1:table:1:row:2"
+
+
 def test_quantity_observation_context_is_scrubbed_before_storage(db: Database, blobs: BlobStore) -> None:
     # Constructed person name deliberately appears in a phase label as well as the quote.
     with db.transaction():

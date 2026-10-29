@@ -1,13 +1,16 @@
 """Conservative, page-local quantities in opinions and annexes; ambiguity means abstention."""
 
 import re
+from collections import defaultdict
 from collections.abc import Iterable
 from math import isclose
 
 from radar.domain.models import Evidence
 from radar.domain.quantities import measurements
+from radar.domain.quantity_context import QuantityObservation
 from radar.domain.text import fold, squash
 from radar.extraction.facts import Facts
+from radar.extraction.observations import table_observations
 from radar.reading.pdf import PdfContent
 
 _TARGET = re.compile(r"\b(?:stockage|batteries?|bess|datacenter|data center|centre de donnees)\b")
@@ -18,16 +21,23 @@ _AMBIGUOUS = re.compile(
 )
 
 
-def _fragments(content: PdfContent) -> Iterable[tuple[int, str, str]]:
+def _fragments(document_id: str, content: PdfContent) -> Iterable[tuple[int, str, str]]:
+    table_pages = {table.page for table in content.tables}
     for page in range(1, content.pages + 1):
+        if page in table_pages:
+            # A flattened page cannot restore context carried by separate headers.
+            # Only the structured, eligible rows on this page may supply a scalar.
+            continue
         text = content.ocr_texts.get(page) or content.page_texts[page - 1]
         for raw in re.split(r"(?<=[.;])\s+|\n\s*\n", text):
             yield page, f"page:{page}", raw
     for table in content.tables:
-        for index, row in enumerate(table.rows, start=1):
-            # Only literal cells, never synthesize a value/unit association from
-            # a header when promoting an authoritative scalar project quantity.
-            yield table.page, f"page:{table.page}:table:{table.index}:row:{index}", " ".join(row)
+        rows: dict[str, list[QuantityObservation]] = defaultdict(list)
+        for observation in table_observations(document_id, table):
+            rows[observation.locator.rpartition(":column:")[0]].append(observation)
+        for locator, observations in rows.items():
+            if all(observation.eligible for observation in observations):
+                yield table.page, f"page:{table.page}:{locator}", observations[0].quote
 
 
 def extract_supporting(documents: Iterable[tuple[str, PdfContent]]) -> Facts:
@@ -38,7 +48,7 @@ def extract_supporting(documents: Iterable[tuple[str, PdfContent]]) -> Facts:
     """
     candidates: list[tuple[float | None, float | None, float | None, Evidence]] = []
     for document_id, content in documents:
-        for _page, locator, raw in _fragments(content):
+        for _page, locator, raw in _fragments(document_id, content):
             quote = squash(raw)
             normalized = fold(quote)
             if (

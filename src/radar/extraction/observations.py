@@ -1,13 +1,14 @@
 """Retain quantity context before deciding whether one scalar project fact is justified."""
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from typing import TypedDict
 
 from radar.domain.quantities import NUMBER, measurements
 from radar.domain.quantity_context import Asset, ProjectState, QuantityObservation
 from radar.domain.text import fold, squash
 from radar.reading.pdf import PdfContent
+from radar.reading.tables import PdfTable
 
 MAX_OBSERVATIONS = 200
 _PHASE = re.compile(r"\b(?:phase|tranche)\s+([a-z0-9-]{1,24})\b")
@@ -79,9 +80,83 @@ def context(text: str, position: int | None = None) -> Context:
     }
 
 
+def table_observations(document_id: str, table: PdfTable) -> Iterator[QuantityObservation]:
+    """Keep row context, including meaning carried only by the column headings."""
+    if not table.rows:
+        return
+    headers = table.rows[0]
+    header_quote = squash(" ".join(headers))
+    if len(header_quote) > 550:
+        return
+    for row_index, row in enumerate(table.rows[1:], start=2):
+        quote = squash(" ".join(row))
+        if not 0 < len(quote) <= 550:
+            continue
+        contextual = context(quote)
+        for header, cell in zip(headers, row, strict=False):
+            if re.match(r"^(?:phase|tranche)\b", fold(header)) and cell.strip():
+                contextual["phase"] = fold(cell)[:40]
+            if re.match(r"^(?:scenario|variante|option)\b", fold(header)) and cell.strip():
+                contextual["scenario"] = fold(cell)[:40]
+        for column, cell in enumerate(row):
+            inline = measurements(cell)
+            unit_in_cell = bool(inline)
+            if not inline and column < len(headers) and (number := _NUMBER.fullmatch(cell)):
+                units = _UNIT.findall(headers[column])
+                if len(units) == 1:
+                    # Header normalization is an observation, never invented inline proof.
+                    inline = measurements(f"{number[1]}" + (f" à {number[2]}" if number[2] else "") + " " + units[0])
+            for value in inline:
+                local: Context = {**contextual}
+                column_header = headers[column] if column < len(headers) else ""
+                column_context = context(column_header)
+                for state in (context(header_quote)["state"], column_context["state"]):
+                    if state in {"existing", "example"}:
+                        local["state"] = "unknown" if local["state"] == "proposed" else state
+                if column_context["asset"] != "unknown":
+                    local["asset"] = (
+                        column_context["asset"]
+                        if local["asset"] == "unknown"
+                        else local["asset"]
+                        if local["asset"] == column_context["asset"]
+                        else "mixed"
+                    )
+                units = _UNIT.findall(column_header)
+                basis = value.basis
+                if len(units) > 1:
+                    local["state"] = "unknown"
+                elif units:
+                    header_unit = measurements("1 " + units[0])[0]
+                    cell_units = [measurements("1 " + unit)[0] for unit in _UNIT.findall(cell)]
+                    if header_unit.dimension != value.dimension or any(
+                        unit.dimension != header_unit.dimension
+                        or unit.high != header_unit.high
+                        or (unit.basis and header_unit.basis and unit.basis != header_unit.basis)
+                        for unit in cell_units
+                    ):
+                        local["state"] = "unknown"
+                    elif not basis:
+                        basis = header_unit.basis
+                yield QuantityObservation(
+                    document_id=document_id,
+                    page=table.page,
+                    locator=f"table:{table.index}:row:{row_index}:column:{column + 1}",
+                    quote=quote,
+                    header_quote=header_quote,
+                    low=value.low,
+                    high=value.high,
+                    dimension=value.dimension,
+                    basis=basis,
+                    source_kind="table",
+                    unit_in_cell=unit_in_cell,
+                    **local,
+                )
+
+
 def observe_quantities(documents: Iterable[tuple[str, PdfContent]]) -> tuple[QuantityObservation, ...]:
     observations: list[QuantityObservation] = []
     for document_id, content in documents:
+        table_pages = {table.page for table in content.tables}
         for page in range(1, content.pages + 1):
             text = content.ocr_texts.get(page) or content.page_texts[page - 1]
             for raw in re.split(r"(?<=[.;])\s+|\n\s*\n", text):
@@ -89,67 +164,28 @@ def observe_quantities(documents: Iterable[tuple[str, PdfContent]]) -> tuple[Qua
                 if not 0 < len(quote) <= 550:
                     continue
                 for value in measurements(quote):
-                    observations.append(
-                        QuantityObservation(
-                            document_id=document_id,
-                            page=page,
-                            locator=f"page:{page}",
-                            quote=quote,
-                            low=value.low,
-                            high=value.high,
-                            dimension=value.dimension,
-                            basis=value.basis,
-                            source_kind="text",
-                            **context(quote, value.start),
-                        )
+                    observation = QuantityObservation(
+                        document_id=document_id,
+                        page=page,
+                        locator=f"page:{page}",
+                        quote=quote,
+                        low=value.low,
+                        high=value.high,
+                        dimension=value.dimension,
+                        basis=value.basis,
+                        source_kind="text",
+                        **context(quote, value.start),
                     )
+                    if page in table_pages and observation.eligible:
+                        # Retain literal narrative readings but never claim they
+                        # lost no context when this page also contains a table.
+                        observation = observation.model_copy(update={"state": "unknown"})
+                    observations.append(observation)
                     if len(observations) >= MAX_OBSERVATIONS:
                         return tuple(observations)
         for table in content.tables:
-            if not table.rows:
-                continue
-            headers = table.rows[0]
-            header_quote = squash(" ".join(headers))
-            if len(header_quote) > 550:
-                continue
-            for row_index, row in enumerate(table.rows[1:], start=2):
-                quote = squash(" ".join(row))
-                if not 0 < len(quote) <= 550:
-                    continue
-                contextual = context(quote)
-                for header, cell in zip(headers, row, strict=False):
-                    if fold(header).strip() in {"phase", "tranche"} and cell.strip():
-                        contextual["phase"] = fold(cell)[:40]
-                    if fold(header).strip() in {"scenario", "variante", "option"} and cell.strip():
-                        contextual["scenario"] = fold(cell)[:40]
-                for column, cell in enumerate(row):
-                    inline = measurements(cell)
-                    unit_in_cell = bool(inline)
-                    if not inline and column < len(headers) and (number := _NUMBER.fullmatch(cell)):
-                        units = _UNIT.findall(headers[column])
-                        if len(units) == 1:
-                            # This normalization is recorded explicitly as a header-based
-                            # observation; it is never promoted as a scalar project fact.
-                            inline = measurements(
-                                f"{number[1]}" + (f" à {number[2]}" if number[2] else "") + " " + units[0]
-                            )
-                    for value in inline:
-                        observations.append(
-                            QuantityObservation(
-                                document_id=document_id,
-                                page=table.page,
-                                locator=f"table:{table.index}:row:{row_index}:column:{column + 1}",
-                                quote=quote,
-                                header_quote=header_quote,
-                                low=value.low,
-                                high=value.high,
-                                dimension=value.dimension,
-                                basis=value.basis,
-                                source_kind="table",
-                                unit_in_cell=unit_in_cell,
-                                **contextual,
-                            )
-                        )
-                        if len(observations) >= MAX_OBSERVATIONS:
-                            return tuple(observations)
+            for observation in table_observations(document_id, table):
+                observations.append(observation)
+                if len(observations) >= MAX_OBSERVATIONS:
+                    return tuple(observations)
     return tuple(observations)
