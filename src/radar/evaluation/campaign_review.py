@@ -137,6 +137,10 @@ def validate(
                 continue
             if not row.reviewer.strip() or not row.blind:
                 raise ValueError("Verified campaign annotations require an identified blind reviewer")
+            # Absence claims still require the original bytes to be available and
+            # readable. A declared inventory cannot stand in for missing evidence.
+            for document in record.documents:
+                content(document.id)
             if any(
                 old.reviewer.casefold().strip() == row.reviewer.casefold().strip() for old in reviews[row.filing_key]
             ):

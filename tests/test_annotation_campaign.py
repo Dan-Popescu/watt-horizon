@@ -4,6 +4,7 @@ The small PDF text is synthetic administrative-shaped data for protocol testing,
 """
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ import pytest
 from radar import cli
 from radar.config import Settings
 from radar.domain.enums import Category, SourceKind
-from radar.domain.models import Classification, Filing, MachineOutput
+from radar.domain.models import Classification, Filing, Link, LinkDecision, MachineOutput
 from radar.evaluation.campaign import check_documents, load_campaign, prepare
 from radar.evaluation.campaign_compare import comparison, load_snapshot, snapshot
 from radar.evaluation.campaign_review import validate
@@ -23,16 +24,16 @@ from tests.conftest import FILLER, make_pdf
 QUOTE = "une puissance de 0,05 MW"
 
 
-def seed(db: Database, blobs: BlobStore, *, partition: str = "dev") -> Filing:
-    key = "dreal_case_by_case:hauts-de-france:000001"
+def seed(db: Database, blobs: BlobStore, *, partition: str = "dev", number: str = "000001") -> Filing:
+    key = f"dreal_case_by_case:hauts-de-france:{number}"
     with db.transaction():
         document = ingest_pdf(
             db,
             blobs,
-            data=make_pdf([FILLER + " Le projet de stockage par batteries declare " + QUOTE + "."]),
+            data=make_pdf([FILLER + number + " Le projet de stockage par batteries declare " + QUOTE + "."]),
             source=SourceKind.DREAL_CASE_BY_CASE,
             region="hauts-de-france",
-            number="000001",
+            number=number,
             url="https://example.org/form.pdf",
             title="Stockage",
             filename="form.pdf",
@@ -42,7 +43,7 @@ def seed(db: Database, blobs: BlobStore, *, partition: str = "dev") -> Filing:
             key=key,
             source=SourceKind.DREAL_CASE_BY_CASE,
             region="hauts-de-france",
-            number="000001",
+            number=number,
             title="Stockage",
             document_ids=(document.id,),
             classification=classification,
@@ -50,6 +51,7 @@ def seed(db: Database, blobs: BlobStore, *, partition: str = "dev") -> Filing:
             strata={"read": "text", "template": "one", "evaluation_partition": partition},
         )
         db.upsert_filing(filing)
+        db.note_processing_outcome(key, "complete")
     return filing
 
 
@@ -207,6 +209,7 @@ def test_exact_vs_tolerance_and_heldout_error_privacy(db: Database, blobs: BlobS
         db.upsert_filing(
             filing.model_copy(update={"machine": filing.machine.model_copy(update={"values": {"power_mw": 0.1}})})
         )
+        db.note_processing_outcome(filing.key, "complete")
     snapshot(db, campaign, candidate, "after")
     report = comparison(campaign, refs, load_snapshot(baseline, campaign), load_snapshot(candidate, campaign))
     scores = report["partitions"]["test"]["power_mw"]
@@ -238,6 +241,8 @@ def test_grouped_sampling_keeps_shared_documents_together(db: Database, blobs: B
         db.upsert_filing(
             filing.model_copy(update={"key": other_key, "number": "000002", "source": SourceKind.MRAE_OPINION})
         )
+        db.note_processing_outcome(filing.key, "complete")
+        db.note_processing_outcome(other_key, "complete")
     directory = tmp_path / "campaign"
     report = prepare(db, directory, limit=1)
     records = load_campaign(directory).records
@@ -312,3 +317,76 @@ def test_cli_unverified_campaign_is_unmeasured_and_strict_fails(
     assert cli.main(args) == 2
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "unmeasured" and "error" in result
+
+
+@pytest.mark.parametrize(
+    "field,new_value", [("title", "Changed title"), ("filename", "changed.pdf"), ("audit", "random")]
+)
+def test_snapshot_binds_processing_metadata(
+    field: str, new_value: str, db: Database, blobs: BlobStore, tmp_path: Path
+) -> None:
+    filing = seed(db, blobs)
+    directory = tmp_path / "campaign"
+    prepare(db, directory)
+    manifest = load_campaign(directory)
+    document = db.documents(filing.key)[0]
+    with db.transaction():
+        db.upsert_document(document.model_copy(update={field: new_value}))
+    with pytest.raises(ValueError, match="metadata changed"):
+        snapshot(db, manifest, tmp_path / "stale.json", "stale")
+
+
+def test_incomplete_processing_blocks_snapshot(db: Database, blobs: BlobStore, tmp_path: Path) -> None:
+    filing = seed(db, blobs)
+    directory = tmp_path / "campaign"
+    prepare(db, directory)
+    with db.transaction():
+        db.note_processing_outcome(filing.key, "waiting")
+    with pytest.raises(ValueError, match="processing outcomes"):
+        snapshot(db, load_campaign(directory), tmp_path / "stale.json", "stale")
+
+
+@pytest.mark.parametrize("partition", ["dev", "test"])
+@pytest.mark.parametrize("decision_only", [False, True])
+def test_new_same_project_relationship_invalidates_frozen_groups(
+    partition: str, decision_only: bool, db: Database, blobs: BlobStore, tmp_path: Path
+) -> None:
+    first = seed(db, blobs)
+    second = seed(db, blobs, number="000002", partition=partition)
+    directory = tmp_path / "campaign"
+    prepare(db, directory)
+    manifest = load_campaign(directory)
+    assert len({r.group for r in manifest.records}) == 2
+    with db.transaction():
+        if decision_only:
+            db.add_link_decision(
+                LinkDecision(
+                    a=first.key, b=second.key, verdict="same_project", author="Reviewer", created_at=datetime.now(UTC)
+                )
+            )
+        else:
+            db.replace_links([Link(a=first.key, b=second.key, reasons=("manual",), verdict="same_project")])
+    with pytest.raises(ValueError, match=r"group membership changed|cross frozen"):
+        snapshot(db, manifest, tmp_path / "bad.json", "bad")
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_absent_only_review_requires_intact_document_bytes(
+    missing: bool, db: Database, blobs: BlobStore, tmp_path: Path
+) -> None:
+    filing = seed(db, blobs)
+    directory = tmp_path / "campaign"
+    prepare(db, directory, double_rate=0)
+    manifest = load_campaign(directory)
+    path = packet(directory)
+    row = json.loads(path.read_text())
+    row["fields"]["power_mw"] = {"status": "unreviewed"}
+    row["fields"]["siret"] = {"status": "absent"}
+    path.write_text(json.dumps(row))
+    raw = blobs.path_for(filing.document_ids[0])
+    if missing:
+        raw.unlink()
+    else:
+        raw.write_bytes(b"corrupt")
+    with pytest.raises((ValueError, OSError)):
+        validate(manifest, [path], blobs)

@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from radar.domain.models import Filing
+from radar.domain.models import DocumentRecord, Filing, Link
 from radar.evaluation.gold import FIELDS
 from radar.evaluation.partitions import PartitionManifest, atomic_json, build_manifest
 from radar.store.db import Database
@@ -25,6 +25,29 @@ class CampaignDocument(FrozenModel):
     url: str
     role: str
     pages: int
+    source: str
+    filing_key: str
+    title: str
+    filename: str
+    audit: str | None
+    fetched_at: str
+    scanned_pages: tuple[int, ...]
+
+    @classmethod
+    def from_record(cls, document: DocumentRecord) -> "CampaignDocument":
+        return cls(
+            id=document.id,
+            url=document.url,
+            role=document.role.value,
+            pages=document.pages,
+            source=document.source.value,
+            filing_key=document.filing_key,
+            title=document.title,
+            filename=document.filename,
+            audit=document.audit,
+            fetched_at=document.fetched_at.isoformat(),
+            scanned_pages=document.scanned_pages,
+        )
 
 
 class CampaignRecord(FrozenModel):
@@ -41,6 +64,9 @@ class Campaign(FrozenModel):
     created_at: str
     independence: Literal["unestablished"] = "unestablished"
     partition_fingerprint: str
+    partition_assignments: dict[str, Literal["dev", "calibration", "test"]]
+    partition_groups: dict[str, str]
+    partition_test_after: str | None
     population_groups: int
     records: tuple[CampaignRecord, ...]
     fingerprint: str = ""
@@ -84,29 +110,73 @@ def load_campaign(directory: Path) -> Campaign:
     campaign = Campaign.model_validate_json((directory / "manifest.json").read_text(encoding="utf-8"))
     if campaign.fingerprint != campaign.digest():
         raise ValueError("Campaign manifest fingerprint changed")
+    frozen = frozen_partitions(campaign)
+    if frozen.fingerprint != campaign.partition_fingerprint or set(frozen.groups) != set(frozen.assignments):
+        raise ValueError("Campaign partition bindings changed")
     keys = [r.filing_key for r in campaign.records]
     if len(keys) != len(set(keys)):
         raise ValueError("Duplicate campaign filing")
     groups: dict[str, set[str]] = defaultdict(set)
     for record in campaign.records:
+        if (
+            frozen.groups.get(record.filing_key) != record.group
+            or frozen.assignments.get(record.filing_key) != record.partition
+        ):
+            raise ValueError("Campaign record does not match frozen partition bindings")
         groups[record.group].add(record.partition)
     if any(len(parts) != 1 for parts in groups.values()):
         raise ValueError("Campaign group crosses partitions")
     return campaign
 
 
+def frozen_partitions(campaign: Campaign) -> PartitionManifest:
+    return PartitionManifest(
+        assignments=campaign.partition_assignments,
+        groups=campaign.partition_groups,
+        test_after=campaign.partition_test_after,
+    )
+
+
+def current_links(db: Database) -> list[Link]:
+    """Human decisions apply immediately, even before the next project rebuild."""
+    links = {tuple(sorted((link.a, link.b))): link for link in db.links()}
+    for pair, decision in db.current_link_decisions().items():
+        links[pair] = Link(a=pair[0], b=pair[1], verdict=decision.verdict, reasons=("human",))
+    return list(links.values())
+
+
 def check_documents(db: Database, campaign: Campaign) -> dict[str, Filing]:
     records = {f.key: f for f in db.filings()}
+    frozen = frozen_partitions(campaign)
+    current_partitions = build_manifest(
+        records.values(), previous=frozen, projects=db.projects(), links=current_links(db)
+    )
+    for record in campaign.records:
+        expected_members = {key for key, group in frozen.groups.items() if group == record.group}
+        current_group = current_partitions.groups.get(record.filing_key)
+        current_members = {
+            key for key, group in current_partitions.groups.items() if group == current_group and key in records
+        }
+        if current_members != expected_members:
+            raise ValueError("Campaign group membership changed; prepare a new campaign")
+    selected_documents = {d.id for record in campaign.records for d in record.documents}
+    for document in db.documents():
+        if document.id in selected_documents and document.filing_key not in frozen.groups:
+            raise ValueError("Campaign document acquired a new group member; reprocess and prepare a new campaign")
     for record in campaign.records:
         current = db.documents(record.filing_key)
         if record.filing_key not in records or {d.id for d in current} != {d.id for d in record.documents}:
             raise ValueError("Campaign source documents changed; prepare a new campaign")
-        if {(d.id, d.url, d.role.value, d.pages) for d in current} != {
-            (d.id, d.url, d.role, d.pages) for d in record.documents
-        }:
+        if sorted(CampaignDocument.from_record(d).model_dump_json() for d in current) != sorted(
+            d.model_dump_json() for d in record.documents
+        ):
             raise ValueError("Campaign source metadata changed; prepare a new campaign")
         if set(records[record.filing_key].document_ids) != {d.id for d in record.documents}:
             raise ValueError("Filing output is stale for campaign documents")
+        if db.processing_outcome(record.filing_key) != "complete":
+            raise ValueError("Campaign snapshot requires complete, current processing outcomes")
+    if any(db.processing_outcome(key) != "complete" for key in records):
+        raise ValueError("Reprocess current population before validating campaign group independence")
     return records
 
 
@@ -124,10 +194,14 @@ def prepare(
     if directory.exists():
         raise ValueError("Campaign destination already exists; immutable campaigns are never overwritten")
     filings = db.filings()
-    partitions = build_manifest(filings, previous=previous, projects=db.projects(), links=db.links())
+    if set(db.filing_keys_with_documents()) != {f.key for f in filings}:
+        raise ValueError("Process all documents before preparing an annotation campaign")
+    partitions = build_manifest(filings, previous=previous, projects=db.projects(), links=current_links(db))
     by_group: dict[str, list[Filing]] = defaultdict(list)
     strata: dict[str, dict[str, str]] = {}
     for filing in filings:
+        if db.processing_outcome(filing.key) != "complete":
+            raise ValueError("Process all current inputs before preparing an annotation campaign")
         documents = db.documents(filing.key)
         if not documents or set(filing.document_ids) != {d.id for d in documents}:
             raise ValueError("Process all documents before preparing an annotation campaign")
@@ -167,10 +241,7 @@ def prepare(
             filing_key=f.key,
             group=group,
             partition=partitions.assignments[f.key],
-            documents=tuple(
-                CampaignDocument(id=d.id, url=d.url, role=d.role.value, pages=d.pages)
-                for d in sorted(db.documents(f.key), key=lambda d: d.id)
-            ),
+            documents=tuple(CampaignDocument.from_record(d) for d in sorted(db.documents(f.key), key=lambda d: d.id)),
             strata=strata[f.key],
             double_review=group in double,
         )
@@ -180,6 +251,9 @@ def prepare(
     campaign = Campaign(
         created_at=datetime.now(UTC).isoformat(),
         partition_fingerprint=partitions.fingerprint,
+        partition_assignments=partitions.assignments,
+        partition_groups=partitions.groups,
+        partition_test_after=partitions.test_after,
         population_groups=len(by_group),
         records=records,
     )
