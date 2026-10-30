@@ -119,6 +119,9 @@ session reste `unmeasured`, avec durée totale inconnue. Un fichier différent s
 
 ## État réel au 30 octobre 2026
 
+Le paragraphe historique suivant décrit la première session. La [reprise avec collecte réelle](resultats-pilote-cloud-20261030.md)
+donne l'état de la nouvelle configuration et du corpus ; elle n'apporte aucune annotation humaine indépendante.
+
 L’environnement actif n’autorise que GitHub et les gestionnaires de paquets. Les destinations
 administratives et le moteur public restent absents de la politique appliquée. Aucune collecte
 réelle ni qualification de territoire n’a donc été exécutée pour ce pilote. Aucun inventaire

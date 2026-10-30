@@ -1,5 +1,9 @@
 # Validation du profil cloud ponctuel — 30 octobre 2026
 
+Ce rapport conserve la validation de préparation sur l'ancienne configuration réseau.
+La [reprise sur la nouvelle instance et les résultats réels](resultats-pilote-cloud-20261030.md)
+sont consignés séparément, sans réutiliser ses identifiants d'instance ni ses données privées.
+
 Le [guide d'exploitation](pilote-cloud.md) contient les commandes exactes, chemins, limites et
 prérequis. La [demande préparée](../.codex/cloud-pilot.request.json) reste un fichier documentaire :
 **aucun brouillon plateforme n'a été enregistré, aucune modification réseau n'a été appliquée**.

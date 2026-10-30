@@ -1,0 +1,612 @@
+{
+  "documents_unique": 212,
+  "document_attachments": 212,
+  "documents_by_format": {
+    "html": 102,
+    "pdf": 110
+  },
+  "documents_by_source": {
+    "dreal_case_by_case": 199,
+    "mrae_opinion": 13
+  },
+  "documents_by_role": {
+    "form": 109,
+    "opinion": 13,
+    "decision": 90
+  },
+  "filings": 91,
+  "filings_with_machine": 91,
+  "filings_by_source": {
+    "dreal_case_by_case": 78,
+    "mrae_opinion": 13
+  },
+  "filings_by_region": {
+    "hauts-de-france": 91
+  },
+  "filings_by_department": {
+    "80": 15,
+    "02": 27,
+    "62": 15,
+    "59": 16,
+    "null": 9,
+    "60": 9
+  },
+  "classification_methods": {
+    "rules": 91
+  },
+  "categories": {
+    "other": 49,
+    "unclassified": 41,
+    "needs_review": 1
+  },
+  "projects": 0,
+  "pdf_pages": 1119,
+  "pdf_scanned_pages_at_ingestion": 263,
+  "pdfs_with_scans": 32,
+  "blob_files": 212,
+  "blob_bytes": 169422248,
+  "acroform_first_pass_cache_counts": {
+    "documents_with_field_names": 65,
+    "documents_with_filled_fields": 35,
+    "filled_fields": 3558
+  },
+  "dossier_scan_states": {
+    "complete": 111
+  },
+  "dossier_edge_states_excluding_initial_bad_group": {
+    "document": 207
+  },
+  "current_read_states": {
+    "blocked": 112,
+    "complete": 99,
+    "failed": 1
+  },
+  "physical_requests": 274,
+  "task_elapsed_s": 2096.69864153862,
+  "task_attempts": 229,
+  "read_results_count": 211,
+  "pdf_reading_totals": {
+    "deepening_pages": 1018,
+    "format_errors": 0,
+    "ocr_attempts": 245,
+    "ocr_cache_pages": 0,
+    "ocr_errors": 14,
+    "ocr_native_pages": 245,
+    "ocr_pages": 231,
+    "ocr_requested_pages": 245,
+    "pages": 1091,
+    "table_errors": 73,
+    "table_pages_attempted": 1018,
+    "table_rows": 3835,
+    "tables": 716,
+    "text_pages": 846,
+    "uncertain_segments": 0,
+    "unread_pages": 14,
+    "useful_unread_pages": 0
+  },
+  "evidence_count": 623,
+  "evidence_locator_prefixes": {
+    "paragraph": 48,
+    "field": 375,
+    "title": 32,
+    "clause": 131,
+    "text": 17,
+    "article": 20
+  },
+  "non_null_machine_values_by_field": {
+    "department": 82,
+    "commune": 57,
+    "filed_on": 61,
+    "review_decision": 45,
+    "developer": 59,
+    "power_mw": 18,
+    "power_mw_min": 18,
+    "siret": 33,
+    "energy_mwh": 7,
+    "substation": 5
+  },
+  "abstentions_by_field": {
+    "developer": 32,
+    "siret": 58,
+    "commune": 34,
+    "power_mw": 73,
+    "power_mw_min": 73,
+    "energy_mwh": 84,
+    "substation": 86,
+    "filed_on": 30,
+    "department": 9
+  },
+  "flags": {
+    "unread_scan": 7,
+    "audit_sample": 83,
+    "reading_incomplete": 113,
+    "category_undecided": 42,
+    "rescued_by_text": 34,
+    "quantity_context_review": 6,
+    "disagreement": 3,
+    "ocr_noisy": 2,
+    "check_alert": 2,
+    "quote_not_found": 2
+  },
+  "human_corrections": 0,
+  "gold_files": [],
+  "independent_classifier_configured": false,
+  "human_quality": "unmeasured",
+  "detection_quality": "not_evaluated",
+  "pilot_collection_date": "2026-10-30",
+  "report_generated_at_paris": "2026-10-31T00:15:10.614922+01:00",
+  "base_commit": "330c0ed",
+  "image_id": "sha256:83130f968d6a4c421ff8adb6b4f551998ab34adadffdc619b887948790811355",
+  "source_code_commit": "9417d2681861c79c85b014d52fad2a9ef643d37c",
+  "source_tree": {
+    "source_files": 156,
+    "source_tree_sha256": "1bdda5024543a9422b9a024b8986eef046933c6a2e390c08c856f29bb38b2f22",
+    "image_matches_checkout": true
+  },
+  "network": {
+    "custom_required_hosts": 9,
+    "custom_hosts_allowed": 9,
+    "state": "enforced",
+    "observations_current": true,
+    "spec_revision": "1",
+    "observed_spec_revision": "1",
+    "physical_requests_metered_by_tasks": 274,
+    "source_suspensions": 0,
+    "additional_catalog_pages_read": 3,
+    "catalog_physical_attempts_not_instrumented": true,
+    "proxy_bypass": false
+  },
+  "source_coverage": [
+    {
+      "source": "dreal",
+      "period": "2026",
+      "mode": "recent",
+      "state": "partial",
+      "pages": 0,
+      "next_offset": 0,
+      "reason": "item_budget"
+    },
+    {
+      "source": "mrae",
+      "period": "2026",
+      "mode": "annual",
+      "state": "complete",
+      "pages": 1,
+      "next_offset": 0,
+      "reason": null
+    },
+    {
+      "source": "dreal",
+      "period": "2026",
+      "mode": "historical",
+      "state": "complete",
+      "pages": 33,
+      "next_offset": 264,
+      "reason": null
+    },
+    {
+      "source": "dreal",
+      "period": "2025",
+      "mode": "historical",
+      "state": "partial",
+      "pages": 18,
+      "next_offset": 144,
+      "reason": "page_budget"
+    }
+  ],
+  "corpus_exclusions": {
+    "known_wrong_navigation_documents": 4,
+    "excluded_filings": 1,
+    "excluded_whole_groups": 1
+  },
+  "human_campaign": {
+    "documents": 206,
+    "formats": {
+      "pdf": 109,
+      "html": 97
+    },
+    "population_groups": 85,
+    "selected_groups": 84,
+    "filings": 90,
+    "double_review_groups": 84,
+    "independence": "unestablished",
+    "status": "awaiting_human_review",
+    "quality_measured": false,
+    "blank_packets": {
+      "reviewer-a.jsonl": {
+        "records": 90,
+        "verified": 0,
+        "assigned_reviewers": 0,
+        "statuses": {
+          "unreviewed": 1196
+        }
+      },
+      "reviewer-b.jsonl": {
+        "records": 90,
+        "verified": 0,
+        "assigned_reviewers": 0,
+        "statuses": {
+          "unreviewed": 1196
+        }
+      }
+    },
+    "effort": "unmeasured",
+    "independent_inventory": "not_supplied"
+  },
+  "evaluation": {
+    "exit_code": 0,
+    "gate": {
+      "status": "failed",
+      "failures": [
+        "execution_reconstruction_failures",
+        "independent_field_samples_missing",
+        "independent_screening_targets_missing",
+        "independent_stored_classification_samples_missing",
+        "invalid_evidence",
+        "privacy_leaks",
+        "required_field_missing:commune",
+        "required_field_missing:developer",
+        "required_field_missing:filed_on",
+        "required_field_missing:power_mw",
+        "required_field_missing:review_decision",
+        "required_metric_unavailable:screening.recall",
+        "required_metric_unavailable:stored_classification.accuracy",
+        "stored_classification_accuracy_below_threshold",
+        "verified_classification_samples_missing"
+      ],
+      "comparison": {
+        "regressions": [],
+        "improvements": []
+      },
+      "min_samples": 30,
+      "profile": {
+        "min_samples": 30,
+        "required_fields": [
+          "developer",
+          "commune",
+          "power_mw",
+          "filed_on",
+          "review_decision"
+        ],
+        "min_accuracy": 0.95,
+        "min_screening_recall": 0.95
+      }
+    },
+    "privacy_alerts": 2,
+    "privacy_affected_filings": 1,
+    "integrity": {
+      "quote_not_found": 2
+    },
+    "gold": {
+      "labels": 0,
+      "labels_verified": 0,
+      "fields": 0,
+      "fields_verified": 0,
+      "reviewed_filings": 0
+    },
+    "independent_classification_n": 0,
+    "robustness": {
+      "stable_share": 0.9907,
+      "by_perturbation": {
+        "line_breaks": "306/306",
+        "double_spaces": "306/306",
+        "apostrophes": "306/306",
+        "no_accents": "306/311",
+        "uppercase": "293/307",
+        "nbsp_numbers": "306/306",
+        "hyphenation": "305/306"
+      },
+      "by_field": {
+        "developer": 3,
+        "substation": 1,
+        "commune": 14,
+        "filed_on": 2
+      }
+    },
+    "approved_baseline_created": false,
+    "robustness_is_metamorphic_not_business_accuracy": true,
+    "reader_timeout_s": 60,
+    "first_evaluation_at_30s": "PrivacyAuditIncompleteError"
+  },
+  "direct_evidence_gaps_by_field": {
+    "department": 28
+  },
+  "reader_limits": {
+    "cpus": 2,
+    "ram_bytes": 2147483648,
+    "swap_bytes": 0,
+    "pids": 128,
+    "http_file_bytes": 33554432,
+    "pdf_pages": 300,
+    "pdf_timeout_initial_s": 30,
+    "pdf_timeout_rescue_and_evaluation_s": 60,
+    "ocr_pages": 50,
+    "ocr_pixels": 20000000,
+    "ocr_timeout_s": 60,
+    "table_pages": 20
+  },
+  "cache": {
+    "file_bytes": 3579904,
+    "namespaces": [
+      {
+        "namespace": "ocr",
+        "entries": 32,
+        "serialized_characters": 311461
+      },
+      {
+        "namespace": "pdf",
+        "entries": 423,
+        "serialized_characters": 2658190
+      }
+    ],
+    "first_pass_initially_empty": true,
+    "first_pass_cache_snapshot_preserved": true
+  },
+  "runtime_metrics": [
+    {
+      "phase": "collection",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 273.812,
+      "sampled_memory_peak_bytes": 185929728,
+      "samples": 26,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "collection",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 73.698,
+      "sampled_memory_peak_bytes": 149344256,
+      "samples": 7,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "collection",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 456.162,
+      "sampled_memory_peak_bytes": 240730112,
+      "samples": 45,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "collection",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 539.337,
+      "sampled_memory_peak_bytes": 233431040,
+      "samples": 53,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "local_tasks",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "75"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 102.161,
+      "sampled_memory_peak_bytes": 271454208,
+      "samples": 10,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "local_tasks",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "75"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 342.618,
+      "sampled_memory_peak_bytes": 303681536,
+      "samples": 33,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "local_tasks",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "100"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 316.507,
+      "sampled_memory_peak_bytes": 1427533824,
+      "samples": 31,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "local_tasks",
+      "command": [
+        "radar",
+        "tasks",
+        "run",
+        "--max-tasks",
+        "100"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 8.018,
+      "sampled_memory_peak_bytes": null,
+      "samples": 0,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "extraction",
+      "command": [
+        "radar",
+        "run"
+      ],
+      "exit_code": 2,
+      "wall_seconds": 49.469,
+      "sampled_memory_peak_bytes": 1448574976,
+      "samples": 4,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "extraction",
+      "command": [
+        "env",
+        "RADAR_EVALUATION_CAMPAIGN=cloud-pilot-observed-20261030",
+        "RADAR_PDF_TIMEOUT_S=60",
+        "radar",
+        "run",
+        "--only",
+        "dreal_case_by_case:hauts-de-france:2025-8575"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 98.043,
+      "sampled_memory_peak_bytes": 1770926080,
+      "samples": 9,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "evaluation",
+      "command": [
+        "env",
+        "RADAR_EVALUATION_CAMPAIGN=cloud-pilot-observed-20261030",
+        "radar",
+        "eval"
+      ],
+      "exit_code": 2,
+      "wall_seconds": 38.359,
+      "sampled_memory_peak_bytes": 1251217408,
+      "samples": 3,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "evaluation",
+      "command": [
+        "env",
+        "RADAR_EVALUATION_CAMPAIGN=cloud-pilot-observed-20261030",
+        "RADAR_PDF_TIMEOUT_S=60",
+        "radar",
+        "eval"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 175.81,
+      "sampled_memory_peak_bytes": 290869248,
+      "samples": 17,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "backup_restore",
+      "command": [
+        "radar",
+        "backup",
+        "--out",
+        "/backups",
+        "--keep",
+        "3"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 9.022,
+      "sampled_memory_peak_bytes": null,
+      "samples": 0,
+      "sampling_period_seconds": 10
+    },
+    {
+      "phase": "backup_restore",
+      "command": [
+        "radar",
+        "restore",
+        "/backups/watt-snapshot-20261030T230601242299Z-2ed3c0d2877d",
+        "--to",
+        "/restores/recovery"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 8.012,
+      "sampled_memory_peak_bytes": null,
+      "samples": 0,
+      "sampling_period_seconds": 10
+    }
+  ],
+  "sampling_caveat": "Memory peaks are cgroup observations sampled every 10 seconds; final unsampled intervals are not certified.",
+  "backup_restore": {
+    "integrity_check": "ok",
+    "all_user_tables_equal": true,
+    "user_tables": 32,
+    "original_blob_hashes_equal": 212,
+    "task_rows": 1073,
+    "attempt_rows": 229,
+    "dependency_rows": 1575,
+    "cross_instance_restore_tested": false
+  },
+  "persistence": {
+    "cross_instance_survival_verified": false,
+    "off_instance_backup_configured": false,
+    "local_snapshot_verified": true
+  },
+  "private_context_archive": {
+    "final_reading_cache_rows": 455,
+    "cache_restore_equal": true,
+    "cross_instance": false,
+    "context_archive_bytes": 1351680,
+    "context_archive_sha256": "1941246b33d0193e8d885db7cc71062d056904c3bff5eb5c9184b79f535d8887",
+    "private_metadata_and_secret_included": true,
+    "off_instance_copy": false
+  },
+  "capacity_after_restore": {
+    "pilot_bytes": 562820871,
+    "free_bytes": 24792662016,
+    "monitored_max_bytes": 6442450944,
+    "minimum_free_bytes": 6442450944,
+    "hard_filesystem_quota": false
+  },
+  "tests": {
+    "passed": 650,
+    "skipped": 1,
+    "ruff_format": "passed",
+    "ruff_check": "passed",
+    "mypy": "passed"
+  },
+  "paid_model_calls": 0,
+  "ai_budgets_usd": {
+    "daily": 0,
+    "campaign": 0,
+    "filing": 0
+  },
+  "limitations": [
+    "Hauts-de-France only",
+    "DREAL 2025 partial; prefectures and older archive not collected",
+    "HTML counts are dossier pages, not additional PDFs",
+    "DOCX/XLSX/ZIP not encountered",
+    "No human truth, no independent inventory, no independent classifier",
+    "No WER/CER or business accuracy measured",
+    "Original read tasks retain their incomplete and failed states; one 60-second rescue does not erase them",
+    "Application cache is excluded from the application snapshot; the first-pass reading cache is separately preserved",
+    "Backup and restore tested on this instance only"
+  ]
+}

@@ -1,10 +1,15 @@
 # Pilote ponctuel entièrement cloud
 
+La [reprise avec collecte réelle du 30 octobre 2026](resultats-pilote-cloud-20261030.md)
+actualise les constats de disponibilité ci-dessous. Les refus réseau décrits dans la préparation
+concernent l'ancienne version de configuration ; ils ne décrivent pas la nouvelle instance.
+Les limites de persistance et les conditions d'évaluation restent à distinguer des accès rétablis.
+
 Ce profil prépare des lots reprenables de quelques centaines de pièces, avec leurs dossiers complets.
 Il ne lance ni collecte complète, ni service permanent, ni appel payant pendant l'installation.
 Le test d'endurance reste un chantier distinct.
 
-## État livré et limites de la plateforme
+## État de la préparation initiale et limites de la plateforme
 
 Les outils `cloud_environment.environment_status`, `environment_diagnostics` et
 `read_environment_diagnostic` lisent l'instance courante. La session de validation du 30 octobre 2026
