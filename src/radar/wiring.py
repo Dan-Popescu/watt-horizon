@@ -33,6 +33,7 @@ from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
 from radar.store.db import Database
 from radar.store.llm_jobs import BudgetLimits, TokenPricing
+from radar.store.network import NetworkGate
 from radar.validation.lookups import ApiLookups, CompositeLookups, JsonCache, ReferenceCommunes
 
 
@@ -44,6 +45,7 @@ def make_http(settings: Settings) -> PoliteHttp | None:
             settings.user_agent,
             max_response_bytes=settings.http_max_bytes,
             max_response_seconds=settings.http_deadline_s,
+            request_gate=NetworkGate(settings.data_dir).admit,
         )
     )
 

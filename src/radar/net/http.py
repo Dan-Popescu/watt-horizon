@@ -11,7 +11,7 @@ import time
 import urllib.parse
 import zlib
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +44,7 @@ class RequestBudget:
     limit: int
     requests: int = 0
     on_request: Callable[[], None] | None = None
+    before_send: Callable[[], None] | None = None
 
 
 class _RetryResponseError(Exception):
@@ -63,6 +64,7 @@ class PoliteHttp:
         max_response_bytes: int = 32 * 1024 * 1024,
         max_response_seconds: float = 60.0,
         global_interval_s: float = 0.0,
+        request_gate: Callable[[float], AbstractContextManager[Callable[[], None]]] | None = None,
     ) -> None:
         if (
             max_response_bytes <= 0
@@ -96,10 +98,15 @@ class PoliteHttp:
         self._last_request: dict[str, float] = {}
         self.blocked_hosts: set[str] = set()
         self._request_budgets: list[RequestBudget] = []
+        self.request_gate = request_gate
 
     @contextmanager
     def request_budget(
-        self, max_requests: int, *, on_request: Callable[[], None] | None = None
+        self,
+        max_requests: int,
+        *,
+        on_request: Callable[[], None] | None = None,
+        before_send: Callable[[], None] | None = None,
     ) -> Iterator[RequestBudget]:
         """Nestable admission on physical attempts, including redirects and retries.
 
@@ -109,7 +116,7 @@ class PoliteHttp:
         """
         if max_requests < 0:
             raise ValueError("HTTP request budget cannot be negative")
-        budget = RequestBudget(max_requests, on_request=on_request)
+        budget = RequestBudget(max_requests, on_request=on_request, before_send=before_send)
         self._request_budgets.append(budget)
         try:
             yield budget
@@ -125,6 +132,11 @@ class PoliteHttp:
             if budget.on_request:
                 budget.on_request()
             budget.requests += 1
+
+    def _before_send(self) -> None:
+        for budget in self._request_budgets:
+            if budget.before_send:
+                budget.before_send()
 
     def close(self) -> None:
         self._client.close()
@@ -231,22 +243,32 @@ class PoliteHttp:
             host = urllib.parse.urlparse(current).netloc
             if host in self.blocked_hosts:
                 raise SiteBlockedError(host, "already blocked in this run")
-            self._pace(host, interval, deadline, current)
-            timeout = min(self.timeout_s, self._remaining(deadline, current))
-            self._admit_request()
             try:
-                with self._client.stream("GET", current, timeout=timeout) as response:
-                    self._remaining(deadline, current)
-                    if response.status_code in (403, 429):
-                        self.blocked_hosts.add(host)
-                        raise SiteBlockedError(host, f"HTTP {response.status_code}")
-                    if response.has_redirect_location:
-                        current = str(response.url.join(response.headers["Location"]))
-                        continue
-                    if response.status_code >= 500 and retry_server_error:
-                        raise _RetryResponseError
-                    response.raise_for_status()
-                    return self._body(response, deadline)
+                self._pace(host, interval, deadline, current)
+                self._admit_request()
+                gate = (
+                    self.request_gate(self._remaining(deadline, current))
+                    if self.request_gate
+                    else nullcontext(lambda: None)
+                )
+                with gate as reserve_send:
+                    self._before_send()
+                    reserve_send()
+                    timeout = min(self.timeout_s, self._remaining(deadline, current))
+                    with self._client.stream("GET", current, timeout=timeout) as response:
+                        self._remaining(deadline, current)
+                        if response.status_code in (403, 429):
+                            self.blocked_hosts.add(host)
+                            raise SiteBlockedError(host, f"HTTP {response.status_code}")
+                        if response.has_redirect_location:
+                            current = str(response.url.join(response.headers["Location"]))
+                            continue
+                        if response.status_code >= 500 and retry_server_error:
+                            raise _RetryResponseError
+                        response.raise_for_status()
+                        return self._body(response, deadline)
+            except TimeoutError as exc:
+                raise ResponseDeadlineError(str(exc), request=httpx.Request("GET", current)) from exc
             except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as exc:
                 self.blocked_hosts.add(host)
                 raise SiteBlockedError(host, f"connection closed ({type(exc).__name__})") from exc

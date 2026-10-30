@@ -75,3 +75,8 @@ la conservation du dernier doublon et des raisons, l'absence d'appel à `Databas
 le nettoyage de l'index temporaire, la publication atomique et une régression mémoire sur 124 750 liens complets.
 Les tests de snapshots contrôlent lecture sans recalcul, absence, date et périmètre, mutation des entrées,
 expiration, changement concurrent et erreur de calcul. Les tests web utilisent le snapshot explicitement préparé.
+
+Trois contrôles supplémentaires sur le schéma final 21 conservent le même SHA-256, les 499 500 liens et
+le projet unique : RSS de 41,344 à 41,355 Mio, durée de 5,210 à 5,619 s. Ils sont conservés séparément
+dans `final_schema21` du fichier de mesures ; les trois premiers essais après modification portaient
+sur le schéma 20. Aucun résultat antérieur n'a été remplacé.

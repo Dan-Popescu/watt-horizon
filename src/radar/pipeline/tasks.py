@@ -232,6 +232,10 @@ class TaskWorker:
                 raise TaskDeadlineError("Persistent HTTP pacing would exceed the task lease")
             self.sleep(delay)
 
+    def _check_send(self, lease: TaskLease) -> None:
+        with locked(self.db):
+            self.store.check(lease, now=self.clock())
+
     def run_one(self) -> dict[str, Any] | None:
         with locked(self.db):
             lease = self.store.claim(self.worker, now=self.clock(), offline=self.offline)
@@ -252,7 +256,11 @@ class TaskWorker:
                     self.http.max_response_seconds = min(previous_seconds, max(0.001, lease.until - self.clock()))
                     with (
                         computation_deadline(lease.until - self.clock()),
-                        self.http.request_budget(remaining, on_request=lambda: self._request(lease)),
+                        self.http.request_budget(
+                            remaining,
+                            on_request=lambda: self._request(lease),
+                            before_send=lambda: self._check_send(lease),
+                        ),
                     ):
                         prepared = self.handlers[lease.spec.kind](lease)
                 finally:

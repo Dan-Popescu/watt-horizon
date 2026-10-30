@@ -78,5 +78,61 @@
     "Fresh disposable SQLite dataset in an isolated interpreter for every measurement.",
     "Synthetic scenario establishes neither business quality nor production capacity.",
     "No relation or project is truncated; counts and SHA-256 of canonical stored link JSON are checked."
+  ],
+  "final_schema21": [
+    {
+      "measured_at": "2026-10-30T19:23:58.677634+00:00",
+      "schema_version": 21,
+      "benchmark_sha256": "6f65957c7c61e2f911c4f0f8350ed259e9ca4eafc247617314d4d2dcd73dcd20",
+      "source_sha256": {
+        "src/radar/linking/linker.py": "abef419d5b39fe395e571198911de11e412570bc13504a7d731879f6ee50aa1d",
+        "src/radar/pipeline/linking_state.py": "f5711a920ed1b24968bf8e33b4bc6c62c28e3896615b264479c84f3d328b8462",
+        "src/radar/pipeline/projects.py": "ccb60ecac99d61e48d5702c839fe6088453d46b486ef092139436e1ef009f29d",
+        "src/radar/store/link_stream.py": "9c39ec30e0ecbcfeeeed08cfe37079e7e9a15f513ff3fbf040e33b2e4920b524"
+      },
+      "records": 1000,
+      "links": 499500,
+      "projects": 1,
+      "sha256": "4a18abd6f1d8bfa75b6581a3d297d80367885a5001e90537f98874a5a4f64906",
+      "elapsed_s": 5.6190728490000765,
+      "peak_rss_mib": 41.34375,
+      "synthetic": true
+    },
+    {
+      "measured_at": "2026-10-30T19:24:04.116999+00:00",
+      "schema_version": 21,
+      "benchmark_sha256": "6f65957c7c61e2f911c4f0f8350ed259e9ca4eafc247617314d4d2dcd73dcd20",
+      "source_sha256": {
+        "src/radar/linking/linker.py": "abef419d5b39fe395e571198911de11e412570bc13504a7d731879f6ee50aa1d",
+        "src/radar/pipeline/linking_state.py": "f5711a920ed1b24968bf8e33b4bc6c62c28e3896615b264479c84f3d328b8462",
+        "src/radar/pipeline/projects.py": "ccb60ecac99d61e48d5702c839fe6088453d46b486ef092139436e1ef009f29d",
+        "src/radar/store/link_stream.py": "9c39ec30e0ecbcfeeeed08cfe37079e7e9a15f513ff3fbf040e33b2e4920b524"
+      },
+      "records": 1000,
+      "links": 499500,
+      "projects": 1,
+      "sha256": "4a18abd6f1d8bfa75b6581a3d297d80367885a5001e90537f98874a5a4f64906",
+      "elapsed_s": 5.2095531010002105,
+      "peak_rss_mib": 41.3515625,
+      "synthetic": true
+    },
+    {
+      "measured_at": "2026-10-30T19:24:09.562324+00:00",
+      "schema_version": 21,
+      "benchmark_sha256": "6f65957c7c61e2f911c4f0f8350ed259e9ca4eafc247617314d4d2dcd73dcd20",
+      "source_sha256": {
+        "src/radar/linking/linker.py": "abef419d5b39fe395e571198911de11e412570bc13504a7d731879f6ee50aa1d",
+        "src/radar/pipeline/linking_state.py": "f5711a920ed1b24968bf8e33b4bc6c62c28e3896615b264479c84f3d328b8462",
+        "src/radar/pipeline/projects.py": "ccb60ecac99d61e48d5702c839fe6088453d46b486ef092139436e1ef009f29d",
+        "src/radar/store/link_stream.py": "9c39ec30e0ecbcfeeeed08cfe37079e7e9a15f513ff3fbf040e33b2e4920b524"
+      },
+      "records": 1000,
+      "links": 499500,
+      "projects": 1,
+      "sha256": "4a18abd6f1d8bfa75b6581a3d297d80367885a5001e90537f98874a5a4f64906",
+      "elapsed_s": 5.219464171000027,
+      "peak_rss_mib": 41.35546875,
+      "synthetic": true
+    }
   ]
 }

@@ -82,6 +82,13 @@ Une collecte terminée prépare les tâches locales pour ses nouvelles pièces.
 Toutes les requêtes utilisent `PoliteHttp`. Les tâches réseau sont admises une à la fois, même avec plusieurs
 workers et clients, pour conserver la sérialisation des sources. Un espacement global conservateur de cinq
 secondes est réservé durablement avant chaque tentative ; l’attente reste hors verrou et survit aux redémarrages.
+Les commandes historiques `collect`/`update`, les lookups et les workers créés par `make_http` partagent aussi
+une admission physique : un verrou SQLite dédié reste acquis jusqu’à la fin du corps HTTP. La date de départ
+est validée dans une autre base avant l’envoi ; un crash libère le verrou sans annuler la cadence réservée.
+Ces fichiers `network-lock.sqlite` et `network-admission.sqlite` sont séparés de la base applicative et du
+verrou de publication. Les attentes locales et de budget précèdent cette admission ; le fencing est revérifié
+après l’attente et immédiatement avant l’envoi. Une collecte historique ne peut donc pas doubler un worker
+sur le même hôte, même si leurs clients HTTP et processus sont distincts.
 Le budget compte les tentatives physiques, redirections et reprises
 comprises, avant l’envoi, dans SQLite. Les plafonds d’octets et de délai du transport sont resserrés au budget
 du travail. Un blocage ferme durablement cette source et suspend ses autres tâches, y compris les workers
