@@ -126,6 +126,53 @@ def build_app(
             raise ValueError("Page hors du document.")
         return document_id, page
 
+    def segments(request: Request) -> Response:
+        try:
+            record = session.record(request.query_params.get("filing_key", ""))
+            document_id = request.path_params["document_id"]
+            if not any(item.id == document_id for item in record.documents):
+                raise KeyError("Cette pièce n'appartient pas au dossier attribué.")
+            offset = int(request.query_params.get("offset", "0"))
+            if offset < 0:
+                raise ValueError("Position de lecture invalide.")
+            content = read(document_id, raw(document_id))
+            scrubber = PersonScrubber.for_filing([content.fields], [])
+            selected = content.segments[offset : offset + 200]
+            rows: list[dict[str, Any]] = []
+            characters = 0
+            for segment in selected:
+                values = {
+                    "locator": segment.locator,
+                    "text": scrubber.scrub(segment.text) or "",
+                    "header": scrubber.scrub(segment.header) or "",
+                    "context": scrubber.scrub(segment.context) or "",
+                    "uncertain": segment.uncertain,
+                    "reason": segment.reason,
+                }
+                size = sum(len(value) for value in values.values() if isinstance(value, str))
+                if rows and characters + size > 50_000:
+                    break
+                if size > 50_000:
+                    values["text"] = str(values["text"])[:20_000]
+                    values["context"] = str(values["context"])[:20_000]
+                    values["header"] = str(values["header"])[:5000]
+                    values["preview_truncated"] = True
+                rows.append(values)
+                characters += size
+            next_offset = offset + len(rows)
+            return JSONResponse(
+                {
+                    "format": content.format,
+                    "segments": rows,
+                    "errors": content.format_errors,
+                    "next_offset": next_offset if next_offset < len(content.segments) else None,
+                    "total_segments": len(content.segments),
+                },
+                headers=NO_STORE,
+            )
+        except (ValueError, KeyError, OSError) as exc:
+            return error(exc)
+
     def error(exc: Exception) -> JSONResponse:
         status = 409 if isinstance(exc, ReviewConflictError) else 404 if isinstance(exc, KeyError) else 400
         return JSONResponse({"error": str(exc)}, status, headers=NO_STORE)
@@ -225,6 +272,7 @@ def build_app(
             Route("/api/save", save, methods=["POST"]),
             Route("/api/documents/{document_id}/pages/{page:int}.png", image),
             Route("/api/documents/{document_id}/pages/{page:int}/text", text),
+            Route("/api/documents/{document_id}/segments", segments),
         ],
         middleware=[
             Middleware(

@@ -57,6 +57,8 @@ async function showPage(){
   $('reviewed').checked=current.annotation.reviewed_documents.includes(document.id);
   $('reviewed').disabled=!editable();$('prev').disabled=page<=1;$('next').disabled=page>=document.pages;
   $('image').removeAttribute('src');$('source-text').textContent='';$('source-fields').textContent='';
+  if(!document.pages){await showSegments(document,key,sequence);return}
+  $('image').hidden=false;
   const suffix='?filing_key='+encodeURIComponent(key),prefix='/api/documents/'+encodeURIComponent(document.id)+'/pages/'+page;
   const [image,text]=await Promise.all([request(prefix+'.png'+suffix).then(r=>r.blob()),json(prefix+'/text'+suffix)]);
   if(sequence!==requestNumber||current.annotation.filing_key!==key)return;
@@ -66,12 +68,31 @@ async function showPage(){
   $('source-fields').textContent=[...Object.entries(text.fields).map(([name,value])=>name+' : '+value),...(text.tables||[]).map(cell=>cell.locator+' : '+cell.text)].join('\n');
   $('read-warning').textContent=(text.unread?'Lecture automatique incomplète : examinez l’image, puis conservez « inconnu » si nécessaire.':'')+(text.truncated?' Texte de copie abrégé ; l’image source reste la référence.':'')+(text.table_incomplete?' Reconnaissance des tableaux incomplète.':'');
 }
+async function showSegments(document,key,sequence){
+  document.segment_offsets ||= [0];
+  const offset=document.segment_offsets[page-1]||0;
+  const result=await json('/api/documents/'+encodeURIComponent(document.id)+'/segments?filing_key='+encodeURIComponent(key)+'&offset='+offset);
+  if(sequence!==requestNumber||current.annotation.filing_key!==key)return;
+  if(result.next_offset!==null)document.segment_offsets[page]=result.next_offset;
+  $('image').hidden=true;$('page').value=page;$('page').max=document.segment_offsets.length;
+  $('pages').textContent='· bloc de lecture '+page+' · '+result.format;
+  $('prev').disabled=page<=1;$('next').disabled=result.next_offset===null;
+  $('source-text').textContent=result.segments.map(segment=>segment.locator+'\n'+segment.text+(segment.uncertain?'\nLecture incertaine : '+segment.reason:'')).join('\n\n');
+  $('source-fields').textContent=result.segments.filter(segment=>segment.header||segment.context).map(segment=>segment.locator+' · en-tête : '+segment.header+' · ligne : '+segment.context).join('\n');
+  $('read-warning').textContent=[...result.errors,...(result.segments.some(segment=>segment.preview_truncated)?['Aperçu abrégé : consulter la pièce originale.']:[])].join(' · ');
+}
+function normalizeStructuredCitations(){
+  for(const observation of [...Object.values(current.annotation.fields),...Object.values(current.annotation.document_relevance)]){
+    const evidence=observation.evidence;
+    if(evidence&&current.documents.some(document=>document.id===evidence.document_id&&!document.pages))evidence.page=null;
+  }
+}
 async function save(finalize){if(!editable())return;if(finalize&&!$('attest').checked)throw new Error('Confirmez l’examen des pièces avant validation.');$('save').disabled=true;$('finalize').disabled=true;$('editor').inert=true;$('queue').inert=true;try{current=await json('/api/save',{method:'POST',headers:{'Content-Type':'application/json','X-Campaign-Review':'1'},body:JSON.stringify({revision:current.revision,annotation:current.annotation,finalize,duration_s:duration()})});dirty=false;activeSeconds=0;activeStart=performance.now();renderEditors();$('reviewed').disabled=!editable();await loadQueue();message(finalize?'Fiche validée. Son état reste figé dans le journal privé.':'Brouillon enregistré.','good')}finally{$('editor').inert=false;$('queue').inert=false;$('save').disabled=!editable();$('finalize').disabled=!editable()}}
 $('doc-button').onclick=()=>{$('doc-menu').hidden=!$('doc-menu').hidden;$('doc-button').setAttribute('aria-expanded',String(!$('doc-menu').hidden))};
-$('prev').onclick=()=>{page=Math.max(1,page-1);showPage().catch(e=>message(e.message,'error'))};$('next').onclick=()=>{page=Math.min(doc().pages,page+1);showPage().catch(e=>message(e.message,'error'))};$('page').onchange=()=>{page=Math.max(1,Math.min(doc().pages,Number($('page').value)||1));showPage().catch(e=>message(e.message,'error'))};
+$('prev').onclick=()=>{page=Math.max(1,page-1);showPage().catch(e=>message(e.message,'error'))};$('next').onclick=()=>{page=doc().pages?Math.min(doc().pages,page+1):page+1;showPage().catch(e=>message(e.message,'error'))};$('page').onchange=()=>{page=Math.max(1,Math.min(doc().pages||doc().segment_offsets?.length||1,Number($('page').value)||1));showPage().catch(e=>message(e.message,'error'))};
 $('reviewed').onchange=()=>{if(!editable())return;const ids=new Set(current.annotation.reviewed_documents);$('reviewed').checked?ids.add(doc().id):ids.delete(doc().id);current.annotation.reviewed_documents=[...ids]};
 $('reviewed').addEventListener('change',()=>{dirty=true});$('editor').addEventListener('input',()=>{dirty=true});$('editor').addEventListener('click',event=>{if(event.target.closest('.states button,.use-page'))dirty=true});window.addEventListener('beforeunload',event=>{if(dirty&&editable()){event.preventDefault();event.returnValue=''}});
-$('save').onclick=()=>save(false).catch(e=>message(e.message,'error'));$('finalize').onclick=()=>save(true).catch(e=>message(e.message,'error'));
+$('save').onclick=()=>{normalizeStructuredCitations();save(false).catch(e=>message(e.message,'error'))};$('finalize').onclick=()=>{normalizeStructuredCitations();save(true).catch(e=>message(e.message,'error'))};
 $('login').onsubmit=event=>{event.preventDefault();token=$('token').value;$('token').value='';$('login').hidden=true;loadQueue().catch(e=>message(e.message,'error'))};
 loadQueue().catch(e=>message(e.message,'error'));
 </script>

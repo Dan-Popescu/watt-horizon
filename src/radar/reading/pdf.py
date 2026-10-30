@@ -8,12 +8,14 @@ import sys
 import zlib
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property
 
 import pymupdf
 
 from radar.domain.text import squash
+from radar.reading.policy import ReadingPolicy, text_digest
+from radar.reading.segments import DocumentSegment
 from radar.reading.tables import PdfTable, extract_tables
 from radar.reading.workers import run_bounded
 from radar.store.cache import KeyValueCache
@@ -42,12 +44,21 @@ class PdfContent:
     table_errors: dict[int, str] = field(default_factory=dict)
     ocr_attempts: dict[int, tuple[str, ...]] = field(default_factory=dict)
     ocr_work: dict[str, int] = field(default_factory=dict)
+    format: str = "pdf"
+    segments: tuple[DocumentSegment, ...] = ()
+    format_errors: tuple[str, ...] = ()
+    reading_policy: str = ""
+    deepening_reasons: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    useful_unread_pages: tuple[int, ...] = ()
+    initial_ocr_texts: dict[int, str] = field(default_factory=dict)
+    initial_ocr_engines: dict[int, str] = field(default_factory=dict)
 
     @cached_property
     def text(self) -> str:
         """Whole document text (text layer, completed by OCR where available), whitespace-squashed."""
         parts = [self.ocr_texts.get(i + 1) or t for i, t in enumerate(self.page_texts)]
         # Cell text is retained with its row order; no header unit or value is invented.
+        parts.extend(segment.text for segment in self.segments if not segment.uncertain)
         return squash(" ".join(dehyphenate(p) for p in [*parts, *(table.text for table in self.tables)]))
 
     def coverage_summary(self) -> dict[str, int]:
@@ -65,11 +76,31 @@ class PdfContent:
             "ocr_native_pages": self.ocr_work.get("native_pages", 0),
             "ocr_cache_pages": self.ocr_work.get("cache_pages", 0),
             "ocr_requested_pages": self.ocr_work.get("requested_pages", 0),
+            "useful_unread_pages": len(self.useful_unread_pages),
+            "deepening_pages": len(self.table_pages),
+            "format_errors": len(self.format_errors),
+            "uncertain_segments": sum(segment.uncertain for segment in self.segments),
+        }
+
+    def diagnostics(self) -> dict[str, object]:
+        """Private reconstruction pointers and counters; raw first-pass text stays in the reading caches."""
+        return {
+            "policy": self.reading_policy,
+            "format": self.format,
+            "first_pass": {str(page): text_digest(text) for page, text in enumerate(self.page_texts, 1)},
+            "initial_ocr": {str(page): text_digest(text) for page, text in self.initial_ocr_texts.items()},
+            "initial_ocr_engines": dict(self.initial_ocr_engines),
+            "deepening_reasons": {str(page): list(reasons) for page, reasons in self.deepening_reasons.items()},
+            "useful_unread_pages": list(self.useful_unread_pages),
+            "coverage": self.coverage_summary(),
         }
 
     @property
     def read_by(self) -> str:
         """Provenance summary: "text", or e.g. "text + transcript (p1) + tesseract-5.5.0:fra@300dpi (p2-3)"."""
+        if self.format != "pdf":
+            suffix = " + incomplete" if self.format_errors or any(s.uncertain for s in self.segments) else ""
+            return self.format + suffix
         by_engine: dict[str, list[int]] = {}
         for page, label in sorted(self.ocr_engines.items()):
             by_engine.setdefault(label, []).append(page)
@@ -83,6 +114,8 @@ class PdfContent:
             parts.append(f"OCR review (p{_ranges(sorted(self.ocr_errors))})")
         if self.unread_scanned_pages:
             parts.append(f"unread (p{_ranges(list(self.unread_scanned_pages))})")
+        if self.useful_unread_pages:
+            parts.append(f"useful pages not deepened (p{_ranges(list(self.useful_unread_pages))})")
         return " + ".join(parts) or "empty"
 
     @property
@@ -126,9 +159,11 @@ def _read_pdf(
     max_table_pages: int = DEFAULT_MAX_TABLE_PAGES,
     max_table_rows: int = DEFAULT_MAX_TABLE_ROWS,
     max_table_chars: int = DEFAULT_MAX_TABLE_CHARS,
+    policy: ReadingPolicy | None = None,
 ) -> PdfContent:
     if len(data) > max_bytes:
         raise ValueError("PDF exceeds byte limit")
+    read_tables = read_tables or (policy is not None and policy.mode in {"adaptive", "full"})
     with pymupdf.open(stream=data, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
         if doc.page_count > max_pages:
             raise ValueError("PDF exceeds page limit")
@@ -141,6 +176,8 @@ def _read_pdf(
         table_pages: list[int] = []
         table_errors: dict[int, str] = {}
         table_rows = table_chars = 0
+        # The first pass reads text/forms only. Native table recognition starts
+        # afterwards, selected from this immutable cheap pass when adaptive.
         for page in doc:
             for widget in page.widgets() or []:
                 name, value = (widget.field_name or "").strip(), widget.field_value
@@ -155,9 +192,24 @@ def _read_pdf(
             texts.append(text)
             if len(text.strip()) < MIN_TEXT_CHARS_PER_PAGE:
                 scanned.append(page.number + 1)
-            if read_tables:
+        selection: tuple[int, ...] | None = None
+        reasons: dict[int, tuple[str, ...]] = {}
+        useful_unread: tuple[int, ...] = ()
+        if policy is not None and policy.mode == "adaptive":
+            selection, reasons = policy.table_pages(tuple(texts))
+            useful_unread = tuple(page for page in reasons if page not in selection)
+        if read_tables:
+            for page in doc:
                 number = page.number + 1
-                if number > max_table_pages or table_rows >= max_table_rows or table_chars >= max_table_chars:
+                if selection is not None and number not in selection:
+                    if number in reasons:
+                        table_errors[number] = "Adaptive table page budget exceeded"
+                    continue
+                if (
+                    len(table_pages) >= max_table_pages
+                    or table_rows >= max_table_rows
+                    or table_chars >= max_table_chars
+                ):
                     table_errors[number] = "Table extraction budget exceeded"
                     continue
                 table_pages.append(number)
@@ -173,6 +225,8 @@ def _read_pdf(
                 table_chars += sum(sum(len(cell) for cell in row) for table in found for row in table.rows)
                 if truncated:
                     table_errors[number] = "Table row or character budget exceeded"
+        if policy is not None and policy.mode == "adaptive":
+            useful_unread = tuple(sorted(page for page in reasons if page not in table_pages or page in table_errors))
         return PdfContent(
             pages=doc.page_count,
             fields=fields,
@@ -182,6 +236,9 @@ def _read_pdf(
             tables=tuple(tables),
             table_pages=tuple(table_pages),
             table_errors=table_errors,
+            reading_policy=policy.identity if policy else "",
+            deepening_reasons=reasons,
+            useful_unread_pages=useful_unread,
         )
 
 
@@ -196,13 +253,24 @@ def read_pdf(
     max_table_pages: int = DEFAULT_MAX_TABLE_PAGES,
     max_table_rows: int = DEFAULT_MAX_TABLE_ROWS,
     max_table_chars: int = DEFAULT_MAX_TABLE_CHARS,
+    policy: ReadingPolicy | None = None,
 ) -> PdfContent:
     """Parse untrusted bytes in an owned, terminable process with explicit resource limits."""
     if len(data) > max_bytes:
         raise ValueError("PDF exceeds byte limit")
     if min(max_table_pages, max_table_rows, max_table_chars) <= 0:
         raise ValueError("Table resource limits must be positive")
-    args = (data, max_pages, max_text_chars, max_bytes, read_tables, max_table_pages, max_table_rows, max_table_chars)
+    args = (
+        data,
+        max_pages,
+        max_text_chars,
+        max_bytes,
+        read_tables,
+        max_table_pages,
+        max_table_rows,
+        max_table_chars,
+        policy,
+    )
     _, result = next(run_bounded(_parse_encoded, [("document", args)], max_workers=1, timeout_s=document_timeout_s))
     if result.error or result.value is None:
         raise ValueError(result.error or "PDF worker returned no content")
@@ -210,7 +278,7 @@ def read_pdf(
 
 
 # Bump when read_pdf's output can change (with the PyMuPDF version, it keys the reading cache).
-READER_VERSION = f"2:{pymupdf.VersionBind}:{MIN_TEXT_CHARS_PER_PAGE}"
+READER_VERSION = f"3:{pymupdf.VersionBind}:{MIN_TEXT_CHARS_PER_PAGE}"
 
 
 PARALLEL_MIN = 24  # documents to parse before a process pool pays off
@@ -241,6 +309,7 @@ class PdfReader:
         max_table_pages: int = DEFAULT_MAX_TABLE_PAGES,
         max_table_rows: int = DEFAULT_MAX_TABLE_ROWS,
         max_table_chars: int = DEFAULT_MAX_TABLE_CHARS,
+        policy: ReadingPolicy | None = None,
     ) -> None:
         if min(max_workers, max_bytes, max_pages, max_batch_bytes, max_memo_bytes, max_text_chars) <= 0:
             raise ValueError("PDF resource limits must be positive")
@@ -254,16 +323,19 @@ class PdfReader:
         self.document_timeout_s = document_timeout_s
         if min(max_table_pages, max_table_rows, max_table_chars) <= 0:
             raise ValueError("Table resource limits must be positive")
-        self.read_tables = read_tables
+        self.policy = policy or ReadingPolicy(mode="full" if read_tables else "economical")
+        self.read_tables = read_tables or self.policy.mode in {"adaptive", "full"}
         self.max_table_pages, self.max_table_rows, self.max_table_chars = (
             max_table_pages,
             max_table_rows,
             max_table_chars,
         )
+        from radar.reading.formats import FORMAT_VERSION
+
         self.version = (
-            READER_VERSION
-            if not read_tables
-            else (f"{READER_VERSION}:tables={max_table_pages}:{max_table_rows}:{max_table_chars}")
+            f"{READER_VERSION}:{FORMAT_VERSION}:{self.policy.identity}:"
+            f"bytes={max_bytes}:pages={max_pages}:text={max_text_chars}:timeout={document_timeout_s:g}:"
+            f"tables={self.read_tables}:{max_table_pages}:{max_table_rows}:{max_table_chars}"
         )
         self.prefetch_errors: dict[str, str] = {}
         self._memo: OrderedDict[str, PdfContent] = OrderedDict()
@@ -300,6 +372,7 @@ class PdfReader:
                         self.max_table_pages,
                         self.max_table_rows,
                         self.max_table_chars,
+                        self.policy,
                     ),
                 )
                 for doc_id, data in batch
@@ -356,6 +429,7 @@ class PdfReader:
                 max_table_pages=self.max_table_pages,
                 max_table_rows=self.max_table_rows,
                 max_table_chars=self.max_table_chars,
+                policy=self.policy,
             )
             if self.cache is not None:
                 self.cache.put(self.NAMESPACE, key, _encode(content))
@@ -366,6 +440,7 @@ class PdfReader:
         size = sum(sys.getsizeof(s) for s in (*content.page_texts, *content.fields.keys(), *content.fields.values()))
         size += sys.getsizeof(content.page_texts) + sys.getsizeof(content.fields) + sys.getsizeof(content)
         size += sum(sys.getsizeof(cell) for table in content.tables for row in table.rows for cell in row)
+        size += sum(sys.getsizeof(segment.text) + sys.getsizeof(segment.locator) for segment in content.segments)
         if size <= self.max_memo_bytes:
             self._memo[document_id] = content
             self._memo_sizes[document_id] = size
@@ -385,7 +460,18 @@ def _parse_encoded(
     max_table_pages: int = DEFAULT_MAX_TABLE_PAGES,
     max_table_rows: int = DEFAULT_MAX_TABLE_ROWS,
     max_table_chars: int = DEFAULT_MAX_TABLE_CHARS,
+    policy: ReadingPolicy | None = None,
 ) -> str:
+    if not data.lstrip().startswith(b"%PDF-"):
+        from radar.reading.formats import limit_worker_memory, read_document
+
+        limit_worker_memory()
+        return _encode(
+            replace(
+                read_document(data, max_bytes=max_bytes, max_text_chars=max_text_chars),
+                reading_policy=policy.identity if policy else "",
+            )
+        )
     return _encode(
         _read_pdf(
             data,
@@ -396,6 +482,7 @@ def _parse_encoded(
             max_table_pages=max_table_pages,
             max_table_rows=max_table_rows,
             max_table_chars=max_table_chars,
+            policy=policy,
         )
     )
 
@@ -410,6 +497,12 @@ def _encode(c: PdfContent) -> str:
         "tables": [{"page": t.page, "index": t.index, "rows": t.rows, "bbox": t.bbox} for t in c.tables],
         "table_pages": c.table_pages,
         "table_errors": c.table_errors,
+        "format": c.format,
+        "segments": [asdict(segment) for segment in c.segments],
+        "format_errors": c.format_errors,
+        "reading_policy": c.reading_policy,
+        "deepening_reasons": c.deepening_reasons,
+        "useful_unread_pages": c.useful_unread_pages,
     }
     return base64.b64encode(zlib.compress(json.dumps(raw, ensure_ascii=False).encode(), 6)).decode()
 
@@ -422,4 +515,10 @@ def _decode(value: str) -> PdfContent:
         tables=tuple(PdfTable(t["page"], t["index"], tuple(tuple(row) for row in t["rows"]), tuple(t["bbox"])) for t in raw.get("tables", [])),
         table_pages=tuple(raw.get("table_pages", [])),
         table_errors={int(page): error for page, error in raw.get("table_errors", {}).items()},
+        format=raw.get("format", "pdf"),
+        segments=tuple(DocumentSegment(**segment) for segment in raw.get("segments", [])),
+        format_errors=tuple(raw.get("format_errors", [])),
+        reading_policy=raw.get("reading_policy", ""),
+        deepening_reasons={int(page): tuple(reasons) for page, reasons in raw.get("deepening_reasons", {}).items()},
+        useful_unread_pages=tuple(raw.get("useful_unread_pages", [])),
     )  # fmt: skip

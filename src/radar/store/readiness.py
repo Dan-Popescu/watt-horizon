@@ -15,11 +15,21 @@ def candidate_readiness(data_dir: Path, *, verify_inputs: bool = True) -> dict[s
     """
     reasons: list[str] = []
     states: dict[str, int] = {}
+    task_states: dict[str, int] = {}
     path = data_dir / "radar.sqlite"
     if not path.is_file():
         return {"ready": False, "reasons": ["dataset_missing"], "job_states": states}
     try:
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pipeline_tasks'"
+            ).fetchone():
+                task_states = {
+                    str(state): int(count)
+                    for state, count in connection.execute("SELECT state,COUNT(*) FROM pipeline_tasks GROUP BY state")
+                }
+                if any(count and state not in {"complete", "superseded"} for state, count in task_states.items()):
+                    reasons.append("pipeline_tasks_unfinished")
             row = connection.execute(
                 "SELECT finished_at, stats FROM runs WHERE kind='process' ORDER BY id DESC LIMIT 1"
             ).fetchone()
@@ -81,5 +91,6 @@ def candidate_readiness(data_dir: Path, *, verify_inputs: bool = True) -> dict[s
         "ready": not reasons,
         "reasons": sorted(set(reasons)),
         "job_states": states,
+        "task_states": task_states,
         "inputs_verified": verify_inputs,
     }

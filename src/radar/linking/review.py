@@ -4,7 +4,7 @@ annotates links with them, orders the pairs worth a look, and measures the linke
 """
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,14 +19,30 @@ CONFIRMED = {"same_project", "related"}
 
 def apply_link_decisions(links: list[Link], decisions: Mapping[tuple[str, str], LinkDecision]) -> list[Link]:
     """Links annotated with the latest verdict; a « same_project » pair the linker missed is added."""
-    out = [lk.model_copy(update={"verdict": d.verdict}) if (d := decisions.get((lk.a, lk.b))) else lk for lk in links]
-    proposed = {(lk.a, lk.b) for lk in links}
-    out += [
-        Link(a=a, b=b, reasons=(HUMAN_REASON,), verdict=d.verdict)
-        for (a, b), d in sorted(decisions.items())
-        if (a, b) not in proposed and d.verdict == "same_project"
-    ]
-    return out
+    return list(iter_apply_link_decisions(links, decisions))
+
+
+def iter_apply_link_decisions(
+    links: Iterable[Link],
+    decisions: Mapping[tuple[str, str], LinkDecision],
+    *,
+    include_missing_constraints: bool = False,
+) -> Iterator[Link]:
+    """Remember only human pairs, independently of the potentially quadratic machine graph."""
+    missing = {
+        pair
+        for pair, decision in decisions.items()
+        if decision.verdict == "same_project"
+        or (include_missing_constraints and decision.verdict in {"related", "unrelated"})
+    }
+    for link in links:
+        pair = (link.a, link.b)
+        missing.discard(pair)
+        decision = decisions.get(pair)
+        verdict = None if decision and decision.verdict == "undecided" else decision.verdict if decision else None
+        yield link.model_copy(update={"verdict": verdict}) if decision else link
+    for a, b in sorted(missing):
+        yield Link(a=a, b=b, reasons=(HUMAN_REASON,), verdict=decisions[(a, b)].verdict)
 
 
 def machine_groups(filings: Iterable[Filing]) -> dict[str, int]:
@@ -49,14 +65,13 @@ class LinkPair:
     priority: float
 
 
-def queue(filings: list[Filing], links: list[Link]) -> list[LinkPair]:
+def iter_queue(filings: list[Filing], links: Iterable[Link]) -> Iterator[LinkPair]:
     """Links touching a target filing, undecided and most consequential first:
     merged by the machine (a wrong merge hides a project) > same developer + commune but apart (missed merge) >
     other filing pairs > filing-signal pairs."""
     targets = {f.key for f in filings if f.classification.category in TARGET_CATEGORIES}
     filing_keys = {f.key for f in filings}
     groups = machine_groups(filings)
-    out = []
     for lk in links:
         if lk.a not in targets and lk.b not in targets:
             continue
@@ -65,8 +80,12 @@ def queue(filings: list[Filing], links: list[Link]) -> list[LinkPair]:
         kinds = {reason_kind(r) for r in lk.reasons}
         priority = 3.0 if merged else 2.0 if {"même commune", "même nom de porteur"} <= kinds else 1.0
         priority = (priority if both_filings else 0.5) + 0.1 * len(kinds)
-        out.append(LinkPair(lk.a, lk.b, lk.reasons, lk.verdict, merged, 0.0 if lk.verdict else priority))
-    return sorted(out, key=lambda p: (-p.priority, p.a, p.b))
+        yield LinkPair(lk.a, lk.b, lk.reasons, lk.verdict, merged, 0.0 if lk.verdict else priority)
+
+
+def queue(filings: list[Filing], links: Iterable[Link]) -> list[LinkPair]:
+    """Compatibility sorted result; iter_queue lets views avoid a duplicate graph collection."""
+    return sorted(iter_queue(filings, links), key=lambda p: (-p.priority, p.a, p.b))
 
 
 @dataclass
@@ -76,7 +95,9 @@ class LinkReport:
     grouping: dict[str, Any] = field(default_factory=dict)  # pairwise precision / recall of automatic merges
 
 
-def report(filings: list[Filing], links: list[Link], decisions: Mapping[tuple[str, str], LinkDecision]) -> LinkReport:
+def report(
+    filings: list[Filing], links: Iterable[Link], decisions: Mapping[tuple[str, str], LinkDecision]
+) -> LinkReport:
     """Linker precision per reason (a confirmed link is « same_project » or « related ») and grouping quality on
     filing pairs a human decided (merged by the machine vs « same_project »)."""
     out = LinkReport(decided=len(decisions))

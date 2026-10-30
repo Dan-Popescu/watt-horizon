@@ -154,6 +154,26 @@ def _observation(
     if evidence.document_id not in row.reviewed_documents:
         raise ValueError("Cited document must be explicitly reviewed")
     pdf = content(evidence.document_id)
+    if pdf.format != "pdf":
+        if evidence.page is not None:
+            raise ValueError("Structured documents use their locator, never an invented PDF page")
+        segment = next((item for item in pdf.segments if item.locator == evidence.locator), None)
+        if segment is None or segment.uncertain or not contains_quote(segment.text, evidence.quote):
+            raise ValueError("Citation is absent from a reliable source paragraph or cell")
+        if segment.header:
+            _table_value(
+                name,
+                observation.value,
+                evidence.quote,
+                PdfTable(1, 1, ((segment.header,), (segment.text,)), (0, 0, 0, 0)),
+                2,
+                1,
+            )
+        elif name not in {"category", "review_decision", "document_relevance"} and not value_in_quote(
+            name, observation.value, evidence.quote
+        ):
+            raise ValueError("Annotation value is unsupported by its structured citation")
+        return
     if evidence.locator.startswith("table:"):
         locator = _TABLE_LOCATOR.fullmatch(evidence.locator)
         if locator is None or evidence.page is None or evidence.page > pdf.pages:

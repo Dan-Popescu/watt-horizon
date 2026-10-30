@@ -81,7 +81,9 @@ def test_page_script_is_valid_javascript(tmp_path: Path) -> None:
 
 
 def test_quality_dashboard_only_in_review_mode(loaded_db: Database, tmp_path: Path) -> None:
-    from radar.api.quality import quality_overview
+    from radar.api.quality import quality_overview, refresh_quality_overview
+
+    refresh_quality_overview(loaded_db, tmp_path / "cases")
 
     off = TestClient(build_app(loaded_db.path, with_mcp=False), base_url=LOCAL)
     assert off.get("/api/quality").status_code == 404

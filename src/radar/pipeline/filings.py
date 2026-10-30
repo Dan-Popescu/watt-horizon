@@ -29,6 +29,7 @@ from radar.domain.privacy import PersonScrubber
 from radar.domain.text import contains_quote, squash
 from radar.extraction import EXTRACTION_VERSION
 from radar.extraction.cerfa import extract_cerfa, form_layout
+from radar.extraction.context import quantity_issues
 from radar.extraction.decision import extract_decision
 from radar.extraction.facts import Facts
 from radar.extraction.llm import ExtractionInput, FieldExtractor
@@ -45,6 +46,7 @@ from radar.quality.rulebook import LearnedRule, RuleHit, apply_rules
 from radar.quality.templates import Registry, fingerprint
 from radar.reading.ocr import OcrEngine
 from radar.reading.pdf import PdfContent, PdfReader
+from radar.reading.policy import complete_reading
 from radar.store.blobs import BlobStore
 from radar.validation.lookups import CommuneInfo, Lookups
 from radar.validation.validator import validate
@@ -83,7 +85,9 @@ def read_documents(documents: list[DocumentRecord], services: Services) -> list[
     contents = []
     for doc in documents:
         data = services.blobs.get(doc.id, max_bytes=services.reader.max_bytes)
-        contents.append(services.ocr.complete(doc.id, data, services.reader.read(doc.id, data)))
+        contents.append(
+            complete_reading(doc.id, data, services.reader.read(doc.id, data), services.ocr, services.reader.policy)
+        )
     return contents
 
 
@@ -173,9 +177,9 @@ def extract_facts(
     form, decision = Facts(), Facts()
     for (doc_id, role, title), content in zip(documents, contents, strict=True):
         if role is DocumentRole.FORM:
-            form.fill_from(extract_cerfa(doc_id, content))
+            form.fill_from(_locate_segments(extract_cerfa(doc_id, content), content))
         elif role is DocumentRole.DECISION:
-            decision.fill_from(extract_decision(doc_id, content.text, title))
+            decision.fill_from(_locate_segments(extract_decision(doc_id, content.text, title), content))
     facts = Facts()
     facts.fill_from(form)
     facts.fill_from(decision, override=DECISION_WINS)
@@ -218,7 +222,35 @@ def extract_facts(
             candidates["power_mw"] = [Candidate(source="supporting:page", value=supplemental.mw_max)]
     titles = [title for _, _, title in documents]
     facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(titles)
+    for (document_id, _, _), content in zip(documents, contents, strict=True):
+        _locate_segments(facts, content, document_id)
     return Extraction(form, decision, facts, candidates, support)
+
+
+def _locate_segments(facts: Facts, content: PdfContent, document_id: str | None = None) -> Facts:
+    if content.format == "pdf":
+        return facts
+    for name, evidence in list(facts.evidence.items()):
+        if document_id is not None and evidence.document_id != document_id:
+            continue
+        if evidence.locator == "title":
+            continue
+        matches = [
+            segment
+            for segment in content.segments
+            if not segment.uncertain and contains_quote(segment.text, evidence.quote)
+        ]
+        if matches:
+            facts.evidence[name] = evidence.model_copy(update={"locator": matches[0].locator})
+        else:
+            # A flattened multi-cell statement has no reliable single location.
+            # Do not publish a scalar whose proof cannot be located honestly.
+            facts.evidence.pop(name)
+            if name == "power":
+                facts.mw_min = facts.mw_max = facts.mwh = None
+            elif hasattr(facts, name):
+                setattr(facts, name, None)
+    return facts
 
 
 def build_filing(
@@ -253,6 +285,7 @@ def build_filing(
                 "header_quote": privacy.scrub(observation.header_quote) or "",
                 "phase": privacy.scrub(observation.phase),
                 "scenario": privacy.scrub(observation.scenario),
+                "project": privacy.scrub(observation.project),
             }
         )
         for observation in observe_quantities(
@@ -274,6 +307,14 @@ def build_filing(
             if ev is not None and ev.locator.startswith("llm-extract:"):
                 value = getattr(facts, ARBITRATED_ATTRS[name][0])
                 extraction.candidates.setdefault(name, []).append(Candidate(source="llm", value=comparable(value)))
+        for document, content in zip(documents, contents, strict=True):
+            _locate_segments(facts, content, document.id)
+    context_issues = quantity_issues(facts, observations)
+    if len(observations) >= MAX_OBSERVATIONS:
+        context_issues = (*context_issues, "quantity_observation_limit_reached")
+    if context_issues:
+        facts.mw_min = facts.mw_max = facts.mwh = None
+        facts.evidence.pop("power", None)
     words = vocabulary(classification_text(facts.description, texts))
     opinion = services.opinion.predict(words) if services.opinion and services.opinion.reliable else None
     validation = validate(facts, services.lookups)
@@ -311,7 +352,13 @@ def build_filing(
         )
     )
     for doc, content in zip(documents, contents, strict=True):
-        if content.table_errors or content.ocr_errors:
+        if (
+            content.table_errors
+            or content.ocr_errors
+            or content.format_errors
+            or content.useful_unread_pages
+            or any(s.uncertain for s in content.segments)
+        ):
             flags.append(
                 flag(
                     "reading_incomplete",
@@ -329,18 +376,29 @@ def build_filing(
         or not observation.unit_in_cell
         or (observation.source_kind == "table" and not observation.eligible)
     ]
-    if (contextual or len(observations) >= MAX_OBSERVATIONS) and classification.category in TARGET_CATEGORIES:
+    if context_issues or (
+        (contextual or len(observations) >= MAX_OBSERVATIONS) and classification.category in TARGET_CATEGORIES
+    ):
         flags.append(
             flag(
                 "quantity_context_review",
                 "power",
-                f"{len(contextual)} observations conservées avec leur phase, scénario, actif ou unité",
+                f"{len(contextual)} observations conservées avec leur phase, scénario, actif ou unité"
+                + (f" ; abstention : {', '.join(context_issues)}" if context_issues else ""),
             )
         )
     gps_ok = any(c.name == "gps" and c.status is CheckStatus.OK for c in validation.checks)
     needs_review = (
         bool(unread)
-        or any(content.table_errors or content.ocr_errors for content in contents)
+        or bool(context_issues)
+        or any(
+            content.table_errors
+            or content.ocr_errors
+            or content.format_errors
+            or content.useful_unread_pages
+            or any(s.uncertain for s in content.segments)
+            for content in contents
+        )
         or classification.category in {Category.NEEDS_REVIEW, Category.UNCLASSIFIED}
         or classification.quote_verified is False
     )
@@ -359,7 +417,7 @@ def build_filing(
         review_decision=facts.review_decision or ReviewDecision.PENDING,
         filed_on=facts.filed_on,
         location=_location(facts, validation.commune, gps_ok),
-        power=_power(facts),
+        power=Power() if context_issues else _power(facts),
         substation=facts.substation,
         containers=facts.containers,
         area_ha=facts.area_ha,
@@ -369,6 +427,14 @@ def build_filing(
         evidence=dict(facts.evidence),
         unread_scans=tuple(unread),
         reading=reading,
+        reading_diagnostics={
+            doc.id: {
+                **content.diagnostics(),
+                "reader_cache_key": f"{doc.id}:{services.reader.version}",
+                "quantity_issues": list(context_issues),
+            }
+            for doc, content in zip(documents, contents, strict=True)
+        },
         flags=flags,
         candidates=extraction.candidates,
         quantity_observations=observations,
@@ -393,12 +459,18 @@ def build_filing(
                 "tables",
                 "table_rows",
                 "table_errors",
+                "useful_unread_pages",
+                "deepening_pages",
+                "format_errors",
+                "uncertain_segments",
             )
         },
         versions={
             "extraction": EXTRACTION_VERSION,
             "classification": classification.method,
             "ocr": services.ocr.label,
+            "reading": services.reader.version,
+            "reading_policy": services.reader.policy.identity,
             **({"extraction_llm": extractor_used} if extractor_used else {}),
         },
     )

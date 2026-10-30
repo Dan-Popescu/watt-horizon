@@ -12,7 +12,7 @@ class QuantityObservation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     document_id: str
-    page: int = Field(ge=1)
+    page: int | None = Field(default=None, ge=1)
     locator: str
     quote: str = Field(max_length=600)
     header_quote: str = Field(default="", max_length=600)
@@ -24,6 +24,8 @@ class QuantityObservation(BaseModel):
     state: ProjectState
     phase: str | None = None
     scenario: str | None = None
+    project: str | None = None
+    uncertain_reason: str = ""
     source_kind: Literal["text", "table"]
     unit_in_cell: bool = True
 
@@ -36,4 +38,5 @@ class QuantityObservation(BaseModel):
             and self.scenario is None
             and self.basis not in {"dc", "c"}
             and self.unit_in_cell
+            and not self.uncertain_reason
         )

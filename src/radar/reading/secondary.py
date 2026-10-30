@@ -26,6 +26,11 @@ class SelectiveOcr:
 
     def complete(self, document_id: str, data: bytes, content: PdfContent) -> PdfContent:
         done = self.primary.complete(document_id, data, content)
+        done = replace(
+            done,
+            initial_ocr_texts=content.initial_ocr_texts or dict(done.ocr_texts),
+            initial_ocr_engines=content.initial_ocr_engines or dict(done.ocr_engines),
+        )
         candidates = []
         for page in done.scanned_pages:
             if done.ocr_engines.get(page, "").startswith("transcript"):

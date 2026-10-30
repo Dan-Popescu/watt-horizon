@@ -87,7 +87,9 @@ def build_manifest(
         join(keys)
     for project in projects:
         join(project.filing_keys)
-    links = list(links)
+    # Automatic proposed edges do not define an independent project group.
+    # Retain only explicit human constraints, never the dense machine graph.
+    links = [link for link in links if link.verdict in {"same_project", "related", "unrelated"}]
     for group_members in group_filings(
         records.values(),
         must=((link.a, link.b) for link in links if link.verdict == "same_project"),

@@ -209,10 +209,9 @@ def get_project(db: Database, project_id: str) -> ProjectDetail | None:
     if filing is None:
         return None
     docs = {d.id: d for d in db.documents(filing.key)}
-    links = db.links(filing.key)
-    signals = {s.key: s for s in db.signals(lk.b if lk.a == filing.key else lk.a for lk in links)}
+    signals = {s.key: s for s in db.signals(lk.b if lk.a == filing.key else lk.a for lk in db.iter_links(filing.key))}
     related: list[RelatedView] = []
-    for link in links:
+    for link in db.iter_links(filing.key):
         other = link.b if link.a == filing.key else link.a
         if other in signals:
             s = signals[other]

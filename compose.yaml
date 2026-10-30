@@ -16,6 +16,9 @@ x-reading-environment: &reading-environment
   RADAR_PDF_TABLE_MAX_CHARS: ${RADAR_PDF_TABLE_MAX_CHARS:-200000}
   RADAR_OCR_SECONDARY: ${RADAR_OCR_SECONDARY:-0}
   RADAR_OCR_SECONDARY_MAX_PAGES: ${RADAR_OCR_SECONDARY_MAX_PAGES:-8}
+  RADAR_READING_MODE: ${RADAR_READING_MODE:-economical}
+  RADAR_READING_MAX_DEEP_PAGES: ${RADAR_READING_MAX_DEEP_PAGES:-8}
+  RADAR_READING_MAX_OCR_PAGES: ${RADAR_READING_MAX_OCR_PAGES:-8}
 
 services:
   web:
@@ -38,11 +41,11 @@ services:
     read_only: true
     tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
 
-  update:
+  update: &job-service
     image: watt-horizon
     profiles: ["jobs"]
     volumes: ["radar-data:/data", "radar-backups:/backups"]
-    environment:
+    environment: &job-environment
       <<: *reading-environment
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       RADAR_LLM_MODEL: ${RADAR_LLM_MODEL:-}
@@ -66,6 +69,13 @@ services:
     cpus: ${RADAR_JOB_CPUS:-2.0}
     mem_limit: ${RADAR_JOB_MEMORY:-2g}
     pids_limit: 256
+
+  worker:
+    <<: *job-service
+    environment:
+      <<: *job-environment
+      RADAR_OFFLINE: ${RADAR_WORKER_OFFLINE:-1}
+    command: ["radar", "tasks", "run", "--max-tasks", "${RADAR_TASK_MAX_TASKS:-100}"]
 
 volumes:
   radar-data:

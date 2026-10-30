@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -32,6 +33,9 @@ class CampaignDocument(FrozenModel):
     audit: str | None
     fetched_at: str
     scanned_pages: tuple[int, ...]
+    format: str = "pdf"
+    parent_document_id: str | None = None
+    member_path: str | None = None
 
     @classmethod
     def from_record(cls, document: DocumentRecord) -> "CampaignDocument":
@@ -47,6 +51,9 @@ class CampaignDocument(FrozenModel):
             audit=document.audit,
             fetched_at=document.fetched_at.isoformat(),
             scanned_pages=document.scanned_pages,
+            format=document.format,
+            parent_document_id=document.parent_document_id,
+            member_path=document.member_path,
         )
 
 
@@ -72,7 +79,15 @@ class Campaign(FrozenModel):
     fingerprint: str = ""
 
     def digest(self) -> str:
-        return digest(self.model_dump(mode="json", exclude={"fingerprint"}))
+        payload = self.model_dump(mode="json", exclude={"fingerprint"})
+        # Existing PDF campaigns predate format/archive metadata. Canonicalize
+        # only those new defaults so their immutable fingerprints remain valid.
+        for record in payload["records"]:
+            for document in record["documents"]:
+                for name, default in (("format", "pdf"), ("parent_document_id", None), ("member_path", None)):
+                    if document.get(name) == default:
+                        document.pop(name, None)
+        return digest(payload)
 
 
 class Citation(FrozenModel):
@@ -137,12 +152,14 @@ def frozen_partitions(campaign: Campaign) -> PartitionManifest:
     )
 
 
-def current_links(db: Database) -> list[Link]:
+def current_links(db: Database) -> Iterator[Link]:
     """Human decisions apply immediately, even before the next project rebuild."""
-    links = {tuple(sorted((link.a, link.b))): link for link in db.links()}
-    for pair, decision in db.current_link_decisions().items():
-        links[pair] = Link(a=pair[0], b=pair[1], verdict=decision.verdict, reasons=("human",))
-    return list(links.values())
+    from radar.linking.review import iter_apply_link_decisions
+
+    # Stored edges can predate a withdrawal. Preserve unjournaled constraints and
+    # use explicit latest withdrawals to clear only the affected stale verdicts.
+    latest = {(decision.a, decision.b): decision for decision in db.iter_current_link_decisions(include_withdrawn=True)}
+    yield from iter_apply_link_decisions(db.iter_links(), latest, include_missing_constraints=True)
 
 
 def check_documents(db: Database, campaign: Campaign) -> dict[str, Filing]:
@@ -187,6 +204,7 @@ def prepare(
     limit: int = 100,
     double_rate: float = 0.1,
     previous: PartitionManifest | None = None,
+    include_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """Select complete groups with deterministic round-robin strata; export no machine values."""
     if limit <= 0 or not math.isfinite(double_rate) or not 0 <= double_rate <= 1:
@@ -194,6 +212,8 @@ def prepare(
     if directory.exists():
         raise ValueError("Campaign destination already exists; immutable campaigns are never overwritten")
     filings = db.filings()
+    if include_keys is not None and not include_keys <= {filing.key for filing in filings}:
+        raise ValueError("Campaign selection contains an unknown filing")
     if set(db.filing_keys_with_documents()) != {f.key for f in filings}:
         raise ValueError("Process all documents before preparing an annotation campaign")
     partitions = build_manifest(filings, previous=previous, projects=db.projects(), links=current_links(db))
@@ -217,6 +237,8 @@ def prepare(
         by_group[partitions.groups[filing.key]].append(filing)
     buckets: dict[str, list[str]] = defaultdict(list)
     for group, members in sorted(by_group.items()):
+        if include_keys is not None and not any(member.key in include_keys for member in members):
+            continue
         # Templates can be unique per file. Coarse strata prevent lexical ordering
         # of singleton buckets from silently excluding entire sources.
         bucket = json.dumps(sorted({strata[f.key]["source"] for f in members}))
@@ -228,7 +250,8 @@ def prepare(
         return {(name, strata[f.key][name]) for f in by_group[group] for name in dimensions}
 
     chosen: list[str] = []
-    while len(chosen) < min(limit, len(by_group)):
+    eligible_groups = sum(map(len, buckets.values()))
+    while len(chosen) < min(limit, eligible_groups):
         for bucket in sorted(buckets):
             if buckets[bucket] and len(chosen) < limit:
                 group = min(buckets[bucket], key=lambda g: (-len(features(g) - represented), digest(g)))

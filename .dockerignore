@@ -1,6 +1,7 @@
 .git
 .venv
 data
+work
 .env
 .env.*
 gold/corrections.jsonl

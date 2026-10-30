@@ -23,7 +23,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from radar import documentary_cli
+from radar import documentary_cli, pilot_cli, tasks_cli
 from radar.api import digest, exports, queries, review
 from radar.api.quality import quality_overview
 from radar.classification.gold import load_gold
@@ -81,6 +81,7 @@ from radar.store.discovery import DiscoveryStore
 from radar.store.llm_jobs import BudgetLimits
 from radar.store.readiness import candidate_readiness
 from radar.store.snapshots import backup_dataset, restore_dataset
+from radar.store.tasks import TaskSpec
 from radar.validation.lookups import JsonCache, ReferenceCommunes
 from radar.wiring import batch_client, make_classifier, make_http, make_services
 
@@ -129,7 +130,15 @@ def cmd_import(args: argparse.Namespace, s: Settings) -> Any:
     return {"communes": importers.import_communes(Path(args.path), s.communes_path)}
 
 
-def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: PoliteHttp, db: Database) -> Any:
+def _collect_one(
+    source: str,
+    args: argparse.Namespace,
+    s: Settings,
+    http: PoliteHttp,
+    db: Database,
+    *,
+    propagate_block: bool = False,
+) -> Any:
     """Run one collector; a site that blocks us ends this source for the run (never retried in a loop)."""
     region = get_region(args.region, s.catalog_path)
     blobs = BlobStore(s.blobs_dir)
@@ -182,6 +191,8 @@ def _collect_one(source: str, args: argparse.Namespace, s: Settings, http: Polit
             )
     except SiteBlockedError as exc:
         db.finish_run(run_id, {"stopped": str(exc)})
+        if propagate_block:
+            raise
         return {"stopped": str(exc), "advice": "Site closed the connection: retry another day, never in a loop."}
     db.finish_run(run_id, asdict(report))
     return report
@@ -194,6 +205,30 @@ def cmd_collect(args: argparse.Namespace, s: Settings) -> Any:
         raise ValueError("--restart requires --backfill")
     with _require_http(s) as http, Database(s.db_path) as db:
         return _collect_one(args.source, args, s, http, db)
+
+
+def cmd_tasks(args: argparse.Namespace, s: Settings) -> Any:
+    def collect(spec: TaskSpec, stage: Database, http: PoliteHttp) -> Any:
+        source = str(spec.inputs.get("source", spec.source))
+        if source not in {"dreal", "mrae", "georisques", "registry", "press", "prefectures"}:
+            raise ValueError("Explore task requires a known collector source")
+        options = build_parser().parse_args(["collect", source])
+        allowed = set(vars(options)) - {"command", "source"}
+        unexpected = set(spec.inputs) - allowed - {"source", "generation"}
+        if unexpected:
+            raise ValueError("Unknown collector task inputs: " + ", ".join(sorted(unexpected)))
+        vars(options).update({key: value for key, value in spec.inputs.items() if key in allowed})
+        if options.backfill and source != "dreal":
+            raise ValueError("--backfill is supported for DREAL only")
+        if options.restart and not options.backfill:
+            raise ValueError("--restart requires --backfill")
+        report = _collect_one(source, options, s, http, stage, propagate_block=True)
+        payload = asdict(report) if is_dataclass(report) and not isinstance(report, type) else report
+        if isinstance(payload, dict) and payload.get("stopped"):
+            raise SiteBlockedError(source, str(payload["stopped"]))
+        return payload
+
+    return tasks_cli.command(args, s, collect=collect)
 
 
 def cmd_coverage(args: argparse.Namespace, s: Settings) -> Any:
@@ -357,7 +392,7 @@ def cmd_eval(args: argparse.Namespace, s: Settings) -> Any:
                 else None,
                 ocr=ocr,
                 classifier=classifier,
-                links=db.links(),
+                links=db.iter_links(),
                 link_decisions=db.current_link_decisions(),
                 partition_manifest=manifest,
                 failures=failures,
@@ -939,6 +974,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     documentary_cli.add_parsers(sub)
+    pilot_cli.register(sub)
+    tasks_cli.add_parsers(sub)
 
     imp = sub.add_parser("import", help="load data already on disk (no network)")
     isub = imp.add_subparsers(dest="what", required=True)
@@ -1187,6 +1224,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS: dict[str, Callable[[argparse.Namespace, Settings], Any]] = {
+    "pilot": pilot_cli.cmd_pilot,
+    "tasks": cmd_tasks,
     "catalog": documentary_cli.catalog_command,
     "discover": documentary_cli.discovery_command,
     "quality-loop": documentary_cli.quality_command,
@@ -1241,7 +1280,7 @@ def main(argv: list[str] | None = None) -> int:
             "health",
             "triage",
             "errors",
-            "quality-loop",
+            "tasks",
         }
         if args.command == "campaign" and args.action == "serve":
             mutating = False

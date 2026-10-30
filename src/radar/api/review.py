@@ -210,8 +210,7 @@ def link_items(db: Database) -> list[LinkReviewItem]:
     """Links touching a target filing, undecided and most consequential first (linking/review.queue)."""
     filings = {f.key: f for f in db.filings()}
     signals = {s.key: s for s in db.signals()}
-    pairs = link_review.queue(list(filings.values()), db.links())
-    return [
+    result = [
         LinkReviewItem(
             a=_side(p.a, filings, signals),
             b=_side(p.b, filings, signals),
@@ -220,8 +219,10 @@ def link_items(db: Database) -> list[LinkReviewItem]:
             merged_by_machine=p.merged_by_machine,
             priority=round(p.priority, 2),
         )
-        for p in pairs
+        for p in link_review.iter_queue(list(filings.values()), db.iter_links())
     ]
+    result.sort(key=lambda item: (-item.priority, item.a.key, item.b.key))
+    return result
 
 
 def submit_link_decision(

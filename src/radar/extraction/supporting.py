@@ -21,7 +21,7 @@ _AMBIGUOUS = re.compile(
 )
 
 
-def _fragments(document_id: str, content: PdfContent) -> Iterable[tuple[int, str, str]]:
+def _fragments(document_id: str, content: PdfContent) -> Iterable[tuple[int | None, str, str]]:
     table_pages = {table.page for table in content.tables}
     for page in range(1, content.pages + 1):
         if page in table_pages:
@@ -38,6 +38,10 @@ def _fragments(document_id: str, content: PdfContent) -> Iterable[tuple[int, str
         for locator, observations in rows.items():
             if all(observation.eligible for observation in observations):
                 yield table.page, f"page:{table.page}:{locator}", observations[0].quote
+    for segment in content.segments:
+        if not segment.uncertain:
+            for raw in re.split(r"(?<=[.;])\s+|\n\s*\n", segment.text):
+                yield None, segment.locator, raw
 
 
 def extract_supporting(documents: Iterable[tuple[str, PdfContent]]) -> Facts:

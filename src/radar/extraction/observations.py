@@ -15,6 +15,7 @@ _PHASE = re.compile(r"\b(?:phase|tranche)\s+([a-z0-9-]{1,24})\b")
 _SCENARIO = re.compile(r"\b(?:scenario|variante|option)\s+([a-z0-9-]{1,24})\b")
 _NUMBER = re.compile(rf"^\s*({NUMBER})(?:\s*(?:à|a|[-–])\s*({NUMBER}))?\s*$")
 _UNIT = re.compile(r"\b([kMG]?Wh?(?:ac|dc|c)?)\b", re.IGNORECASE)
+_PROJECT_NAME = re.compile(r"\bprojet\s+(?:nomme|denomme)\s+[«\"']?([a-z0-9_-]{2,40})\b")
 
 
 class Context(TypedDict):
@@ -22,6 +23,7 @@ class Context(TypedDict):
     state: ProjectState
     phase: str | None
     scenario: str | None
+    project: str | None
 
 
 def context(text: str, position: int | None = None) -> Context:
@@ -72,11 +74,13 @@ def context(text: str, position: int | None = None) -> Context:
     else:
         asset = "unknown"
     phases, scenarios = set(_PHASE.findall(normalized)), set(_SCENARIO.findall(normalized))
+    projects = set(_PROJECT_NAME.findall(normalized))
     return {
         "state": state,
         "asset": asset,
         "phase": next(iter(phases)) if len(phases) == 1 else "multiple" if phases else None,
         "scenario": next(iter(scenarios)) if len(scenarios) == 1 else "multiple" if scenarios else None,
+        "project": next(iter(projects)) if len(projects) == 1 else "multiple" if projects else None,
     }
 
 
@@ -188,4 +192,47 @@ def observe_quantities(documents: Iterable[tuple[str, PdfContent]]) -> tuple[Qua
                 observations.append(observation)
                 if len(observations) >= MAX_OBSERVATIONS:
                     return tuple(observations)
+        for segment in content.segments:
+            for raw in re.split(r"(?<=[.;])\s+|\n\s*\n", segment.text):
+                quote = squash(raw)
+                if not 0 < len(quote) <= 550:
+                    continue
+                values = measurements(quote)
+                unit_in_cell = bool(values)
+                units = _UNIT.findall(segment.header)
+                if not values and (number := _NUMBER.fullmatch(quote)) and len(units) == 1:
+                    values = measurements(f"{number[1]}" + (f" à {number[2]}" if number[2] else "") + " " + units[0])
+                contextual = context(" ".join((segment.header, segment.context or quote)))
+                for value in values:
+                    reason = segment.reason or "uncertain segment" if segment.uncertain else ""
+                    if len(units) > 1:
+                        reason = reason or "ambiguous column units"
+                    elif units:
+                        header = measurements("1 " + units[0])[0]
+                        cell_units = [measurements("1 " + unit)[0] for unit in _UNIT.findall(quote)]
+                        if header.dimension != value.dimension or any(
+                            unit.high != header.high
+                            or unit.dimension != header.dimension
+                            or (header.basis and unit.basis and header.basis != unit.basis)
+                            for unit in cell_units
+                        ):
+                            reason = reason or "column and cell units disagree"
+                    observations.append(
+                        QuantityObservation(
+                            document_id=document_id,
+                            locator=segment.locator,
+                            quote=quote,
+                            header_quote=squash(segment.header)[:550],
+                            low=value.low,
+                            high=value.high,
+                            dimension=value.dimension,
+                            basis=value.basis or (measurements("1 " + units[0])[0].basis if len(units) == 1 else ""),
+                            source_kind="table" if segment.header else "text",
+                            unit_in_cell=unit_in_cell,
+                            uncertain_reason=reason,
+                            **contextual,
+                        )
+                    )
+                    if len(observations) >= MAX_OBSERVATIONS:
+                        return tuple(observations)
     return tuple(observations)

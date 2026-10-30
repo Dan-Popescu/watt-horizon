@@ -8,7 +8,7 @@ Only pairs involving at least one filing are compared (signal-to-signal links ar
 from the national register are matched by the strict rule in `linking/registry.py` instead.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from radar.domain.enums import SourceKind
@@ -110,6 +110,35 @@ def _link(a: _Node, b: _Node) -> Link:
     return Link(a=first, b=second, reasons=tuple(reasons))
 
 
+def iter_propose_links(
+    filings: Iterable[Filing],
+    signals: Iterable[Signal],
+    *,
+    only_keys: set[str] | None = None,
+    metrics: dict[str, int] | None = None,
+) -> Iterator[Link]:
+    """Compare only shared-key candidates; retain every dense match and the original stable order."""
+    filing_nodes = [_from_filing(f) for f in filings]
+    signal_nodes = [_from_signal(s) for s in signals if s.source is not SourceKind.ENERGY_REGISTRY]
+    filing_index, signal_index = _index(filing_nodes), _index(signal_nodes)
+    touched_filings = _index(filing_nodes, only_keys) if only_keys is not None else filing_index
+    touched_signals = _index(signal_nodes, only_keys) if only_keys is not None else signal_index
+    compared = 0
+    for i, node in enumerate(filing_nodes):
+        index = filing_index if only_keys is None or node.key in only_keys else touched_filings
+        for j in _candidates(node, index):
+            if j > i:
+                yield _link(node, filing_nodes[j])
+                compared += 1
+    for node in filing_nodes:
+        index = signal_index if only_keys is None or node.key in only_keys else touched_signals
+        for j in _candidates(node, index):
+            yield _link(node, signal_nodes[j])
+            compared += 1
+    if metrics is not None:
+        metrics["candidate_pairs"] = compared
+
+
 def propose_links(
     filings: Iterable[Filing],
     signals: Iterable[Signal],
@@ -117,25 +146,5 @@ def propose_links(
     only_keys: set[str] | None = None,
     metrics: dict[str, int] | None = None,
 ) -> list[Link]:
-    """Compare only shared-key candidates; retain every dense match and the original stable order."""
-    filing_nodes = [_from_filing(f) for f in filings]
-    signal_nodes = [_from_signal(s) for s in signals if s.source is not SourceKind.ENERGY_REGISTRY]
-    filing_index, signal_index = _index(filing_nodes), _index(signal_nodes)
-    touched_filings = _index(filing_nodes, only_keys) if only_keys is not None else filing_index
-    touched_signals = _index(signal_nodes, only_keys) if only_keys is not None else signal_index
-    links: list[Link] = []
-    compared = 0
-    for i, node in enumerate(filing_nodes):
-        index = filing_index if only_keys is None or node.key in only_keys else touched_filings
-        for j in _candidates(node, index):
-            if j > i:
-                links.append(_link(node, filing_nodes[j]))
-                compared += 1
-    for node in filing_nodes:
-        index = signal_index if only_keys is None or node.key in only_keys else touched_signals
-        for j in _candidates(node, index):
-            links.append(_link(node, signal_nodes[j]))
-            compared += 1
-    if metrics is not None:
-        metrics["candidate_pairs"] = compared
-    return links
+    """Compatibility list result; production graph publication consumes iter_propose_links."""
+    return list(iter_propose_links(filings, signals, only_keys=only_keys, metrics=metrics))

@@ -12,6 +12,7 @@ from radar.quality.documentary_metrics import build_quality_loop
 from radar.quality.errors import analyse
 from radar.quality.flags import FLAGS
 from radar.quality.triage import triage
+from radar.store import diagnostics
 from radar.store.db import Database
 
 TREND_METRICS = (
@@ -25,7 +26,7 @@ TREND_METRICS = (
 TREND_RUNS = 10
 
 
-def quality_overview(db: Database, cases_dir: Path, today: date | None = None) -> dict[str, Any]:
+def _build_quality_overview(db: Database, cases_dir: Path, today: date | None = None) -> dict[str, Any]:
     filings, corrections = db.filings(), db.corrections()
     evals = db.runs("eval", limit=TREND_RUNS)
     last = evals[0]["stats"].get("report") if evals else None
@@ -64,3 +65,35 @@ def quality_overview(db: Database, cases_dir: Path, today: date | None = None) -
         "cases": {"open": case_status.get("open", 0), "fixed": case_status.get("fixed", 0)},
         "documentary": build_quality_loop(db, jobs_path=db.path.parent / "llm-jobs.sqlite"),
     }
+
+
+def refresh_quality_overview(db: Database, cases_dir: Path, today: date | None = None) -> dict[str, Any]:
+    """Job entry point, kept separate from the read-only web request."""
+    return diagnostics.refresh(
+        db,
+        "overview",
+        lambda: _build_quality_overview(db, cases_dir, today),
+        scope={"region": None, "kind": "overview"},
+        external=lambda: diagnostics.external_token(cases_dir, db.path.parent / "llm-jobs.sqlite"),
+    )
+
+
+def quality_overview(db: Database, cases_dir: Path, today: date | None = None) -> dict[str, Any]:
+    """Read a precalculated snapshot; expose its date, scope, revision and staleness."""
+    result = diagnostics.read(
+        db,
+        "overview",
+        scope={"region": None, "kind": "overview"},
+        external=diagnostics.external_token(cases_dir, db.path.parent / "llm-jobs.sqlite"),
+    )
+    if result["snapshot"]["status"] == "unavailable":
+        # Preserve the response shape while making absence explicit to clients.
+        result.update(
+            last_eval=None,
+            trend=[],
+            queue={"size": None, "by_flag": [], "top": []},
+            errors=None,
+            cases=None,
+            documentary={"quality_measured": False, "snapshot": result["snapshot"]},
+        )
+    return result

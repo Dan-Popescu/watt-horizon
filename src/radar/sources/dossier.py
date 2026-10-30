@@ -14,6 +14,7 @@ from radar.domain.enums import DocumentRole, SourceKind
 from radar.domain.ids import filing_key, normalize_filing_number, sha256
 from radar.net.http import PoliteHttp, RequestBudgetError, SiteBlockedError
 from radar.pipeline.ingest import ingest_pdf
+from radar.reading.formats import detect_format
 from radar.sources.html import links
 from radar.store.blobs import BlobStore
 from radar.store.db import Database, utcnow
@@ -42,9 +43,9 @@ def same_origin(a: str, b: str) -> bool:
 def is_document_url(url: str) -> bool:
     parsed = urlparse(url)
     return (
-        unquote(parsed.path).lower().endswith(".pdf")
+        unquote(parsed.path).lower().endswith((".pdf", ".docx", ".xlsx", ".zip"))
         or bool(_DOWNLOAD.search(parsed.path))
-        or bool(re.search(r"(?:^|[=&])[^=&]*\.pdf(?:&|$)", unquote(parsed.query), re.I))
+        or bool(re.search(r"(?:^|[=&])[^=&]*\.(?:pdf|docx|xlsx|zip)(?:&|$)", unquote(parsed.query), re.I))
     )
 
 
@@ -159,7 +160,13 @@ def scan_dossier(
                 edge(parent, url, "budget")
                 limited = True
                 break
-            if data.lstrip().startswith(b"%PDF-"):
+            try:
+                kind = detect_format(data)
+            except ValueError as exc:
+                edge(parent, url, "invalid_document")
+                report.errors.append(f"{url}: {exc}")
+                continue
+            if kind in {"pdf", "docx", "xlsx", "zip"}:
                 try:
                     document_id = ingest(data, url, title)
                 except ValueError as exc:
@@ -168,6 +175,14 @@ def scan_dossier(
                     continue
                 report.documents += 1
                 edge(parent, url, "document", document_id)
+                if kind == "zip":
+                    unresolved = [
+                        item
+                        for item in db.dossier_edges(key)
+                        if item["root_url"].startswith(url) and item["state"] in {"budget", "unsupported"}
+                    ]
+                    if unresolved:
+                        report.errors.append(f"archive contains unread or budget-limited members: {url}")
                 continue
             if b"<" not in data[:512]:
                 edge(parent, url, "unsupported")
@@ -179,6 +194,15 @@ def scan_dossier(
                 continue
             report.pages += 1
             edge(parent, url, "page")
+            # A complete HTML document is evidence too; fragments containing only links remain navigation.
+            if kind == "html":
+                try:
+                    document_id = ingest(data, url, title)
+                except ValueError as exc:
+                    report.errors.append(f"HTML document {url}: {exc}")
+                else:
+                    report.documents += 1
+                    edge(parent, url, "document", document_id)
             children = attachment_links(
                 data.decode("utf-8", errors="replace"), url, root_url, max_links=limits.links + 1, include_external=True
             )

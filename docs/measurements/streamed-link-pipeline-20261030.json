@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "synthetic": true,
+  "network_requests": 0,
+  "model_calls": 0,
+  "reference_commit": "cec4c7c51fcbe19004ab4890c82232b90f2275a0",
+  "scenario": "complete_dense_linking_publication",
+  "before": [
+    {
+      "records": 1000,
+      "links": 499500,
+      "projects": 1,
+      "sha256": "4a18abd6f1d8bfa75b6581a3d297d80367885a5001e90537f98874a5a4f64906",
+      "elapsed_s": 4.525713060000015,
+      "peak_rss_mib": 459.08984375,
+      "synthetic": true
+    }
+  ],
+  "after": [
+    {
+      "measured_at": "2026-10-30T19:09:20.236592+00:00",
+      "schema_version": 20,
+      "benchmark_sha256": "6f65957c7c61e2f911c4f0f8350ed259e9ca4eafc247617314d4d2dcd73dcd20",
+      "source_sha256": {
+        "src/radar/linking/linker.py": "abef419d5b39fe395e571198911de11e412570bc13504a7d731879f6ee50aa1d",
+        "src/radar/pipeline/linking_state.py": "f5711a920ed1b24968bf8e33b4bc6c62c28e3896615b264479c84f3d328b8462",
+        "src/radar/pipeline/projects.py": "ccb60ecac99d61e48d5702c839fe6088453d46b486ef092139436e1ef009f29d",
+        "src/radar/store/link_stream.py": "9c39ec30e0ecbcfeeeed08cfe37079e7e9a15f513ff3fbf040e33b2e4920b524"
+      },
+      "records": 1000,
+      "links": 499500,
+      "projects": 1,
+      "sha256": "4a18abd6f1d8bfa75b6581a3d297d80367885a5001e90537f98874a5a4f64906",
+      "elapsed_s": 5.250863133999928,
+      "peak_rss_mib": 41.3515625,
+      "synthetic": true
+    },
+    {
+      "measured_at": "2026-10-30T19:09:25.614815+00:00",
+      "schema_version": 20,
+      "benchmark_sha256": "6f65957c7c61e2f911c4f0f8350ed259e9ca4eafc247617314d4d2dcd73dcd20",
+      "source_sha256": {
+        "src/radar/linking/linker.py": "abef419d5b39fe395e571198911de11e412570bc13504a7d731879f6ee50aa1d",
+        "src/radar/pipeline/linking_state.py": "f5711a920ed1b24968bf8e33b4bc6c62c28e3896615b264479c84f3d328b8462",
+        "src/radar/pipeline/projects.py": "ccb60ecac99d61e48d5702c839fe6088453d46b486ef092139436e1ef009f29d",
+        "src/radar/store/link_stream.py": "9c39ec30e0ecbcfeeeed08cfe37079e7e9a15f513ff3fbf040e33b2e4920b524"
+      },
+      "records": 1000,
+      "links": 499500,
+      "projects": 1,
+      "sha256": "4a18abd6f1d8bfa75b6581a3d297d80367885a5001e90537f98874a5a4f64906",
+      "elapsed_s": 5.163835648000031,
+      "peak_rss_mib": 41.34765625,
+      "synthetic": true
+    },
+    {
+      "measured_at": "2026-10-30T19:09:30.940779+00:00",
+      "schema_version": 20,
+      "benchmark_sha256": "6f65957c7c61e2f911c4f0f8350ed259e9ca4eafc247617314d4d2dcd73dcd20",
+      "source_sha256": {
+        "src/radar/linking/linker.py": "abef419d5b39fe395e571198911de11e412570bc13504a7d731879f6ee50aa1d",
+        "src/radar/pipeline/linking_state.py": "f5711a920ed1b24968bf8e33b4bc6c62c28e3896615b264479c84f3d328b8462",
+        "src/radar/pipeline/projects.py": "ccb60ecac99d61e48d5702c839fe6088453d46b486ef092139436e1ef009f29d",
+        "src/radar/store/link_stream.py": "9c39ec30e0ecbcfeeeed08cfe37079e7e9a15f513ff3fbf040e33b2e4920b524"
+      },
+      "records": 1000,
+      "links": 499500,
+      "projects": 1,
+      "sha256": "4a18abd6f1d8bfa75b6581a3d297d80367885a5001e90537f98874a5a4f64906",
+      "elapsed_s": 5.116490476999957,
+      "peak_rss_mib": 41.34765625,
+      "synthetic": true
+    }
+  ],
+  "limitations": [
+    "One baseline repetition and three treatment repetitions on this shared worker.",
+    "Whole-process Linux ru_maxrss includes imports, generated filings, SQLite and all graph consumers.",
+    "Fresh disposable SQLite dataset in an isolated interpreter for every measurement.",
+    "Synthetic scenario establishes neither business quality nor production capacity.",
+    "No relation or project is truncated; counts and SHA-256 of canonical stored link JSON are checked."
+  ]
+}

@@ -30,9 +30,15 @@ from radar.pipeline.filings import extract_facts
 from radar.quality.corpus import CorpusFiling, load_manifest
 from radar.reading.ocr import make_ocr, tesseract_version
 from radar.reading.pdf import DEFAULT_MAX_BYTES, PdfContent, PdfReader
+from radar.reading.policy import ReadingPolicy, complete_reading
 from radar.store.cache import KeyValueCache
 
-VARIANTS = (("baseline", False, False), ("tables", True, False), ("secondary_ocr", False, True))
+VARIANTS = (
+    ("baseline", False, False),
+    ("tables", True, False),
+    ("secondary_ocr", False, True),
+    ("adaptive", False, False),
+)
 MAX_DOCUMENTS = 100
 MAX_CORPUS_BYTES = 128 * 1024 * 1024
 
@@ -94,8 +100,9 @@ def measure_pass(
     tables: bool,
     secondary: bool,
     use_ocr: bool,
+    adaptive: bool = False,
 ) -> dict[str, Any]:
-    reader = PdfReader(cache, read_tables=tables)
+    reader = PdfReader(cache, read_tables=tables, policy=ReadingPolicy(mode="adaptive") if adaptive else None)
     engine = make_ocr(None, use_tesseract=use_ocr, cache=cache, secondary_pass=secondary)
     hits, misses = cache.hits, cache.misses
     counters: Counter[str] = Counter()
@@ -113,7 +120,7 @@ def measure_pass(
             document_id = hashlib.sha256(data).hexdigest()
             tick = perf_counter()
             try:
-                content = engine.complete(document_id, data, reader.read(document_id, data))
+                content = complete_reading(document_id, data, reader.read(document_id, data), engine, reader.policy)
             except Exception as exc:
                 failures[document.filename] = f"{type(exc).__name__}: {exc}"
                 break
@@ -132,6 +139,8 @@ def measure_pass(
                     "fields_sha256": fingerprint(content.fields),
                     "tables_sha256": fingerprint([asdict(table) for table in content.tables]),
                     "unique_literal_associations": len(literals[document.filename]),
+                    "policy": reader.policy.describe(),
+                    "diagnostics": content.diagnostics(),
                 }
         else:
             try:
@@ -204,8 +213,24 @@ def run(directory: Path, *, use_ocr: bool = True) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="watt-reading-") as temporary:
             cache = KeyValueCache(Path(temporary) / "derived.sqlite")
             try:
-                cold = measure_pass(filings, documents, cache, tables=tables, secondary=secondary, use_ocr=use_ocr)
-                warm = measure_pass(filings, documents, cache, tables=tables, secondary=secondary, use_ocr=use_ocr)
+                cold = measure_pass(
+                    filings,
+                    documents,
+                    cache,
+                    tables=tables,
+                    secondary=secondary,
+                    use_ocr=use_ocr,
+                    adaptive=name == "adaptive",
+                )
+                warm = measure_pass(
+                    filings,
+                    documents,
+                    cache,
+                    tables=tables,
+                    secondary=secondary,
+                    use_ocr=use_ocr,
+                    adaptive=name == "adaptive",
+                )
             finally:
                 cache.close()
         variants[name] = {"cold": cold, "warm": warm, "warm_vs_cold": compare(cold, warm)}
@@ -239,6 +264,7 @@ def run(directory: Path, *, use_ocr: bool = True) -> dict[str, Any]:
             "documents": len(documents),
             "bytes": sum(map(len, documents.values())),
             "sha256": fingerprint({name: hashlib.sha256(data).hexdigest() for name, data in documents.items()}),
+            "manifest_sha256": hashlib.sha256((directory / "manifest.json").read_bytes()).hexdigest(),
         },
         "variants": variants,
         "vs_baseline": comparisons,

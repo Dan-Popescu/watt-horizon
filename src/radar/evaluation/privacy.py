@@ -43,6 +43,7 @@ def audit_privacy(db: Database, blobs: BlobStore, reader: PdfReader | None = Non
                     ("header", observation.header_quote),
                     ("phase", observation.phase),
                     ("scenario", observation.scenario),
+                    ("project", observation.project),
                 )
             },
         }

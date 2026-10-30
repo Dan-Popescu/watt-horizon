@@ -19,6 +19,7 @@ from radar.evaluation.gold import actual_fields
 from radar.evaluation.partitions import build_manifest
 from radar.evaluation.stats import wilson
 from radar.pipeline.corrections import reviewed_references
+from radar.store import diagnostics
 from radar.store.db import Database
 from radar.store.discovery import DiscoveryStore
 from radar.store.quality_queries import (
@@ -45,6 +46,10 @@ READING_COUNTERS = (
     "tables",
     "table_rows",
     "table_errors",
+    "useful_unread_pages",
+    "deepening_pages",
+    "format_errors",
+    "uncertain_segments",
 )
 REQUIRED_TARGET_FIELDS = ("developer", "commune", "power_mw", "filed_on", "review_decision")
 
@@ -296,3 +301,24 @@ def build_quality_loop(db: Database, *, jobs_path: Path | None = None, region: s
         "group_scope": "current_project_and_shared_document_groups; diagnostic_only",
         "caveat": "Mesures sur les observations disponibles, sans certification ni exhaustivité globale.",
     }
+
+
+def refresh_quality_loop(db: Database, *, jobs_path: Path | None = None, region: str | None = None) -> dict[str, Any]:
+    """Worker entry point: compute and persist one revision-bound aggregate snapshot."""
+    return diagnostics.refresh(
+        db,
+        "documentary:" + (region or "all"),
+        lambda: build_quality_loop(db, jobs_path=jobs_path, region=region),
+        scope={"region": region, "kind": "documentary"},
+        external=lambda: diagnostics.external_token(jobs_path) if jobs_path else "",
+    )
+
+
+def read_quality_loop(db: Database, *, jobs_path: Path | None = None, region: str | None = None) -> dict[str, Any]:
+    """API entry point: unavailable and stale are explicit; never run the graph diagnostics here."""
+    return diagnostics.read(
+        db,
+        "documentary:" + (region or "all"),
+        scope={"region": region, "kind": "documentary"},
+        external=diagnostics.external_token(jobs_path) if jobs_path else "",
+    )

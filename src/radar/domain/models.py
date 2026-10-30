@@ -88,6 +88,9 @@ class DocumentRecord(Model):
     filename: str
     pages: int = 0
     scanned_pages: tuple[int, ...] = ()
+    format: str = "pdf"
+    parent_document_id: str | None = None
+    member_path: str | None = None
     # Why a document the screen rejected was still fetched: "random" (unbiased recall estimate) or "near-miss:<why>".
     audit: str | None = None
 
@@ -142,6 +145,7 @@ class Filing(Model):
     evidence: dict[str, Evidence] = Field(default_factory=dict)
     unread_scans: tuple[str, ...] = ()  # document ids with scanned pages and no OCR text
     reading: dict[str, str] = Field(default_factory=dict)  # document id -> how it was read (text layer, OCR engine)
+    reading_diagnostics: dict[str, dict[str, object]] = Field(default_factory=dict)
     versions: dict[str, str] = Field(default_factory=dict)  # extraction / classification / ocr versions
     # What the machine produced before human corrections: evaluation always measures this, never the corrections.
     machine: MachineOutput | None = None

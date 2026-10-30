@@ -7,6 +7,7 @@ from radar.domain.enums import TARGET_CATEGORIES, Category, PowerStatus, ReviewD
 from radar.domain.ids import project_id
 from radar.domain.models import Filing, Link, Project, Signal
 from radar.linking.resolve import group_filings
+from radar.store.link_stream import LinkSpool
 
 SHORT_LABELS: dict[Category, str] = {
     Category.BESS: "Batteries",
@@ -34,19 +35,27 @@ def build_projects(
     """One project per group of target filings (see linking.resolve); the most recent filing leads.
     Human link verdicts win: « same_project » merges, « related » / « unrelated » keep apart, and an « unrelated »
     signal is not attached."""
+    if isinstance(links, LinkSpool):
+        return _build_projects(filings, signals, links, now, commissioned, previous, affected_keys, metrics)
+    with LinkSpool() as index:
+        index.add(links)
+        return _build_projects(filings, signals, index, now, commissioned, previous, affected_keys, metrics)
+
+
+def _build_projects(
+    filings: Iterable[Filing],
+    signals: Iterable[Signal],
+    links: LinkSpool,
+    now: datetime,
+    commissioned: Mapping[str, Signal] | None,
+    previous: Iterable[Project],
+    affected_keys: set[str] | None,
+    metrics: dict[str, int] | None,
+) -> list[Project]:
     commissioned = commissioned or {}
     signal_keys = {s.key for s in signals}
-    links = list(links)
-    must = [(lk.a, lk.b) for lk in links if lk.verdict == "same_project"]
-    cannot = [(lk.a, lk.b) for lk in links if lk.verdict in {"related", "unrelated"}]
-    linked: dict[str, set[str]] = {}
-    for link in links:
-        if link.verdict == "unrelated":
-            continue
-        for this, other in ((link.a, link.b), (link.b, link.a)):
-            if other in signal_keys:
-                linked.setdefault(this, set()).add(other)
-
+    must = links.decision_pairs(("same_project",))
+    cannot = links.decision_pairs(("related", "unrelated"))
     projects = []
     reusable = {frozenset(project.filing_keys): project for project in previous}
     rebuilt = 0
@@ -70,7 +79,7 @@ def build_projects(
             day = installation.observed_on.strftime("%d/%m/%Y") if installation.observed_on else "date inconnue"
             status = f"En service (registre national, mise en service le {day})"
         dates = [f.filed_on for f in group if f.filed_on]
-        signals_of_group = set().union(*(linked.get(f.key, set()) for f in group))
+        signals_of_group = links.signal_keys_for(members, signal_keys) if signal_keys else set()
         if installation is not None:
             signals_of_group.add(installation.key)
         projects.append(

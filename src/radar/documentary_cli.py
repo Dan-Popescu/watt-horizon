@@ -102,10 +102,12 @@ def discovery_command(args: argparse.Namespace, settings: Settings) -> Any:
 
 
 def quality_command(args: argparse.Namespace, settings: Settings) -> Any:
-    from radar.quality.documentary_metrics import build_quality_loop
+    from radar.api.quality import refresh_quality_overview
+    from radar.quality.documentary_metrics import refresh_quality_loop
 
-    with Database(settings.db_path, read_only=True) as db:
-        return build_quality_loop(db, jobs_path=settings.llm_jobs_path, region=args.region)
+    with Database(settings.db_path) as db:
+        refresh_quality_overview(db, settings.cases_dir)
+        return refresh_quality_loop(db, jobs_path=settings.llm_jobs_path, region=args.region)
 
 
 def add_parsers(sub: Any) -> None:

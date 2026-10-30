@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from radar.classification.base import ChainClassifier, Classifier
 from radar.classification.gold import GoldClassifier, load_gold
@@ -28,6 +28,7 @@ from radar.quality.rulebook import Rulebook
 from radar.quality.templates import Registry
 from radar.reading.ocr import make_ocr
 from radar.reading.pdf import PdfReader
+from radar.reading.policy import ReadingPolicy
 from radar.store.blobs import BlobStore
 from radar.store.cache import KeyValueCache
 from radar.store.db import Database
@@ -148,6 +149,29 @@ def make_lookups(settings: Settings, http: PoliteHttp | None) -> CompositeLookup
 
 def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode = "live") -> Services:
     cache = KeyValueCache(settings.cache_path)
+    policy = (
+        ReadingPolicy(
+            mode=cast(Literal["adaptive", "full"], settings.reading_mode),
+            max_deep_pages=settings.reading_max_deep_pages,
+            max_ocr_pages=settings.reading_max_ocr_pages,
+        )
+        if settings.reading_mode != "economical"
+        else None
+    )
+    reader = PdfReader(
+        cache,
+        max_workers=settings.pdf_workers,
+        max_bytes=settings.pdf_max_bytes,
+        max_pages=settings.pdf_max_pages,
+        max_batch_bytes=settings.pdf_batch_bytes,
+        max_memo_bytes=settings.pdf_batch_bytes,
+        document_timeout_s=settings.pdf_timeout_s,
+        read_tables=settings.pdf_read_tables,
+        max_table_pages=settings.pdf_table_max_pages,
+        max_table_rows=settings.pdf_table_max_rows,
+        max_table_chars=settings.pdf_table_max_chars,
+        policy=policy,
+    )
     ocr = make_ocr(
         settings.transcripts_dir,
         use_tesseract=settings.use_tesseract,
@@ -183,6 +207,7 @@ def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode =
         settings.pdf_table_max_chars,
         settings.ocr_secondary_pass,
         settings.ocr_secondary_max_pages,
+        reader.version,
     )
     return Services(
         blobs=BlobStore(settings.blobs_dir),
@@ -195,19 +220,7 @@ def make_services(settings: Settings, http: PoliteHttp | None, *, llm: LlmMode =
         labels={n: g.category for n, g in load_gold(settings.gold_path).items() if g.verified},
         screen_terms=ScreenTerms.load(settings.screen_terms_path).pattern(),
         fingerprint=setup,
-        reader=PdfReader(
-            cache,
-            max_workers=settings.pdf_workers,
-            max_bytes=settings.pdf_max_bytes,
-            max_pages=settings.pdf_max_pages,
-            max_batch_bytes=settings.pdf_batch_bytes,
-            max_memo_bytes=settings.pdf_batch_bytes,
-            document_timeout_s=settings.pdf_timeout_s,
-            read_tables=settings.pdf_read_tables,
-            max_table_pages=settings.pdf_table_max_pages,
-            max_table_rows=settings.pdf_table_max_rows,
-            max_table_chars=settings.pdf_table_max_chars,
-        ),
+        reader=reader,
         verifier=models.verifier,
         llm_queue=models.queue,
         llm_tasks=models.tasks,

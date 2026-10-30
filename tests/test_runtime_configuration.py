@@ -1,10 +1,12 @@
 """Resource and spending limits are explicit runtime settings, not implicit paid defaults."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from radar.config import load_settings
+from radar.config import Settings, load_settings
+from radar.wiring import make_services
 
 
 def test_paid_processing_is_closed_until_budgets_are_configured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -35,4 +37,33 @@ def test_resource_limits_are_configurable_and_validated(monkeypatch: pytest.Monk
 def test_invalid_budget_is_rejected(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("RADAR_LLM_DAILY_BUDGET_USD", value)
     with pytest.raises(ValueError, match="RADAR_LLM_DAILY_BUDGET_USD"):
+        load_settings()
+
+
+def test_reading_policy_is_opt_in_and_changes_processing_identity(settings: Settings) -> None:
+    economical = make_services(settings, None, llm="cached")
+    adaptive = make_services(replace(settings, reading_mode="adaptive"), None, llm="cached")
+    limited = make_services(replace(settings, reading_mode="adaptive", reading_max_deep_pages=1), None, llm="cached")
+    assert economical.reader.policy.mode == "economical"
+    assert not economical.reader.read_tables
+    assert adaptive.reader.policy.mode == "adaptive"
+    assert adaptive.reader.read_tables
+    assert adaptive.reader.version != limited.reader.version
+    assert len({economical.fingerprint, adaptive.fingerprint, limited.fingerprint}) == 3
+    explicit_tables = make_services(replace(settings, pdf_read_tables=True), None, llm="cached")
+    assert explicit_tables.reader.read_tables
+
+
+def test_reading_policy_environment_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RADAR_READING_MODE", "adaptive")
+    monkeypatch.setenv("RADAR_READING_MAX_DEEP_PAGES", "3")
+    monkeypatch.setenv("RADAR_READING_MAX_OCR_PAGES", "2")
+    settings = load_settings()
+    assert (settings.reading_mode, settings.reading_max_deep_pages, settings.reading_max_ocr_pages) == (
+        "adaptive",
+        3,
+        2,
+    )
+    monkeypatch.setenv("RADAR_READING_MODE", "unknown")
+    with pytest.raises(ValueError, match="RADAR_READING_MODE"):
         load_settings()

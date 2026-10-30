@@ -1336,6 +1336,13 @@ async function loadQuality() {
   if (!$("quality").innerHTML) $("quality").innerHTML = `<div class="stats">${[1, 2, 3, 4, 5].map(() => `<div class="stat">${skeleton(2)}</div>`).join("")}</div>${skeleton(5)}`;
   let q;
   try { q = await api("api/quality"); } catch (e) { $("quality").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; return; }
+  const snapshot = q.snapshot;
+  if (!snapshot || snapshot.status === "unavailable") {
+    $("quality-when").textContent = "Diagnostic indisponible.";
+    $("quality").innerHTML = '<div class="empty">Les diagnostics ne sont pas encore calculés. Lancer <code>radar quality-loop</code> depuis le traitement de données.</div>';
+    return;
+  }
+  const snapshotInfo = `<div class="sub${snapshot.status === "stale" ? " error" : ""}">${snapshot.status === "stale" ? "Diagnostic périmé — les données affichées décrivent un ancien état." : "Diagnostic précalculé."} Calculé le ${esc((snapshot.computed_at || "").replace("T", " ").slice(0, 19))} UTC · révision ${esc(snapshot.source_revision)} · périmètre : ${esc(snapshot.scope?.region || "toutes régions")}.${snapshot.status === "stale" ? " Recalculer avec radar quality-loop." : ""}</div>`;
   const r = q.last_eval, e = q.errors;
   $("quality-when").textContent = r ? `Dernière évaluation le ${frDate(r.generated_at.slice(0, 10))} à ${r.generated_at.slice(11, 16)} UTC (radar eval)` : "Aucune évaluation : lancer « radar eval ».";
   const acc = (v) => v.rate ?? v.accuracy;
@@ -1414,7 +1421,7 @@ async function loadQuality() {
       <tr><td>Temps de relecture déclaré</td><td>${feedback.declared_review_seconds == null ? "—" : `${esc(Math.round(feedback.declared_review_seconds / 60))} min`}</td></tr></table>
       <div class="sub">Le coût indiqué exclut l'hébergement et ne remplace pas la facture du fournisseur. Les compteurs de lecture décrivent les dernières observations des dossiers, avec réutilisation possible de PDF partagés.</div>`));
   }
-  $("quality").innerHTML = `<div class="stats">${stats.join("")}</div>
+  $("quality").innerHTML = `${snapshotInfo}<div class="stats">${stats.join("")}</div>
     <div class="eyebrow">À faire</div>
     <ul class="todo">${todo.map(([text, action]) => `<li><span>${text}</span>${action}</li>`).join("") || '<li><span>Aucune action priorisée par les observations disponibles.</span></li>'}</ul>
     ${details.length ? `<div class="eyebrow">Détails</div>${details.join("")}` : ""}`;

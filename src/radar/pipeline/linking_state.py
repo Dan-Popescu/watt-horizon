@@ -8,9 +8,8 @@ The caller serializes writers (the CLI and review routes use the dataset process
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime
-from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -18,15 +17,15 @@ from pydantic import BaseModel, ConfigDict
 
 from radar.domain.enums import SourceKind
 from radar.domain.models import Link, Signal
-from radar.linking.linker import propose_links
+from radar.linking.linker import iter_propose_links
 from radar.linking.registry import commissioned
-from radar.linking.review import apply_link_decisions
 from radar.pipeline.changes import track_changes
 from radar.pipeline.projects import build_projects
 from radar.store.db import SCHEMA_VERSION, Database, utcnow
+from radar.store.link_stream import LinkSpool
 
 STATE_NAME = "linking"
-ALGORITHM_VERSION = 1
+ALGORITHM_VERSION = 2
 PACKAGE = Path(__file__).resolve().parents[1]
 
 
@@ -58,6 +57,8 @@ def _policy() -> str:
         "linking/registry.py",
         "linking/review.py",
         "linking/resolve.py",
+        "store/link_stream.py",
+        "store/link_queries.py",
         "domain/models.py",
         "domain/enums.py",
         "domain/ids.py",
@@ -76,16 +77,15 @@ def _changes(before: Mapping[str, str], after: Mapping[str, str]) -> set[str]:
     return {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
 
 
-def _registry_links(matches: Mapping[str, Signal], only_keys: set[str] | None = None) -> list[Link]:
-    return [
-        Link(
+def _registry_links(matches: Mapping[str, Signal], only_keys: set[str] | None = None) -> Iterator[Link]:
+    for key, signal in matches.items():
+        if only_keys is not None and key not in only_keys and signal.key not in only_keys:
+            continue
+        yield Link(
             a=min(key, signal.key),
             b=max(key, signal.key),
             reasons=(f"registre national : installation en service compatible ({signal.payload['power_mw']} MW)",),
         )
-        for key, signal in matches.items()
-        if only_keys is None or key in only_keys or signal.key in only_keys
-    ]
 
 
 def _load(db: Database) -> _State | None:
@@ -97,6 +97,11 @@ def _load(db: Database) -> _State | None:
 
 
 def _execute(db: Database, now: datetime | None, *, force_full: bool) -> dict[str, Any]:
+    with LinkSpool() as links:
+        return _execute_spooled(db, now, force_full=force_full, links=links)
+
+
+def _execute_spooled(db: Database, now: datetime | None, *, force_full: bool, links: LinkSpool) -> dict[str, Any]:
     now = now or utcnow()
     if now.tzinfo is None:
         raise ValueError("Linking timestamps must include a timezone")
@@ -132,18 +137,18 @@ def _execute(db: Database, now: datetime | None, *, force_full: bool) -> dict[st
     work: dict[str, Any] = {"mode": "incremental" if valid else "full"}
     if not valid or previous is None:
         matches = commissioned(filings, signals)
-        links = propose_links(filings, signals, metrics=work) + _registry_links(matches)
-        links = apply_link_decisions(links, decisions)
+        links.add(iter_propose_links(filings, signals, metrics=work))
+        links.add(_registry_links(matches))
+        links.apply_decisions(decisions)
         built = build_projects(filings, signals, links, now=now, commissioned=matches, metrics=work)
         work.update(reason=reason, rebuilt_links=len(links))
     else:
-        old_links = db.links()
         affected = changed_filings | changed_signals
         # A changed decision may join or separate groups even if no matching key exists.
         for a, b in decisions:
             if _digest([a, b]) in changed_decisions:
                 affected.update((a, b))
-        for link in old_links:
+        for link in db.iter_links():
             if _digest([link.a, link.b]) in changed_decisions:
                 affected.update((link.a, link.b))
         # Registry additions and removals can change the closest installation in either the old or new commune.
@@ -161,14 +166,16 @@ def _execute(db: Database, now: datetime | None, *, force_full: bool) -> dict[st
             if key in filings_by_key and key not in affected and signal_key in signals_by_key
         }
         matches.update(commissioned(affected_filings, signals))
-        retained = [link for link in old_links if link.a not in affected and link.b not in affected]
-        rebuilt = propose_links(filings, signals, only_keys=affected, metrics=work) + _registry_links(matches, affected)
-        links = apply_link_decisions(retained + rebuilt, decisions)
+        links.add(link for link in db.iter_links() if link.a not in affected and link.b not in affected)
+        links.add(iter_propose_links(filings, signals, only_keys=affected, metrics=work))
+        links.add(_registry_links(matches, affected))
+        links.apply_decisions(decisions)
         # A signal's incident edge can disappear as well as appear. Both sets affect the owning projects.
         affected_projects = set(affected)
-        for link in chain(old_links, links):
-            if link.a in changed_signals or link.b in changed_signals:
-                affected_projects.update((link.a, link.b))
+        for relations in (db.iter_links(), iter(links)):
+            for link in relations:
+                if link.a in changed_signals or link.b in changed_signals:
+                    affected_projects.update((link.a, link.b))
         built = build_projects(
             filings,
             signals,

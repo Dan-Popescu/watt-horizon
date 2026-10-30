@@ -6,7 +6,7 @@ Every rate carries its sample size and a 95 % interval; the test split shows sco
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -59,7 +59,7 @@ class ReportInputs:
     cases: dict[str, list[str]] | None = None
     ocr: dict[str, Any] | None = None
     classifier: ClassifierReport | None = None
-    links: list[Link] = field(default_factory=list)  # stored links, annotated with human verdicts
+    links: Iterable[Link] = field(default_factory=tuple)  # consumed once; never retain a dense graph here
     link_decisions: dict[tuple[str, str], LinkDecision] = field(default_factory=dict)
     partition_manifest: PartitionManifest | None = None
     failures: dict[str, str] = field(default_factory=dict)

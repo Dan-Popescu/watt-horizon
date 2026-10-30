@@ -169,7 +169,7 @@ def assign_partitions(
         path,
         filings,
         projects=db.projects(),
-        links=db.links(),
+        links=db.iter_links(),
         first_seen=first_seen,
         test_after=test_after,
     )

@@ -47,6 +47,9 @@ class Settings:
     pdf_table_max_chars: int = 200_000
     ocr_secondary_pass: bool = False
     ocr_secondary_max_pages: int = 8
+    reading_mode: str = "economical"
+    reading_max_deep_pages: int = 8
+    reading_max_ocr_pages: int = 8
 
     @property
     def catalog_path(self) -> Path:
@@ -186,6 +189,13 @@ def _evaluation_campaign() -> str:
     return value
 
 
+def _reading_mode() -> str:
+    value = os.environ.get("RADAR_READING_MODE", "economical")
+    if value not in {"economical", "adaptive", "full"}:
+        raise ValueError("RADAR_READING_MODE must be economical, adaptive or full")
+    return value
+
+
 def load_settings() -> Settings:
     return Settings(
         data_dir=Path(os.environ.get("RADAR_DATA_DIR", "data")).resolve(),
@@ -226,6 +236,9 @@ def load_settings() -> Settings:
         pdf_table_max_chars=_positive_int("RADAR_PDF_TABLE_MAX_CHARS", 200_000),
         ocr_secondary_pass=_flag("RADAR_OCR_SECONDARY", False),
         ocr_secondary_max_pages=_positive_int("RADAR_OCR_SECONDARY_MAX_PAGES", 8),
+        reading_mode=_reading_mode(),
+        reading_max_deep_pages=_positive_int("RADAR_READING_MAX_DEEP_PAGES", 8),
+        reading_max_ocr_pages=_positive_int("RADAR_READING_MAX_OCR_PAGES", 8),
         evaluation_campaign=_evaluation_campaign(),
         evaluation_test_after=date.fromisoformat(os.environ["RADAR_EVAL_TEST_AFTER"])
         if os.environ.get("RADAR_EVAL_TEST_AFTER")
