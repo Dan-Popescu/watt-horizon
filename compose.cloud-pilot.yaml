@@ -1,0 +1,82 @@
+# Standalone configuration: never combine with compose.yaml (production secrets).
+name: ${WATT_PILOT_PROJECT:?use tools/cloud_pilot.py}
+x-runtime: &runtime
+  image: ${WATT_PILOT_IMAGE:?build the image first}
+  pull_policy: never
+  user: "${WATT_PILOT_UID:?}:${WATT_PILOT_GID:?}"
+  volumes:
+    - "${WATT_PILOT_ROOT:?}/data:/data"
+    - "${WATT_PILOT_ROOT:?}/backups:/backups"
+    - "${WATT_PILOT_ROOT:?}/restores:/restores"
+    - "${WATT_PILOT_ROOT:?}/inputs:/inputs:ro"
+  environment: &environment
+    RADAR_DATA_DIR: /data
+    RADAR_GOLD_DIR: /data/gold
+    RADAR_OFFLINE: "1"
+    RADAR_WORKER_OFFLINE: "1"
+    RADAR_LLM_DAILY_BUDGET_USD: "0"
+    RADAR_LLM_CAMPAIGN_BUDGET_USD: "0"
+    RADAR_LLM_FILING_BUDGET_USD: "0"
+    RADAR_EVALUATION_CAMPAIGN: cloud-pilot
+    RADAR_PDF_WORKERS: "1"
+    RADAR_PDF_MAX_BYTES: "33554432"
+    RADAR_PDF_MAX_PAGES: "300"
+    RADAR_PDF_BATCH_BYTES: "67108864"
+    RADAR_PDF_TIMEOUT_S: "30"
+    RADAR_OCR_MAX_PAGES: "50"
+    RADAR_OCR_MAX_PIXELS: "20000000"
+    RADAR_OCR_TIMEOUT_S: "60"
+    RADAR_PDF_TABLES: "1"
+    RADAR_PDF_TABLE_MAX_PAGES: "20"
+    RADAR_HTTP_MAX_BYTES: "33554432"
+    RADAR_HTTP_DEADLINE_S: "60"
+    OMP_THREAD_LIMIT: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  init: true
+  cpus: 2
+  mem_limit: 2g
+  memswap_limit: 2g
+  pids_limit: 128
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=512m,mode=1777"]
+  ulimits:
+    nofile: {soft: 1024, hard: 4096}
+    core: 0
+    fsize: 536870912
+
+services:
+  offline:
+    <<: *runtime
+    network_mode: none
+    command: [radar, tasks, status]
+  collector:
+    <<: *runtime
+    profiles: [collect]
+    volumes:
+      - "${WATT_PILOT_ROOT:?}/data:/data"
+      - "${WATT_PILOT_ROOT:?}/inputs:/inputs:ro"
+      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
+    environment:
+      <<: *environment
+      RADAR_OFFLINE: "0"
+      RADAR_WORKER_OFFLINE: "0"
+    command: [radar, tasks, run, --max-tasks, "1"]
+  review:
+    <<: *runtime
+    profiles: [review]
+    ports: ["127.0.0.1:8766:8765"]
+    volumes:
+      - "${WATT_PILOT_ROOT:?}/data:/data"
+      - "${WATT_PILOT_ROOT:?}/control/review-token:/run/secrets/review-token:ro"
+    environment:
+      <<: *environment
+      WATT_PILOT_PUBLIC_HOST: ${WATT_PILOT_PUBLIC_HOST:-localhost}
+    command:
+      - sh
+      - -c
+      - >-
+        export RADAR_API_TOKEN="$$(cat /run/secrets/review-token)";
+        exec radar web --review --host 0.0.0.0 --port 8765
+        --public-host "$$WATT_PILOT_PUBLIC_HOST"

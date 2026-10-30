@@ -38,6 +38,9 @@ Le script prépare les dépendances ; il ne collecte rien et ne démarre aucun s
 
 Documentation officielle : https://learn.chatgpt.com/docs/environments/cloud-environments.
 
+Pour un premier lot exécuté entièrement dans le cloud, voir [pilote-cloud.md](pilote-cloud.md) :
+profils isolés, état réel de la configuration réseau, limites de stockage et prérequis d'accès privé.
+
 ## Reprendre un changement ailleurs
 
 Une branche par changement, préfixée `feat/`. Enregistrer et pousser le travail avant de changer de machine ; ailleurs, récupérer la même branche. Un nouveau chat doit lire `AGENTS.md`, puis la documentation liée à sa tâche. Les modifications non enregistrées dans Git ne sont pas transférées.

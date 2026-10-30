@@ -1,0 +1,184 @@
+{
+  "date": "2026-10-30",
+  "baseline_commit": "f1dc6cc",
+  "scope": "cloud setup and container technical checks; no field collection or business quality claim",
+  "platform": {
+    "requested_configuration_matches_active": true,
+    "revision": "1",
+    "observed_revision": "1",
+    "observations_current": true,
+    "phase": "running",
+    "network": {
+      "mode": "restricted",
+      "state": "enforced",
+      "custom_hosts": [],
+      "presets": [
+        "package_managers"
+      ]
+    },
+    "draft_saved": false,
+    "changes_applied": false
+  },
+  "tools_missing": [
+    "platform configuration draft save/publish/apply",
+    "persistent cloud storage provisioning and scoped identity",
+    "hosted authenticated private ingress"
+  ],
+  "dependencies": {
+    "python": "3.12.14",
+    "uv": "0.12.23",
+    "node": "24.19.0",
+    "docker": "28.4.0",
+    "compose": "2.40.3",
+    "setup_repeated_successfully": true,
+    "image": "sha256:42fb1d4c03838bb9e275b055ad254de877cdb5214b4054d3f5fd317df4f61809",
+    "host_french_ocr": false,
+    "container_french_ocr": true
+  },
+  "runtime_collector_probe": {
+    "uid": 1000,
+    "gid": 1000,
+    "cap_effective": "0000000000000000",
+    "no_new_privileges": "1",
+    "credential_variables_present": [],
+    "docker_socket_exists": false,
+    "host_git_exists": false,
+    "review_token_exists": false,
+    "root_private_control_exists": false,
+    "offline": "0",
+    "worker_offline": "0",
+    "budgets": [
+      "0",
+      "0",
+      "0"
+    ],
+    "proxy_configured": true,
+    "nofile": [
+      1024,
+      4096
+    ],
+    "fsize": [
+      536870912,
+      536870912
+    ],
+    "tesseract_languages": [
+      "List of available languages in \"/usr/share/tesseract-ocr/5/tessdata/\" (3):",
+      "eng",
+      "fra",
+      "osd"
+    ],
+    "tmp_mount": [
+      "tmpfs /tmp tmpfs rw,nosuid,nodev,noexec,relatime,size=524288k 0 0"
+    ],
+    "memory.max": "2147483648",
+    "memory.swap.max": "0",
+    "cpu.max": "200000 100000",
+    "pids.max": "128",
+    "root_readonly": true
+  },
+  "network": {
+    "status": "blocked",
+    "error": "ProxyError",
+    "reason": "403 Forbidden",
+    "attempts": 1
+  },
+  "technical_corpus": {
+    "kind": "existing redacted public regression corpus",
+    "new_documents_downloaded": 0,
+    "documents": 11,
+    "filings": 7,
+    "located_evidence_items": 67,
+    "gold_labels_copied": false,
+    "first_worker_tasks": 19,
+    "second_worker_tasks": 0,
+    "states": {
+      "complete": 19
+    },
+    "physical_requests": 0,
+    "paid_calls": false
+  },
+  "synthetic_french_ocr_smoke": {
+    "status": "ok",
+    "kind": "synthetic_technical_test",
+    "language": "fra",
+    "text": "Stockage par batteries : puissance 100 MW."
+  },
+  "backup_restore": {
+    "integrity": "ok",
+    "documents": 11,
+    "task_rows": 19,
+    "tasks_and_originals_identical": true,
+    "restored_task_history_sha256": "cdffe4fb9fb2699d79184a3db41e8f9e4668988ec0d367406081b1f8ae6cf6c9",
+    "off_instance_upload_tested": false
+  },
+  "persistence": {
+    "container_recreated": true,
+    "review_after_recreation": 200,
+    "task_states_after_recreation": {
+      "complete": 19
+    },
+    "cloud_instance_recreation_tested": false
+  },
+  "auth": [
+    {
+      "path": "/",
+      "authenticated": false,
+      "status": 200,
+      "bytes": 120931
+    },
+    {
+      "path": "/api/projects",
+      "authenticated": false,
+      "status": 401,
+      "bytes": 12
+    },
+    {
+      "path": "/api/projects",
+      "authenticated": true,
+      "status": 200,
+      "bytes": 2
+    },
+    {
+      "path": "/api/review",
+      "authenticated": false,
+      "status": 401,
+      "bytes": 12
+    },
+    {
+      "path": "/api/review",
+      "authenticated": true,
+      "status": 200,
+      "bytes": 40260
+    }
+  ],
+  "disk_limit": {
+    "real_prelaunch_refusal_verified": true,
+    "state": "incomplete",
+    "reason": "storage_budget",
+    "default_limit_bytes": 6442450944,
+    "reserve_bytes": 6442450944,
+    "polling_seconds": 1,
+    "hard_filesystem_quota": false
+  },
+  "checks": {
+    "pytest_passed": 649,
+    "pytest_skipped": 1,
+    "pytest_seconds": 172.22,
+    "ruff_format": "passed",
+    "ruff_check": "passed",
+    "mypy_application": "passed:157 modules",
+    "mypy_controller": "passed",
+    "javascript_syntax": "passed via existing test_web",
+    "baseline_run": "passed, empty preexisting database",
+    "evaluation_regressions": [],
+    "business_gate": "failed",
+    "new_human_annotations": 0
+  },
+  "new_billable_infrastructure_provisioned": false,
+  "paid_model_budgets_usd": [
+    0,
+    0,
+    0
+  ],
+  "full_pilot_ready": false
+}

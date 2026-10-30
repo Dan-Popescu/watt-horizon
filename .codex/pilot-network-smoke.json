@@ -1,0 +1,25 @@
+[
+  {
+    "kind": "explore",
+    "identity": "network-smoke/dreal/hauts-de-france/2026",
+    "source": "dreal",
+    "inputs": {
+      "source": "dreal",
+      "region": "hauts-de-france",
+      "listing": ["2026-r5508.html"],
+      "max_offset": 0,
+      "max_items": 1
+    }
+  },
+  {
+    "kind": "explore",
+    "identity": "network-smoke/mrae/hauts-de-france/2026",
+    "source": "mrae",
+    "inputs": {
+      "source": "mrae",
+      "region": "hauts-de-france",
+      "year": 2026,
+      "max_items": 1
+    }
+  }
+]

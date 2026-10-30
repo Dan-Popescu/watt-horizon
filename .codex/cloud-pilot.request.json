@@ -1,0 +1,85 @@
+{
+  "format": "watt-horizon-cloud-change-request-v1",
+  "status": "prepared_not_submitted",
+  "platform_import_schema": false,
+  "target_config_id": null,
+  "target_config_note": "Set from a fresh environment_status result; never reuse an instance identifier",
+  "repository": "https://github.com/Dan-Popescu/watt-horizon",
+  "branch": "main",
+  "setup_command": "bash .codex/setup.sh",
+  "development": {
+    "network_mode": "restricted",
+    "preserve_presets": ["package_managers"],
+    "runtime_variables": {"RADAR_OFFLINE": "1", "UV_CACHE_DIR": "/workspace/.cache/uv"},
+    "production_secrets": [],
+    "vpn": false
+  },
+  "collector": {
+    "network_mode": "restricted",
+    "explicit_hosts": [
+      "www.hauts-de-france.developpement-durable.gouv.fr",
+      "www.mrae.developpement-durable.gouv.fr",
+      "www.nord.gouv.fr",
+      "www.pas-de-calais.gouv.fr",
+      "www.somme.gouv.fr",
+      "www.oise.gouv.fr",
+      "www.aisne.gouv.fr",
+      "geo.api.gouv.fr",
+      "recherche-entreprises.api.gouv.fr"
+    ],
+    "additional_territories": [],
+    "additional_territories_status": "not_observed_network_blocked",
+    "annex_hosts": [],
+    "annex_hosts_status": "qualify_from_observed_links_and_redirects_before_adding",
+    "optional_hosts_not_requested": {
+      "georisques.gouv.fr": "optional ICPE connector outside first lot",
+      "www.georisques.gouv.fr": "optional ICPE detail pages outside first lot",
+      "annuaire-entreprises.data.gouv.fr": "connector emits links; no fetching required for first lot",
+      "odre.opendatasoft.com": "optional energy register import outside first lot",
+      "html.duckduckgo.com": "optional public search outside first lot"
+    },
+    "production_secrets": [],
+    "git_write_credentials": false,
+    "docker_socket": false,
+    "runtime_variables": {"RADAR_OFFLINE": "0", "RADAR_WORKER_OFFLINE": "0"},
+    "prebuilt_image_required": true
+  },
+  "paid_models": {
+    "enabled": false,
+    "daily_budget_usd": 0,
+    "campaign_budget_usd": 0,
+    "filing_budget_usd": 0,
+    "future_provider": "Anthropic, only if explicitly selected and funded",
+    "future_host_not_requested": "api.anthropic.com",
+    "future_secret_binding": "ANTHROPIC_API_KEY in platform secret manager, model-only profile",
+    "pricing_status": "no funded model selected; versioned provider rates required before enabling"
+  },
+  "private_storage": {
+    "status": "not_provisioned",
+    "required": "single-writer local persistent encrypted filesystem, initially 40 GiB; no SQLite WAL over a network filesystem",
+    "backup": "private versioned cloud object bucket, encrypted, separately scoped identity; verify restore on a replacement cloud instance",
+    "current_control": "6 GiB monitored pilot tree plus 6 GiB free reserve; polling is not a hard filesystem quota",
+    "persistence_after_environment_recreation": "unverified"
+  },
+  "private_ingress": {
+    "status": "not_provisioned",
+    "origin": "cloud host loopback 127.0.0.1:8766",
+    "required": "hosted HTTPS gateway with OIDC or equivalent identity allowlist; block unauthenticated access to every route",
+    "application_auth": "separate RADAR_API_TOKEN from the cloud secret manager, never mounted into the collector",
+    "client_side_tunnel": false,
+    "automatic_public_exposure": false
+  },
+  "billing": {
+    "provisioned_by_this_request": false,
+    "approved_infrastructure_budget": null,
+    "quote_required": ["cloud compute", "persistent disk", "private object storage", "requests and egress", "authenticated gateway"],
+    "caveat": "Existing session resource consumption is subject to the user's platform plan; no new billable infrastructure or model call requested"
+  },
+  "required_platform_operations_unavailable": [
+    "read/edit/save/publish environment configuration draft",
+    "apply configuration to the task instance or create/rebind a reviewed instance",
+    "provision private persistent cloud storage and scoped backup identity",
+    "create authenticated private browser ingress"
+  ],
+  "full_pilot_ready": false
+}
