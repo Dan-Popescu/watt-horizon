@@ -11,6 +11,11 @@ Human docs (French): `README.md`, `docs/architecture.md`, `docs/deploiement.md`,
 - Fresh checkout or Cloud setup: read `docs/developpement.md`; run `bash .codex/setup.sh`. Offline tests use the bundled redacted corpus; local `data/` is not required.
 - Quality work: read `docs/roadmap.md` before claiming production readiness or relying on calibration and evaluation. Its confirmed audit findings are open, not implemented fixes.
 - Public commits contain code and sanitized fixtures only. Keep raw data, secrets and reviewer exports local; back up the database separately.
+- Delivery: once the required checks and reviews pass, commit the completed work, integrate it into `main`
+  (fast-forward or merge), and push `main` in the same task. The user has already authorized routine commits,
+  pushes, merges and conflict resolution; proceed without requesting another approval. Preserve newer remote
+  work and rerun affected checks after resolving conflicts. Completion requires verifying that remote `main`
+  contains the delivered commit. Preserve history: no force-push or destructive reset.
 
 ## Commands
 
