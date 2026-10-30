@@ -101,6 +101,58 @@ def test_xlsx_formula_is_visible_and_never_a_reliable_number() -> None:
     assert content.pages == 0
 
 
+def test_docx_content_controls_keep_body_table_and_cell_locations() -> None:
+    body = (
+        "<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>" + QUOTE + "</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+        "<w:tbl><w:tblPr/><w:sdt><w:sdtContent><w:tr>"
+        "<w:sdt><w:sdtContent><w:tc><w:p><w:r><w:t>30 MW</w:t></w:r></w:p></w:tc>"
+        "</w:sdtContent></w:sdt></w:tr></w:sdtContent></w:sdt></w:tbl>"
+    )
+    content = read_document(
+        archive({"word/document.xml": '<w:document xmlns:w="urn:word"><w:body>' + body + "</w:body></w:document>"})
+    )
+    assert content.text == QUOTE + " 30 MW" and not content.format_errors
+    assert [segment.locator for segment in content.segments] == ["paragraph:1", "table:1:row:1:cell:1"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<w:ins><w:p><w:r><w:t>30 MW</w:t></w:r></w:p></w:ins>",
+        "<w:p><w:ins><w:r><w:t>30 MW</w:t></w:r></w:ins></w:p>",
+        '<w:p><w:fldSimple w:instr="CALCULATE"><w:r><w:t>30 MW</w:t></w:r></w:fldSimple></w:p>',
+        '<w:altChunk w:id="r1"/>',
+        "<w:unknown><w:p><w:r><w:t>30 MW</w:t></w:r></w:p></w:unknown>",
+        "<w:p><w:unknown><w:r><w:t>30 MW</w:t></w:r></w:unknown></w:p>",
+        '<mc:AlternateContent xmlns:mc="urn:compatibility"><mc:Choice><w:p><w:r><w:t>30 MW</w:t></w:r></w:p></mc:Choice></mc:AlternateContent>',
+    ],
+)
+def test_docx_unsupported_or_changed_structures_are_explicitly_incomplete(body: str) -> None:
+    content = read_document(
+        archive({"word/document.xml": '<w:document xmlns:w="urn:word"><w:body>' + body + "</w:body></w:document>"})
+    )
+    assert content.format_errors and "incomplete" in content.read_by
+    assert "30 MW" not in content.text
+
+
+def test_empty_non_pdf_text_is_incomplete_but_archive_container_is_distinct() -> None:
+    assert read_document(docx("")).format_errors
+    assert read_document(b"<html><body></body></html>").format_errors
+    assert not read_document(archive({"unread.bin": b"not a document"})).format_errors
+
+
+def test_docx_preserves_split_run_numbers_and_flags_drawing_textboxes() -> None:
+    content = read_document(
+        archive(
+            {
+                "word/document.xml": '<w:document xmlns:w="urn:word"><w:body><w:p><w:r><w:t>1</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>00 MW</w:t></w:r></w:p><w:p><w:r><w:drawing><w:p><w:r><w:t>30 MW</w:t></w:r></w:p></w:drawing></w:r></w:p></w:body></w:document>'
+            }
+        )
+    )
+    assert content.text == "100 MW" and content.format_errors
+    assert content.segments[1].uncertain and "30 MW" in content.segments[1].text
+
+
 @pytest.mark.parametrize("name", ["../escape", "/absolute", "C:/escape", "folder\\escape"])
 def test_archive_paths_are_rejected_without_writing(name: str) -> None:
     with pytest.raises(ValueError, match="unsafe"):
@@ -130,7 +182,14 @@ def test_archive_symlinks_bombs_members_and_xml_entities_are_bounded() -> None:
 
 
 def test_archive_ingestion_retains_originals_lineage_and_real_extraction(db: Database, blobs: BlobStore) -> None:
-    source = archive({"annexe.docx": docx(), "tableau.xlsx": xlsx(), "unread.bin": b"unsupported"})
+    controlled_document = archive(
+        {
+            "word/document.xml": '<w:document xmlns:w="urn:word"><w:body><w:sdt><w:sdtContent><w:p><w:r><w:t>'
+            + QUOTE
+            + "</w:t></w:r></w:p></w:sdtContent></w:sdt></w:body></w:document>"
+        }
+    )
+    source = archive({"annexe.docx": controlled_document, "tableau.xlsx": xlsx(), "unread.bin": b"unsupported"})
     with db.transaction():
         root = ingest_document(
             db,

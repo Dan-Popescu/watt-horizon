@@ -113,6 +113,7 @@ class PreparedWork:
     cleanup: Callable[[], None] = lambda: None
     state: TaskState = "complete"
     error: str | None = None
+    validate: Callable[[], bool] = lambda: True
 
 
 def prepare_snapshot(db: Database, operation: Callable[[Database], Any]) -> PreparedWork:
@@ -205,14 +206,31 @@ class TaskWorker:
         http: PoliteHttp | None = None,
         clock: Callable[[], float] = time.time,
         worker: str = "local",
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.db, self.handlers, self.offline, self.http = db, handlers, offline, http
         self.clock, self.worker = clock, worker
+        self.sleep = sleep
         self.store = TaskStore(db.conn)
 
     def _request(self, lease: TaskLease) -> None:
-        with locked(self.db):
-            self.store.request(lease, now=self.clock())
+        # Conservative global pacing survives task boundaries and process restarts.
+        # Waiting happens outside the write lock; admission is counted before send.
+        while True:
+            with locked(self.db):
+                current = self.clock()
+                self.store.check(lease, now=current)
+                allowed = float(
+                    self.db.conn.execute("SELECT next_allowed FROM task_network_admission WHERE id=1").fetchone()[0]
+                )
+                if current >= allowed:
+                    self.store.request(lease, now=current)
+                    self.db.conn.execute("UPDATE task_network_admission SET next_allowed=? WHERE id=1", (current + 5,))
+                    return
+                delay = allowed - current
+            if allowed >= lease.until:
+                raise TaskDeadlineError("Persistent HTTP pacing would exceed the task lease")
+            self.sleep(delay)
 
     def run_one(self) -> dict[str, Any] | None:
         with locked(self.db):
@@ -244,7 +262,7 @@ class TaskWorker:
                     prepared = self.handlers[lease.spec.kind](lease)
             with locked(self.db):
                 self.store.check(lease, now=self.clock())
-                if self.store.revision() != prepared.revision:
+                if self.store.revision() != prepared.revision or not prepared.validate():
                     raise TaskInputsChangedError("Dataset changed while the private snapshot was being computed")
                 prepared.publish(self.db)
                 self.store.finish(lease, prepared.state, now=self.clock(), result=prepared.result, error=prepared.error)
@@ -264,6 +282,17 @@ class TaskWorker:
                 else "retry_wait"
             )
             error = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, TaskDeadlineError):
+                with locked(self.db):
+                    self.store.expire(now=self.clock())
+                    expired = self.store.get(lease.key)
+                    if expired and expired["fence"] == lease.fence and expired["state"] != "running":
+                        self.db.conn.execute("UPDATE pipeline_tasks SET error=? WHERE key=?", (error, lease.key))
+                        self.db.conn.execute(
+                            "UPDATE task_attempts SET error=? WHERE task_key=? AND fence=?",
+                            (error, lease.key, lease.fence),
+                        )
+                        return {"key": lease.key, "state": expired["state"], "error": error}
             try:
                 with locked(self.db):
                     current = self.store.get(lease.key)
@@ -296,7 +325,7 @@ class TaskWorker:
         return {"work": completed, **self.store.summary(), "offline": self.offline}
 
 
-def extraction_input(db: Database, key: str, services: Services) -> str:
+def extraction_input(db: Database, key: str, services: Services, *, ledger_path: Path | None = None) -> str:
     previous = db.filing(key)
     return digest(
         [doc.model_dump(mode="json") for doc in db.documents(key)],
@@ -304,7 +333,7 @@ def extraction_input(db: Database, key: str, services: Services) -> str:
         services.fingerprint,
         processing_fingerprint(),
         [reading_input(document.id, services) for document in db.documents(key)],
-        _model_state(db.path, key),
+        _model_state(ledger_path or db.path, key),
         {
             name: value
             for name, value in ((previous.strata if previous else {}).items())
@@ -322,7 +351,7 @@ def _transcript_input(engine: OcrEngine, document_id: str) -> Any:
         # existing resource controls. Oversize inputs remain explicit and unsealed.
         if path.stat().st_size > 8 * 1024 * 1024:
             raise TaskBlockedError("Transcript exceeds task input fingerprint byte budget")
-        return digest(path.read_bytes().hex())
+        return hashlib.sha256(path.read_bytes()).hexdigest()
     if isinstance(engine, ChainOcr):
         return [_transcript_input(item, document_id) for item in engine.engines]
     if isinstance(engine, CachedOcr):
@@ -473,6 +502,8 @@ def application_handlers(
     *,
     http: PoliteHttp | None = None,
     collect: Callable[[TaskSpec, Database], Any] | None = None,
+    input_guard: Callable[[], bool] = lambda: True,
+    collector_policy: str = "",
 ) -> dict[str, Handler]:
     """Connect reading, existing extraction/grouping and optional existing collectors.
 
@@ -481,6 +512,8 @@ def application_handlers(
     """
 
     def read(lease: TaskLease) -> PreparedWork:
+        if not input_guard():
+            raise TaskInputsChangedError("External steering files changed")
         document_id = str(lease.spec.inputs["document_id"])
         revision = TaskStore(db.conn).revision()
         row = db.conn.execute(
@@ -493,14 +526,42 @@ def application_handlers(
             raise TaskBlockedError("Document exceeds immutable task byte budget")
         content = read_documents([selected], services)[0]
         result = {"document_id": document_id, "coverage": content.coverage_summary(), "read_by": content.read_by}
+        if content.format != "pdf" and not content.text.strip() and content.format != "zip":
+            raise TaskBlockedError(
+                "Document has no usable text; manual reading or a supported parser is required", result=result
+            )
+        if content.format == "zip":
+            member = db.conn.execute(
+                "SELECT 1 FROM document_attachments WHERE json_extract(data,'$.parent_document_id')=? LIMIT 1",
+                (document_id,),
+            ).fetchone()
+            if member is None:
+                raise TaskBlockedError("Archive contains no ingested readable member", result=result)
+            blocked_member = db.conn.execute(
+                "SELECT state,url FROM dossier_edges WHERE filing_key=? AND root_url=? AND state!='document' LIMIT 1",
+                (selected.filing_key, selected.url + "#archive=" + document_id),
+            ).fetchone()
+            if blocked_member:
+                raise TaskBlockedError(
+                    "Archive has an unsupported or budget-limited member: " + str(blocked_member[0]), result=result
+                )
         if content.unread_scanned_pages or content.table_errors or content.format_errors or content.useful_unread_pages:
             raise TaskBlockedError("Reading is incomplete; inspect coverage and resource-limit reasons", result=result)
-        return PreparedWork(revision, result, lambda _: None)
+        return PreparedWork(
+            revision,
+            result,
+            lambda _: None,
+            validate=lambda: input_guard() and reading_input(document_id, services) == lease.spec.inputs.get("policy"),
+        )
 
     def extract(lease: TaskLease) -> PreparedWork:
+        if not input_guard():
+            raise TaskInputsChangedError("External steering files changed")
+        model_state = _model_state(db.path, str(lease.spec.inputs["filing_key"]))
+
         def operation(stage: Database) -> Any:
             key = str(lease.spec.inputs["filing_key"])
-            if extraction_input(stage, key, services) != lease.spec.inputs.get("input"):
+            if extraction_input(stage, key, services, ledger_path=db.path) != lease.spec.inputs.get("input"):
                 raise TaskInputsChangedError("Document, correction or extraction policy changed")
             requests = _model_requests(db.path, key)
             if requests:
@@ -524,9 +585,15 @@ def application_handlers(
                     stage.upsert_filing(current.model_copy(update={"strata": current.strata | frozen}))
             return {**asdict(result), "filing_key": key, "output": filing_output(stage, key)}
 
-        return prepare_snapshot(db, operation)
+        prepared = prepare_snapshot(db, operation)
+        prepared.validate = lambda: (
+            input_guard() and model_state == _model_state(db.path, str(lease.spec.inputs["filing_key"]))
+        )
+        return prepared
 
     def link(lease: TaskLease) -> PreparedWork:
+        if not input_guard():
+            raise TaskInputsChangedError("External steering files changed")
         if lease.spec.inputs.get("algorithm") != processing_fingerprint():
             raise TaskInputsChangedError("Linking algorithm changed; enqueue a new generation")
 
@@ -554,9 +621,15 @@ def application_handlers(
                 )
             return result
 
-        return prepare_snapshot(db, operation)
+        prepared = prepare_snapshot(db, operation)
+        prepared.validate = input_guard
+        return prepared
 
     def explore(lease: TaskLease) -> PreparedWork:
+        if not input_guard():
+            raise TaskInputsChangedError("External source catalog or steering files changed")
+        if lease.spec.policy != collector_policy:
+            raise TaskInputsChangedError("Source catalog or screening policy changed since enqueue")
         if collect is None:
             raise TaskBlockedError("Collector composition was not configured")
 
@@ -572,6 +645,7 @@ def application_handlers(
             return {"report": report, "coverage": changed}
 
         prepared = prepare_snapshot(db, operation)
+        prepared.validate = input_guard
         report = prepared.result["report"]
         if (isinstance(report, dict) and report.get("errors")) or any(
             scope.get("state") != "complete" for scope in prepared.result["coverage"]
@@ -581,6 +655,8 @@ def application_handlers(
         return prepared
 
     def download(lease: TaskLease) -> PreparedWork:
+        if not input_guard():
+            raise TaskInputsChangedError("External steering files changed")
         if http is None:
             raise TaskBlockedError("Download requires configured PoliteHttp")
 
@@ -606,6 +682,8 @@ def application_handlers(
                 )
             return {"document_id": record.id, "filing_key": record.filing_key}
 
-        return prepare_snapshot(db, operation)
+        prepared = prepare_snapshot(db, operation)
+        prepared.validate = input_guard
+        return prepared
 
     return {"read": read, "extract": extract, "link": link, "explore": explore, "download": download}

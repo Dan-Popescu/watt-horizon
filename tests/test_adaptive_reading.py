@@ -11,9 +11,10 @@ from radar.domain.models import Correction, Evidence
 from radar.extraction.context import quantity_issues
 from radar.extraction.facts import Facts
 from radar.extraction.observations import observe_quantities
-from radar.pipeline.filings import Services, build_filing, extract_facts
+from radar.pipeline.filings import Services, _locate_segments, build_filing, extract_facts
 from radar.pipeline.ingest import ingest_pdf
 from radar.reading import pdf
+from radar.reading.formats import read_document
 from radar.reading.ocr import NullOcr
 from radar.reading.pdf import PdfContent, PdfReader
 from radar.reading.policy import ReadingPolicy, complete_reading, text_digest
@@ -182,3 +183,41 @@ def test_cell_header_unit_inference_is_visible_but_never_promoted() -> None:
     observation = observe_quantities([("doc", content)])[0]
     assert observation.high == 30 and observation.header_quote == "Puissance MW"
     assert observation.page is None and not observation.unit_in_cell and not observation.eligible
+
+
+def test_structured_form_count_has_its_own_literal_segment_evidence() -> None:
+    content = read_document(
+        b"<p>Le projet consiste a construire un stockage par batteries. 36 conteneurs batteries.</p>"
+    )
+    facts = extract_facts([("doc", DocumentRole.FORM, "Projet stockage")], [content]).facts
+    assert facts.containers == 36
+    evidence = facts.evidence["containers"]
+    assert evidence.document_id == "doc" and evidence.locator == "paragraph:1"
+    assert "36 conteneurs" in evidence.quote
+    assert any(evidence.quote in segment.text for segment in content.segments)
+
+
+def test_structured_flattening_cannot_fabricate_a_count_proof_between_cells() -> None:
+    content = PdfContent(
+        0,
+        {},
+        (),
+        (),
+        format="xlsx",
+        segments=(
+            DocumentSegment("sheet:1:cell:A1", "Le projet consiste a construire un stockage par batteries."),
+            DocumentSegment("sheet:1:cell:A2", "36"),
+            DocumentSegment("sheet:1:cell:B2", "conteneurs batteries."),
+        ),
+    )
+    facts = extract_facts([("doc", DocumentRole.FORM, "Projet stockage")], [content]).facts
+    assert facts.containers is None and "containers" not in facts.evidence
+
+
+def test_unlocatable_shared_coordinate_evidence_withdraws_both_coordinates() -> None:
+    content = PdfContent(0, {}, (), (), format="html", segments=(DocumentSegment("paragraph:1", "Autre texte"),))
+    facts = Facts(
+        lat=49.2, lon=2.3, evidence={"coordinates": Evidence(document_id="doc", locator="text", quote="49.2, 2.3")}
+    )
+    result = _locate_segments(facts, content, "doc", supply_missing=True)
+    assert result.lat is None and result.lon is None and "coordinates" not in result.evidence

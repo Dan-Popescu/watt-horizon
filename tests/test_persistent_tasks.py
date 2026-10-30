@@ -1,5 +1,6 @@
 """Crash, lease and atomic publication contracts; no remote service is contacted."""
 
+import os
 import time
 from dataclasses import replace
 from datetime import date
@@ -7,6 +8,7 @@ from datetime import date
 import httpx
 import pytest
 
+from radar import tasks_cli
 from radar.classification.gold import GoldClassifier, GoldLabel
 from radar.cli import build_parser
 from radar.config import Settings
@@ -14,8 +16,9 @@ from radar.domain.enums import Category, SourceKind
 from radar.net.http import PoliteHttp
 from radar.pipeline.filings import Services
 from radar.pipeline.ingest import ingest_pdf
-from radar.pipeline.tasks import TaskWorker, application_handlers, locked, plan_pipeline, prepare_snapshot
+from radar.pipeline.tasks import PreparedWork, TaskWorker, application_handlers, locked, plan_pipeline, prepare_snapshot
 from radar.reading.ocr import NullOcr
+from radar.sources.coverage import Coverage
 from radar.store.blobs import BlobStore
 from radar.store.db import Database
 from radar.store.readiness import candidate_readiness
@@ -129,6 +132,10 @@ def test_physical_redirect_budget_survives_worker_restart(db: Database) -> None:
     with locked(db):
         store.enqueue(spec, now=0)
     sent = []
+    clock = [1.0]
+
+    def sleep(delay: float) -> None:
+        clock[0] += delay
 
     def response(request: httpx.Request):
         sent.append(str(request.url))
@@ -140,11 +147,65 @@ def test_physical_redirect_budget_survives_worker_restart(db: Database) -> None:
             http.get_bytes("https://example.org/start")
             raise AssertionError("budget should stop the redirect")
 
-        first = TaskWorker(db, {"work": compute}, offline=False, http=http, clock=lambda: 1).run_one()
+        first = TaskWorker(
+            db, {"work": compute}, offline=False, http=http, clock=lambda: clock[0], sleep=sleep
+        ).run_one()
         second = TaskWorker(db, {"work": compute}, offline=False, http=http, clock=lambda: 40).run_one()
     assert first and first["state"] == "blocked" and second is None
     assert len(sent) == 2
     assert store.get(spec.key)["requests"] == 2  # type: ignore[index]
+
+
+def test_network_claims_are_serialized_across_connections(db: Database) -> None:
+    first = TaskSpec("download", "one", {}, network=True, source="dreal")
+    second = TaskSpec("download", "two", {}, network=True, source="mrae")
+    with locked(db):
+        store = TaskStore(db.conn)
+        store.enqueue(first, now=0)
+        store.enqueue(second, now=1)
+        lease = store.claim("first-process", now=10, offline=False)
+    assert lease and lease.key == first.key
+    with Database(db.path) as other:
+        with locked(other):
+            assert TaskStore(other.conn).claim("second-process", now=11, offline=False) is None
+        with locked(db):
+            store.finish(lease, "complete", now=12)
+        with locked(other):
+            acquired = TaskStore(other.conn).claim("second-process", now=12, offline=False)
+        assert acquired and acquired.key == second.key
+
+
+def test_physical_pacing_persists_across_worker_and_http_clients(db: Database) -> None:
+    store = TaskStore(db.conn)
+    with locked(db):
+        store.enqueue(TaskSpec("work", "a", {}, network=True, source="dreal"), now=0)
+        store.enqueue(TaskSpec("work", "b", {}, network=True, source="mrae"), now=1)
+    clock = [10.0]
+    sent = []
+    waits = []
+
+    def sleep(delay: float) -> None:
+        assert not db.conn.in_transaction
+        waits.append(delay)
+        clock[0] += delay
+
+    def response(_: httpx.Request):
+        sent.append(clock[0])
+        return httpx.Response(200, content=b"observed")
+
+    for _ in range(2):
+        with PoliteHttp("test", transport=httpx.MockTransport(response), default_interval_s=0) as http:
+
+            def compute(_: object):
+                http.get_bytes("https://example.org/document")
+                return PreparedWork(store.revision(), {"downloaded": True}, lambda _: None)
+
+            outcome = TaskWorker(
+                db, {"work": compute}, offline=False, http=http, clock=lambda: clock[0], sleep=sleep
+            ).run_one()
+            assert outcome and outcome["state"] == "complete"
+    assert sent == [10, 15] and waits == [5]
+    assert store.summary()["physical_requests"] == 2
 
 
 def test_generic_python_handler_is_interrupted_at_runtime_budget(db: Database) -> None:
@@ -158,7 +219,7 @@ def test_generic_python_handler_is_interrupted_at_runtime_budget(db: Database) -
 
     started = time.monotonic()
     result = TaskWorker(db, {"slow": slow}, offline=True).run_one()
-    assert result and result["state"] in {"blocked", "superseded"}
+    assert result and result["state"] == "failed"
     assert "TaskDeadlineError" in result["error"]
     assert time.monotonic() - started < 0.4
 
@@ -294,3 +355,146 @@ def test_unfinished_pipeline_work_blocks_dataset_readiness(db: Database, setting
     with locked(db):
         TaskStore(db.conn).enqueue(spec, now=0)
     assert "pipeline_tasks_unfinished" in candidate_readiness(settings.data_dir)["reasons"]
+
+
+def test_reverting_real_extraction_policy_reactivates_original_tasks(
+    db: Database, blobs: BlobStore, lookups: StaticLookups
+) -> None:
+    with db.transaction():
+        record = ingest_pdf(
+            db,
+            blobs,
+            data=make_pdf([FILLER], FORM_FIELDS),
+            source=SourceKind.DREAL_CASE_BY_CASE,
+            region="hauts-de-france",
+            number="010504",
+            url="https://example.org/form.pdf",
+            filename="cerfa.pdf",
+            title="Stockage batteries",
+        )
+
+    def services(policy: str, category: Category) -> Services:
+        classifier = GoldClassifier({"010504": GoldLabel("010504", category)}, known_keys=[record.filing_key])
+        return Services(blobs=blobs, ocr=NullOcr(), classifier=classifier, lookups=lookups, fingerprint=policy)
+
+    original_key = None
+    for generation, policy, category in (
+        ("1", "A", Category.BESS),
+        ("2", "B", Category.DATACENTER),
+        ("3", "A", Category.BESS),
+    ):
+        current = services(policy, category)
+        tasks = plan_pipeline(db, current, generation=generation)
+        extraction = next(task for task in tasks if task.kind == "extract")
+        if generation == "1":
+            original_key = extraction.key
+        if generation == "3":
+            assert extraction.key == original_key
+        with locked(db):
+            for task in tasks:
+                TaskStore(db.conn).enqueue(task, now=0)
+        outcome = TaskWorker(db, application_handlers(db, current), offline=True, clock=lambda: 1).run()
+        assert all(item["state"] == "complete" for item in outcome["work"])
+        assert db.filing(record.filing_key).machine.classification.category is category  # type: ignore[union-attr]
+    task = TaskStore(db.conn).get(original_key)  # type: ignore[arg-type]
+    assert task and task["state"] == "complete" and task["attempts"] == 2
+    assert db.conn.execute("SELECT COUNT(*) FROM task_attempts WHERE task_key=?", (original_key,)).fetchone()[0] == 2
+
+
+def test_external_input_guard_rejects_real_prepared_extraction(
+    db: Database, blobs: BlobStore, lookups: StaticLookups
+) -> None:
+    with db.transaction():
+        ingest_pdf(
+            db,
+            blobs,
+            data=make_pdf([FILLER], FORM_FIELDS),
+            source=SourceKind.DREAL_CASE_BY_CASE,
+            region="hauts-de-france",
+            number="010504",
+            url="https://example.org/form.pdf",
+            filename="cerfa.pdf",
+            title="Stockage batteries",
+        )
+    services = Services(blobs=blobs, ocr=NullOcr(), classifier=None, lookups=lookups, fingerprint="policy")
+    spec = replace(
+        next(task for task in plan_pipeline(db, services, generation="guard") if task.kind == "extract"),
+        dependencies=(),
+    )
+    with locked(db):
+        TaskStore(db.conn).enqueue(spec, now=0)
+    unchanged = [True]
+    actual = application_handlers(db, services, input_guard=lambda: unchanged[0])["extract"]
+
+    def compute(lease):
+        prepared = actual(lease)
+        unchanged[0] = False
+        return prepared
+
+    result = TaskWorker(db, {"extract": compute}, offline=True, clock=lambda: 1).run_one()
+    assert result and result["state"] == "superseded"
+    assert db.filings() == []
+
+
+def test_partial_collection_publishes_evidence_without_claiming_completion(
+    db: Database, blobs: BlobStore, lookups: StaticLookups
+) -> None:
+    services = Services(blobs=blobs, ocr=NullOcr(), classifier=None, lookups=lookups)
+    spec = TaskSpec("explore", "observed-listing", {}, network=True, source="dreal")
+    with locked(db):
+        TaskStore(db.conn).enqueue(spec, now=0)
+
+    def collect(_: TaskSpec, stage: Database):
+        Coverage("dreal", "hauts-de-france", "2026", "https://example.org/listing", "recent").save(
+            stage, "partial", "page_budget"
+        )
+        return {"seen": 1, "errors": []}
+
+    with PoliteHttp("test", transport=httpx.MockTransport(lambda _: httpx.Response(200)), default_interval_s=0) as http:
+        handlers = application_handlers(db, services, http=http, collect=collect)
+        result = TaskWorker(db, handlers, offline=False, http=http, clock=lambda: 1).run_one()
+    assert result and result["state"] == "blocked"
+    scope = db.collection_coverage("hauts-de-france")[0]
+    assert scope["state"] == "partial" and scope["error"] == "page_budget"
+    assert TaskStore(db.conn).get(spec.key)["result"]["coverage"][0]["state"] == "partial"  # type: ignore[index]
+
+
+def test_cli_guard_detects_same_size_steering_edit_with_preserved_timestamp(
+    db: Database, settings: Settings, blobs: BlobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings.gold_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.gold_path.write_text("\n")
+    stamp = settings.gold_path.stat()
+    with db.transaction():
+        record = ingest_pdf(
+            db,
+            blobs,
+            data=make_pdf([FILLER], FORM_FIELDS),
+            source=SourceKind.DREAL_CASE_BY_CASE,
+            region="hauts-de-france",
+            number="010504",
+            url="https://example.org/form.pdf",
+            filename="cerfa.pdf",
+            title="Stockage batteries",
+        )
+    parser = build_parser()
+    command(parser.parse_args(["tasks", "enqueue", "--generation", "guard"]), settings)
+    factory = tasks_cli.application_handlers
+
+    def wrapped(*args, **kwargs):
+        handlers = factory(*args, **kwargs)
+        original = handlers["extract"]
+
+        def extract(lease):
+            prepared = original(lease)
+            settings.gold_path.write_text(" ")
+            os.utime(settings.gold_path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            return prepared
+
+        handlers["extract"] = extract
+        return handlers
+
+    monkeypatch.setattr(tasks_cli, "application_handlers", wrapped)
+    result = command(parser.parse_args(["tasks", "run"]), settings)
+    assert any(item["state"] == "superseded" for item in result["work"])
+    assert db.filing(record.filing_key).machine is None  # type: ignore[union-attr]

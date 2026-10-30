@@ -18,7 +18,7 @@ from radar.store.diagnostics import DIAGNOSTICS_MIGRATION
 from radar.store.discovery import DISCOVERY_MIGRATION
 from radar.store.link_queries import LinkQueries
 from radar.store.review_history import REVIEW_MIGRATION
-from radar.store.tasks import TASK_MIGRATION
+from radar.store.tasks import TASK_MIGRATION, TASK_PACING_MIGRATION
 
 _MIGRATIONS: tuple[str, ...] = (
     """
@@ -243,6 +243,7 @@ _MIGRATIONS += (
 _MIGRATIONS += (REVIEW_MIGRATION, DISCOVERY_MIGRATION)
 _MIGRATIONS += (TASK_MIGRATION,)
 _MIGRATIONS += (DIAGNOSTICS_MIGRATION,)
+_MIGRATIONS += (TASK_PACING_MIGRATION,)
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 

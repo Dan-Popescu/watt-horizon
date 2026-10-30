@@ -5,6 +5,7 @@ import re
 import stat
 import struct
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from pathlib import PurePosixPath
@@ -18,7 +19,7 @@ from radar.reading.workers import run_bounded
 if TYPE_CHECKING:
     from radar.reading.pdf import PdfContent
 
-FORMAT_VERSION = "office-html-zip:1"
+FORMAT_VERSION = "office-html-zip:2"
 WORKER_MEMORY_BYTES = 512 * 1024 * 1024
 
 
@@ -192,6 +193,7 @@ class _Segments:
         self.items: list[DocumentSegment] = []
         self.characters = 0
         self.locators: set[str] = set()
+        self.errors: set[str] = set()
 
     def add(
         self, locator: str, text: str, *, uncertain: bool = False, reason: str = "", header: str = "", context: str = ""
@@ -301,28 +303,143 @@ class _Html(HTMLParser):
                 raise ValueError("HTML text limit exceeded")
 
 
+_DOCX_REVISIONS = frozenset({"ins", "del", "moveFrom", "moveTo", "cellIns", "cellDel", "cellMerge"})
+_DOCX_METADATA = frozenset(
+    {
+        "sectPr",
+        "tblPr",
+        "tblGrid",
+        "trPr",
+        "tcPr",
+        "sdtPr",
+        "sdtEndPr",
+        "customXmlPr",
+        "bookmarkStart",
+        "bookmarkEnd",
+        "proofErr",
+        "permStart",
+        "permEnd",
+    }
+)
+_DOCX_UNCERTAIN = _DOCX_REVISIONS | frozenset(
+    {
+        "fldSimple",
+        "fldChar",
+        "instrText",
+        "altChunk",
+        "AlternateContent",
+        "drawing",
+        "pict",
+        "object",
+        "contentPart",
+        "footnoteReference",
+        "endnoteReference",
+        "commentReference",
+        "delText",
+    }
+)
+_DOCX_INLINE_CONTAINERS = frozenset({"p", "r", "tc", "sdt", "sdtContent", "hyperlink", "smartTag", "customXml"})
+_DOCX_INLINE_LEAVES = frozenset({"t", "tab", "br", "cr", "lastRenderedPageBreak", "noBreakHyphen", "softHyphen"})
+
+
+def _docx_children(
+    parent: ET.Element,
+    accepted: frozenset[str],
+    segments: _Segments,
+    uncertain: bool = False,
+) -> Iterator[tuple[ET.Element, bool]]:
+    """Walk supported structural wrappers without flattening unknown alternate representations."""
+    for node in parent:
+        tag = _local(node.tag)
+        if tag in accepted:
+            yield node, uncertain
+        elif tag == "sdt":
+            content = next((child for child in node if _local(child.tag) == "sdtContent"), None)
+            if content is None:
+                segments.errors.add("DOCX content control has no readable content")
+            else:
+                yield from _docx_children(content, accepted, segments, uncertain)
+        elif tag in {"sdtContent", "customXml"}:
+            yield from _docx_children(node, accepted, segments, uncertain)
+        elif tag in _DOCX_REVISIONS:
+            segments.errors.add("DOCX tracked changes require manual review")
+            yield from _docx_children(node, accepted, segments, True)
+        elif tag in _DOCX_METADATA:
+            if any(_local(child.tag).endswith("Change") for child in node.iter()):
+                segments.errors.add("DOCX tracked property changes require manual review")
+        elif len(node) or node.attrib or (node.text or "").strip():
+            segments.errors.add("Unsupported DOCX structure requires manual review")
+
+
+def _docx_reason(node: ET.Element, inherited: bool) -> str:
+    if inherited or any(
+        _local(child.tag) in _DOCX_UNCERTAIN or _local(child.tag).endswith("Change") for child in node.iter()
+    ):
+        return "DOCX tracked changes, fields or embedded/alternate content require manual review"
+    if _local(node.tag) == "tc" and any(_local(child.tag) == "tbl" for child in node.iter()):
+        return "Nested DOCX table content requires manual review"
+    if _docx_unhandled_inline(node):
+        return "Unsupported DOCX inline structure requires manual review"
+    return ""
+
+
+def _docx_unhandled_inline(node: ET.Element) -> bool:
+    tag = _local(node.tag)
+    if tag in _DOCX_METADATA or tag in {"pPr", "rPr", "smartTagPr"} or tag in _DOCX_INLINE_LEAVES:
+        return False
+    if tag in _DOCX_INLINE_CONTAINERS:
+        return any(_docx_unhandled_inline(child) for child in node)
+    return bool(len(node) or node.attrib or (node.text or "").strip())
+
+
+def _docx_text(node: ET.Element) -> str:
+    parts: list[str] = []
+
+    def append(child: ET.Element) -> None:
+        tag = _local(child.tag)
+        if tag in {"t", "delText"}:
+            parts.append(child.text or "")
+        elif tag in {"tab", "br", "cr"}:
+            parts.append(" ")
+        elif tag == "noBreakHyphen":
+            parts.append("-")
+        else:
+            if tag == "p":
+                parts.append(" ")
+            for descendant in child:
+                append(descendant)
+            if tag == "p":
+                parts.append(" ")
+
+    append(node)
+    return squash("".join(parts))
+
+
 def _docx(archive: zipfile.ZipFile, segments: _Segments) -> None:
     root = _xml(archive, "word/document.xml", segments.limits)
     body = next((node for node in root if _local(node.tag) == "body"), root)
     paragraph = table = rows = cells = 0
-    for node in body:
+    for node, inherited in _docx_children(body, frozenset({"p", "tbl"}), segments):
         if _local(node.tag) == "p":
             paragraph += 1
-            segments.add(f"paragraph:{paragraph}", " ".join(n.text or "" for n in node.iter() if _local(n.tag) == "t"))
+            reason = _docx_reason(node, inherited)
+            segments.add(f"paragraph:{paragraph}", _docx_text(node), uncertain=bool(reason), reason=reason)
         elif _local(node.tag) == "tbl":
             table += 1
             headers: list[str] = []
-            for row_index, row in enumerate((n for n in node if _local(n.tag) == "tr"), 1):
+            merged = any(_local(child.tag) in {"gridSpan", "vMerge", "hMerge"} for child in node.iter())
+            for row_index, (row, row_uncertain) in enumerate(
+                _docx_children(node, frozenset({"tr"}), segments, inherited), 1
+            ):
                 rows += 1
                 if rows > segments.limits.max_rows:
                     raise ValueError("DOCX table row limit exceeded")
-                values = [
-                    squash(" ".join(n.text or "" for n in cell.iter() if _local(n.tag) == "t"))
-                    for cell in row
-                    if _local(cell.tag) == "tc"
-                ]
+                row_cells = list(_docx_children(row, frozenset({"tc"}), segments, row_uncertain))
+                values = [_docx_text(cell) for cell, _ in row_cells]
+                reasons = [_docx_reason(cell, cell_uncertain or merged) for cell, cell_uncertain in row_cells]
                 if row_index == 1:
-                    headers = values
+                    headers = [value if not reason else "" for value, reason in zip(values, reasons, strict=True)]
+                row_context = " ".join(value for value, reason in zip(values, reasons, strict=True) if not reason)
                 for cell_index, value in enumerate(values, 1):
                     cells += 1
                     if cells > segments.limits.max_cells:
@@ -330,8 +447,10 @@ def _docx(archive: zipfile.ZipFile, segments: _Segments) -> None:
                     segments.add(
                         f"table:{table}:row:{row_index}:cell:{cell_index}",
                         value,
+                        uncertain=bool(reasons[cell_index - 1]),
+                        reason=reasons[cell_index - 1],
                         header=headers[cell_index - 1] if cell_index <= len(headers) else "",
-                        context=" ".join(values),
+                        context=row_context,
                     )
 
 
@@ -461,7 +580,9 @@ def read_document(
                 _xlsx(archive, segments)
     else:
         raise ValueError("Unsupported document format")
-    errors = tuple(sorted({segment.reason for segment in segments.items if segment.uncertain}))
+    errors = tuple(sorted(segments.errors | {segment.reason for segment in segments.items if segment.uncertain}))
+    if kind != "zip" and not any(segment.text and not segment.uncertain for segment in segments.items):
+        errors += ("Document contains no reliably readable text; manual review is required",)
     if omitted_resources:
         errors += ("Embedded resources require manual review; no resource was fetched",)
     if kind in {"docx", "xlsx"}:

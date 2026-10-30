@@ -163,6 +163,7 @@ def _read_pdf(
 ) -> PdfContent:
     if len(data) > max_bytes:
         raise ValueError("PDF exceeds byte limit")
+    policy = policy or ReadingPolicy(mode="full" if read_tables else "economical")
     read_tables = read_tables or (policy is not None and policy.mode in {"adaptive", "full"})
     with pymupdf.open(stream=data, filetype="pdf") as doc:  # type: ignore[no-untyped-call]
         if doc.page_count > max_pages:
@@ -462,6 +463,7 @@ def _parse_encoded(
     max_table_chars: int = DEFAULT_MAX_TABLE_CHARS,
     policy: ReadingPolicy | None = None,
 ) -> str:
+    policy = policy or ReadingPolicy(mode="full" if read_tables else "economical")
     if not data.lstrip().startswith(b"%PDF-"):
         from radar.reading.formats import limit_worker_memory, read_document
 

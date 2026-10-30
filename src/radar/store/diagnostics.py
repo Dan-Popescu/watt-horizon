@@ -62,7 +62,9 @@ def external_token(*paths: Path) -> str:
     digest = hashlib.sha256()
     for path in paths:
         if path.is_dir():
-            members = sorted(member for member in path.rglob("*") if member.is_file())
+            # The case reader uses only direct JSON children. Ignore unrelated
+            # assets rather than hashing an entire private directory per request.
+            members = sorted(member for member in path.glob("*.json") if member.is_file())
             for member in members:
                 digest.update(str(member.relative_to(path)).encode())
                 digest.update(member.read_bytes())

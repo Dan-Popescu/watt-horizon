@@ -3,6 +3,7 @@
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -177,9 +178,11 @@ def extract_facts(
     form, decision = Facts(), Facts()
     for (doc_id, role, title), content in zip(documents, contents, strict=True):
         if role is DocumentRole.FORM:
-            form.fill_from(_locate_segments(extract_cerfa(doc_id, content), content))
+            form.fill_from(_locate_segments(extract_cerfa(doc_id, content), content, doc_id, supply_missing=True))
         elif role is DocumentRole.DECISION:
-            decision.fill_from(_locate_segments(extract_decision(doc_id, content.text, title), content))
+            decision.fill_from(
+                _locate_segments(extract_decision(doc_id, content.text, title), content, doc_id, supply_missing=True)
+            )
     facts = Facts()
     facts.fill_from(form)
     facts.fill_from(decision, override=DECISION_WINS)
@@ -222,12 +225,24 @@ def extract_facts(
             candidates["power_mw"] = [Candidate(source="supporting:page", value=supplemental.mw_max)]
     titles = [title for _, _, title in documents]
     facts.department = facts.department or code_from_postcode(facts.postcode) or _department_from_titles(titles)
+    if facts.department and "department" not in facts.evidence and any(content.format != "pdf" for content in contents):
+        if facts.postcode and "postcode" in facts.evidence and code_from_postcode(facts.postcode) == facts.department:
+            facts.evidence["department"] = facts.evidence["postcode"]
+        else:
+            for document_id, _, title in documents:
+                if _department_from_titles([title]) == facts.department:
+                    facts.evidence["department"] = Evidence(
+                        document_id=document_id, locator="title", quote=squash(title)[:600]
+                    )
+                    break
     for (document_id, _, _), content in zip(documents, contents, strict=True):
         _locate_segments(facts, content, document_id)
     return Extraction(form, decision, facts, candidates, support)
 
 
-def _locate_segments(facts: Facts, content: PdfContent, document_id: str | None = None) -> Facts:
+def _locate_segments(
+    facts: Facts, content: PdfContent, document_id: str | None = None, *, supply_missing: bool = False
+) -> Facts:
     if content.format == "pdf":
         return facts
     for name, evidence in list(facts.evidence.items()):
@@ -248,8 +263,45 @@ def _locate_segments(facts: Facts, content: PdfContent, document_id: str | None 
             facts.evidence.pop(name)
             if name == "power":
                 facts.mw_min = facts.mw_max = facts.mwh = None
+            elif name == "coordinates":
+                facts.lat = facts.lon = None
             elif hasattr(facts, name):
                 setattr(facts, name, None)
+    if supply_missing:
+        # Some legacy extractors return metadata without their own Evidence.
+        # Structured documents must prove those values in one reliable segment;
+        # replaying the literal reader locally prevents flattened cells from
+        # supplying a relationship that none of the source cells actually states.
+        aliases = {"mw_min": "power", "mw_max": "power", "mwh": "power", "lat": "coordinates", "lon": "coordinates"}
+        missing = {
+            item.name
+            for item in dataclass_fields(facts)
+            if item.name != "evidence"
+            and getattr(facts, item.name) is not None
+            and aliases.get(item.name, item.name) not in facts.evidence
+        }
+        for segment in content.segments:
+            if not missing:
+                break
+            if segment.uncertain:
+                continue
+            for raw in re.split(r"(?<=[.;])\s+|\n\s*\n", segment.text):
+                quote = squash(raw)
+                if not 0 < len(quote) <= 600:
+                    continue
+                fragment = PdfContent(
+                    0, {}, (), (), format=content.format, segments=(type(segment)(segment.locator, quote),)
+                )
+                local = (extract_cerfa(document_id or "", fragment), extract_decision(document_id or "", quote))
+                for name in tuple(missing):
+                    if any(getattr(reading, name) == getattr(facts, name) for reading in local):
+                        key = aliases.get(name, name)
+                        facts.evidence[key] = Evidence(
+                            document_id=document_id or "", locator=segment.locator, quote=quote
+                        )
+                        missing.remove(name)
+        for name in missing:
+            setattr(facts, name, None)
     return facts
 
 

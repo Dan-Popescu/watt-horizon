@@ -71,6 +71,13 @@ INSERT INTO task_input_revision VALUES (1,0);
     for event in ("INSERT", "UPDATE", "DELETE")
 )
 
+TASK_PACING_MIGRATION = """
+CREATE TABLE task_network_admission (
+    id INTEGER PRIMARY KEY CHECK(id=1), next_allowed REAL NOT NULL
+);
+INSERT INTO task_network_admission VALUES (1,0);
+"""
+
 
 def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
@@ -101,6 +108,7 @@ class TaskSpec:
     network: bool = False
     limits: TaskLimits = field(default_factory=TaskLimits)
     llm_request_keys: tuple[str, ...] = ()
+    policy: str = ""
 
     def __post_init__(self) -> None:
         if not self.kind or not self.identity:
@@ -150,7 +158,8 @@ class TaskStore:
 
     def enqueue(self, spec: TaskSpec, *, now: float) -> bool:
         encoded = spec.encoded  # freeze nested inputs before any write
-        if self.conn.execute("SELECT 1 FROM pipeline_tasks WHERE key=?", (spec.key,)).fetchone():
+        previous = self.conn.execute("SELECT state FROM pipeline_tasks WHERE key=?", (spec.key,)).fetchone()
+        if previous and previous[0] != "superseded":
             return False
         for dependency in spec.dependencies:
             if (
@@ -163,6 +172,15 @@ class TaskStore:
             "error='immutable_inputs_replaced' WHERE slot=? AND state!='superseded' AND key!=?",
             (now, spec.slot, spec.key),
         )
+        if previous:
+            # Reverting an input/policy re-admits its immutable work without
+            # erasing any past attempt, charge or fencing token (A -> B -> A).
+            self.conn.execute(
+                "UPDATE pipeline_tasks SET state='pending',fence=fence+1,lease_until=NULL,next_attempt=?,"
+                "updated_at=?,error=NULL,result=NULL WHERE key=?",
+                (now, now, spec.key),
+            )
+            return True
         self.conn.execute(
             "INSERT INTO pipeline_tasks(key,kind,slot,spec,created_at,updated_at) VALUES (?,?,?,?,?,?)",
             (spec.key, spec.kind, spec.slot, encoded, now, now),
@@ -186,9 +204,17 @@ class TaskStore:
             spec = TaskSpec.decode(row["spec"])
             # A crashed attempt is charged its complete reservation, conservatively.
             self.conn.execute(
-                "UPDATE pipeline_tasks SET state=CASE WHEN attempts>=? THEN 'failed' ELSE 'retry_wait' END,"
+                "UPDATE pipeline_tasks SET state=CASE WHEN attempts>=? OR elapsed_s+?>=? THEN 'failed' ELSE 'retry_wait' END,"
                 "elapsed_s=elapsed_s+?,lease_until=NULL,next_attempt=?,updated_at=?,error='lease_expired' WHERE key=?",
-                (spec.limits.max_attempts, min(spec.limits.lease_s, spec.limits.max_runtime_s), now, now, row["key"]),
+                (
+                    spec.limits.max_attempts,
+                    min(spec.limits.lease_s, spec.limits.max_runtime_s),
+                    spec.limits.max_runtime_s,
+                    min(spec.limits.lease_s, spec.limits.max_runtime_s),
+                    now,
+                    now,
+                    row["key"],
+                ),
             )
             self.conn.execute(
                 "UPDATE task_attempts SET state='expired',finished_at=?,error='lease_expired' WHERE task_key=? AND fence=?",
@@ -214,6 +240,15 @@ class TaskStore:
             spec = TaskSpec.decode(row["spec"])
             if offline and spec.network:
                 continue  # no reservation and no consumed attempt
+            if (
+                spec.network
+                and self.conn.execute(
+                    "SELECT 1 FROM pipeline_tasks WHERE state='running' AND lease_until>? "
+                    "AND json_extract(spec,'$.network')=1 LIMIT 1",
+                    (now,),
+                ).fetchone()
+            ):
+                continue  # One network task globally; clients cannot parallelize one host.
             blocked = self.conn.execute(
                 "SELECT reason FROM task_source_blocks WHERE source=?", (spec.source,)
             ).fetchone()

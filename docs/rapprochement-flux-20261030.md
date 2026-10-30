@@ -58,7 +58,7 @@ Les [résultats bruts](measurements/streamed-link-pipeline-20261030.json) conser
 | Dossiers synthétiques | 1 000 | 1 000 |
 | Liens effectivement stockés | 499 500 | 499 500 |
 | Projets | 1 | 1 |
-| Pic RSS du processus | 459,09 Mio | 41,35 à 41,36 Mio |
+| Pic RSS du processus | 459,09 Mio | environ 41,35 Mio |
 | Durée complète | 4,526 s | 5,116 à 5,251 s |
 
 Le SHA-256 du JSON de tous les liens stockés, triés par paire, est identique dans les quatre essais :

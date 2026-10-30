@@ -3,12 +3,14 @@
 import argparse
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from radar.config import Settings
 from radar.net.http import PoliteHttp
+from radar.pipeline.fingerprint import files_fingerprint
 from radar.pipeline.run import assign_partitions
 from radar.pipeline.tasks import TaskWorker, application_handlers, locked, plan_pipeline, seed_pending_filings
 from radar.store.db import Database
@@ -51,7 +53,12 @@ def _limits(args: argparse.Namespace) -> TaskLimits:
     return TaskLimits(args.max_attempts, args.max_requests, args.lease_seconds, args.runtime_seconds, args.max_bytes)
 
 
-def _additional(args: argparse.Namespace) -> list[TaskSpec]:
+def _additional(
+    args: argparse.Namespace,
+    *,
+    collector_policy: str,
+    normalize_collect: Callable[[dict[str, Any], str], dict[str, Any]] | None,
+) -> list[TaskSpec]:
     if args.spec is None:
         return []
     if args.spec.stat().st_size > 1024 * 1024:
@@ -66,6 +73,10 @@ def _additional(args: argparse.Namespace) -> list[TaskSpec]:
         inputs = row.get("inputs")
         if not isinstance(inputs, dict):
             raise ValueError("Each task requires explicit immutable inputs")
+        if row["kind"] == "explore":
+            if normalize_collect is None:
+                raise ValueError("Collector input normalization is unavailable")
+            inputs = normalize_collect(inputs, str(row.get("source", "")))
         spec = TaskSpec(
             str(row["kind"]),
             str(row["identity"]),
@@ -74,6 +85,7 @@ def _additional(args: argparse.Namespace) -> list[TaskSpec]:
             str(row.get("source", "")),
             True,
             _limits(args),
+            policy=collector_policy if row["kind"] == "explore" else "",
         )
         if not spec.source:
             raise ValueError("Network tasks require a source identity for persistent source suspension")
@@ -81,7 +93,13 @@ def _additional(args: argparse.Namespace) -> list[TaskSpec]:
     return tasks
 
 
-def command(args: argparse.Namespace, settings: Settings, *, collect: Any = None) -> dict[str, Any]:
+def command(
+    args: argparse.Namespace,
+    settings: Settings,
+    *,
+    collect: Callable[[TaskSpec, Database, PoliteHttp], Any] | None = None,
+    normalize_collect: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     with Database(settings.db_path) as db:
         store = TaskStore(db.conn)
         if args.action == "status":
@@ -97,9 +115,28 @@ def command(args: argparse.Namespace, settings: Settings, *, collect: Any = None
             return result
         # This worker can consume model caches and durable reconciled answers;
         # paid submission remains exclusively owned by the existing model ledger.
+        paths = (
+            settings.gold_path,
+            settings.rules_path,
+            settings.aliases_path,
+            settings.templates_path,
+            settings.screen_terms_path,
+            settings.communes_path,
+            settings.catalog_path,
+        )
+
+        code_paths = tuple(sorted(Path(__file__).parent.rglob("*.py")))
+
+        def steering_token() -> str:
+            return files_fingerprint((*paths, *code_paths))
+
+        baseline = steering_token()
         services = make_services(settings, None, llm="cached")
+        collector_policy = files_fingerprint((settings.catalog_path, settings.screen_terms_path, *code_paths))
+        if steering_token() != baseline:
+            raise ValueError("Steering files changed while preparing task services; retry the plan")
         if args.action in {"plan", "enqueue"}:
-            extra = _additional(args)
+            extra = _additional(args, collector_policy=collector_policy, normalize_collect=normalize_collect)
             if args.action == "enqueue":
                 with process_lock(settings.data_dir):
                     seed_pending_filings(db)
@@ -114,6 +151,8 @@ def command(args: argparse.Namespace, settings: Settings, *, collect: Any = None
             added = 0
             if args.action == "enqueue":
                 with locked(db):
+                    if steering_token() != baseline:
+                        raise ValueError("Steering files changed while planning; enqueue a fresh plan")
                     for task in tasks:
                         added += store.enqueue(task, now=time.time())
             return {
@@ -133,7 +172,14 @@ def command(args: argparse.Namespace, settings: Settings, *, collect: Any = None
                     raise ValueError("Task collector is unavailable")
                 return collect(spec, stage, http)
 
-            handlers = application_handlers(db, services, http=http, collect=collector)
+            handlers = application_handlers(
+                db,
+                services,
+                http=http,
+                collect=collector,
+                input_guard=lambda: steering_token() == baseline,
+                collector_policy=collector_policy,
+            )
             # Discovery/download may add documents absent from the initial plan.
             # Add their downstream work after the fenced publication, never from
             # a private snapshot that might subsequently be discarded.

@@ -208,27 +208,33 @@ def cmd_collect(args: argparse.Namespace, s: Settings) -> Any:
 
 
 def cmd_tasks(args: argparse.Namespace, s: Settings) -> Any:
-    def collect(spec: TaskSpec, stage: Database, http: PoliteHttp) -> Any:
-        source = str(spec.inputs.get("source", spec.source))
+    def normalize_collect(inputs: dict[str, Any], source: str) -> dict[str, Any]:
+        source = str(inputs.get("source", source))
         if source not in {"dreal", "mrae", "georisques", "registry", "press", "prefectures"}:
             raise ValueError("Explore task requires a known collector source")
         options = build_parser().parse_args(["collect", source])
         allowed = set(vars(options)) - {"command", "source"}
-        unexpected = set(spec.inputs) - allowed - {"source", "generation"}
+        unexpected = set(inputs) - allowed - {"source", "generation"}
         if unexpected:
             raise ValueError("Unknown collector task inputs: " + ", ".join(sorted(unexpected)))
-        vars(options).update({key: value for key, value in spec.inputs.items() if key in allowed})
+        vars(options).update({key: value for key, value in inputs.items() if key in allowed})
         if options.backfill and source != "dreal":
             raise ValueError("--backfill is supported for DREAL only")
         if options.restart and not options.backfill:
             raise ValueError("--restart requires --backfill")
+        return {key: value for key, value in vars(options).items() if key != "command"}
+
+    def collect(spec: TaskSpec, stage: Database, http: PoliteHttp) -> Any:
+        values = normalize_collect(spec.inputs, spec.source)
+        source = str(values["source"])
+        options = argparse.Namespace(**values)
         report = _collect_one(source, options, s, http, stage, propagate_block=True)
         payload = asdict(report) if is_dataclass(report) and not isinstance(report, type) else report
         if isinstance(payload, dict) and payload.get("stopped"):
             raise SiteBlockedError(source, str(payload["stopped"]))
         return payload
 
-    return tasks_cli.command(args, s, collect=collect)
+    return tasks_cli.command(args, s, collect=collect, normalize_collect=normalize_collect)
 
 
 def cmd_coverage(args: argparse.Namespace, s: Settings) -> Any:

@@ -15,7 +15,10 @@ du système de fichiers et aucun fichier exécutable n'est lancé.
 ## Lecture et incertitudes
 
 - HTML : texte des paragraphes et cellules ; scripts, styles et ressources intégrées ne sont pas exécutés.
-- DOCX : paragraphes du corps et cellules des tableaux. Les images, en-têtes et notes non lus restent signalés.
+- DOCX : paragraphes du corps et cellules des tableaux, y compris dans les contrôles de contenu standards.
+  Les structures inconnues, alternatives, contenus incorporés, révisions suivies et champs calculés restent
+  explicitement incomplets ; leurs textes incertains ne fournissent pas de valeur scalaire automatique.
+  Les images, en-têtes et notes non lus restent signalés. Un document sans texte fiable est aussi signalé incomplet.
 - XLSX : feuilles, coordonnées de cellules, chaînes partagées, en-têtes et contexte de ligne conservés.
   Les formules ne sont jamais calculées ; même un résultat en cache reste explicitement non vérifié et exclu
   du texte fiable. Une unité seulement présente en en-tête reste une observation avec provenance, sans promotion
