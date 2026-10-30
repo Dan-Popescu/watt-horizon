@@ -81,7 +81,7 @@ Une collecte terminée prépare les tâches locales pour ses nouvelles pièces.
 
 Toutes les requêtes utilisent `PoliteHttp`. Les tâches réseau sont admises une à la fois, même avec plusieurs
 workers et clients, pour conserver la sérialisation des sources. Un espacement global conservateur de cinq
-secondes est réservé durablement avant chaque tentative ; l’attente reste hors verrou et survit aux redémarrages.
+secondes est réservé durablement avant chaque tentative ; l’attente reste hors verrou applicatif et survit aux redémarrages.
 Les commandes historiques `collect`/`update`, les lookups et les workers créés par `make_http` partagent aussi
 une admission physique : un verrou SQLite dédié reste acquis jusqu’à la fin du corps HTTP. La date de départ
 est validée dans une autre base avant l’envoi ; un crash libère le verrou sans annuler la cadence réservée.
