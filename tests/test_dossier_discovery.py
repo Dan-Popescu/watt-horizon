@@ -19,6 +19,44 @@ from tests.test_sources_http import FakeClock
 ROOT = "https://example.test/case"
 
 
+def test_dossier_excludes_site_navigation_but_keeps_content_annexes(tmp_path: Path) -> None:
+    # Reduced layout observed on the DREAL HDF case a28784 (2026-10-30).
+    page = (
+        '<header><a href="/avis-r5354.html">Avis du comité régional</a></header>'
+        '<nav><a href="/dossiers-r3839.html">Dossiers</a></nav>'
+        '<main id="main" role="main"><div class="texte-article">'
+        '<a href="/form.pdf">Formulaire</a><a href="/annexes">Pièces complémentaires</a>'
+        '</div><aside><a href="/other.pdf">Avis récent</a></aside></main>'
+        '<footer><a href="/legal.pdf">Document juridique</a></footer>'
+    )
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        if request.url.path == "/case":
+            return httpx.Response(200, text=page)
+        if request.url.path == "/annexes":
+            return httpx.Response(200, text='<a href="/annex.pdf">Annexe</a>')
+        return httpx.Response(200, content=make_pdf([FILLER + request.url.path]))
+
+    with (
+        Database(tmp_path / "db") as db,
+        PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http,
+    ):
+        result = collect_dossier(
+            http,
+            db,
+            BlobStore(tmp_path / "blobs"),
+            source=SourceKind.DREAL_CASE_BY_CASE,
+            region="r",
+            number="n",
+            root_url=ROOT,
+            title="Dossier",
+        )
+        assert requested == ["/case", "/form.pdf", "/annexes", "/annex.pdf"]
+        assert result.state == "complete"
+
+
 def test_query_download_neutral_annex_and_indirect_html_are_one_dossier(tmp_path: Path) -> None:
     pdf = make_pdf([FILLER])
     urls: list[str] = []

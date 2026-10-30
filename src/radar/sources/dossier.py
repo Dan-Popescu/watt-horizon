@@ -15,7 +15,7 @@ from radar.domain.ids import filing_key, normalize_filing_number, sha256
 from radar.net.http import PoliteHttp, RequestBudgetError, SiteBlockedError
 from radar.pipeline.ingest import ingest_pdf
 from radar.reading.formats import detect_format
-from radar.sources.html import links
+from radar.sources.html import content_html, links
 from radar.store.blobs import BlobStore
 from radar.store.db import Database, utcnow
 
@@ -54,7 +54,7 @@ def attachment_links(
 ) -> list[tuple[str, str]]:
     """Only selected-case attachment links; never a general whole-site crawl."""
     found: dict[str, str] = {}
-    for raw, title, _ in links(page, page_url):
+    for raw, title, _ in links(content_html(page), page_url):
         url = canonical_url(raw)
         if (
             urlparse(url).scheme not in {"http", "https"}
