@@ -7,6 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from radar import cli
+from radar.config import Settings
 from radar.net.http import PoliteHttp, SiteBlockedError
 from radar.sources import catalog as source_catalog
 from radar.sources.catalog import (
@@ -18,15 +20,221 @@ from radar.sources.catalog import (
     discover,
     import_regions,
     load_catalog,
+    qualify,
     save_catalog,
     status,
 )
 from radar.sources.coverage import inventory
-from radar.sources.regions import get_region
+from radar.sources.dreal import collect_dreal, iter_articles
+from radar.sources.regions import Region, get_region
+from radar.store.blobs import BlobStore
 from radar.store.db import Database
 
 BASE = "https://www.hauts-de-france.developpement-durable.gouv.fr/"
 MRAE = "https://www.mrae.developpement-durable.gouv.fr/"
+NORMANDIE_2025 = MRAE + "avis-rendus-sur-projets-de-la-mrae-normandie-en-a1459.html"
+
+
+def mrae_only_configuration(**changes: object) -> dict[str, object]:
+    return {
+        "slug": "normandie",
+        "departments": ["14"],
+        "seeds": {"mrae": [NORMANDIE_2025]},
+        **changes,
+    }
+
+
+@pytest.mark.parametrize("base", [{}, {"dreal_base": ""}])
+@pytest.mark.parametrize(
+    "sources",
+    [
+        {"mrae_pages": {2025: NORMANDIE_2025}},
+        {"seeds": {"mrae": [NORMANDIE_2025]}},
+        {"prefectures": {"14": "https://www.calvados.gouv.fr"}},
+    ],
+)
+def test_non_dreal_sources_allow_a_missing_dreal_base(base: dict[str, object], sources: dict[str, object]) -> None:
+    configured = RegionConfig.model_validate({"slug": "normandie", "departments": ["14"], **sources, **base})
+    assert configured.dreal_base == configured.region().dreal_base == ""
+    assert configured.region().dreal_listings == ()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"dreal_listings": ["2025-r1.html"]},
+        {"dreal_periods": {"2025-r1.html": "2025"}},
+        {"seeds": {"dreal": [BASE], "mrae": [NORMANDIE_2025]}},
+    ],
+)
+def test_missing_dreal_base_refuses_dreal_configuration(change: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match=r"DREAL.*base"):
+        RegionConfig.model_validate(mrae_only_configuration(dreal_base="", **change))
+
+
+@pytest.mark.parametrize("base", [{}, {"dreal_base": ""}])
+def test_missing_dreal_base_requires_another_configured_source(base: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="configured source"):
+        RegionConfig.model_validate(
+            {"slug": "normandie", "departments": ["14"], "seeds": {"mrae": [], "dreal": []}, **base}
+        )
+
+
+@pytest.mark.parametrize("base", [BASE.rstrip("/"), BASE + "?query=1", "https://example.org/", " "])
+def test_nonempty_dreal_base_keeps_existing_url_validation(base: str) -> None:
+    with pytest.raises(ValueError):
+        RegionConfig.model_validate(mrae_only_configuration(dreal_base=base))
+
+
+def test_mrae_only_import_status_discovery_adoption_and_region_lookup(tmp_path: Path) -> None:
+    path, incoming = tmp_path / "catalog.json", tmp_path / "provided.json"
+    incoming.write_text(json.dumps({"version": 1, "regions": [mrae_only_configuration()]}))
+    assert import_regions(path, incoming)["status"] == "configured_seeds"
+    assert get_region("normandie", path).dreal_base == ""
+    configured = next(region for region in status(path)["regions"] if region["slug"] == "normandie")
+    assert configured["dreal_base"] == "" and configured["dreal_listings"] == []
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        # Constructed connector layout around the explicitly supplied observed annual URL.
+        return httpx.Response(
+            200,
+            text="<h1>Avis rendus sur projets de la MRAe Normandie en 2025</h1>"
+            f'<a href="{NORMANDIE_2025}">Avis rendus sur projets 2025</a>'
+            '<a href="opinion.pdf">012345/AP</a>',
+        )
+
+    with PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http:
+        result = discover(http, path, "normandie", "mrae", years=(2025,), max_pages=1)
+        assert result["status"] == "finished" and result["new_candidates"] == 1
+        [candidate] = load_catalog(path).candidates
+        assert adopt(http, path, candidate.id)["candidate"]["state"] == "adopted"
+    region = get_region("normandie", path)
+    assert region.dreal_base == "" and region.dreal_listings == () and region.dreal_periods == {}
+    assert region.mrae_pages == {2025: NORMANDIE_2025}
+    assert requests == [NORMANDIE_2025, NORMANDIE_2025]
+    assert get_region("hauts-de-france", path) == get_region("hauts-de-france")
+
+
+@pytest.mark.parametrize(
+    ("heading", "error"),
+    [
+        ("Avis rendus sur projets 2024 Normandie", "candidate year"),
+        ("Avis rendus sur projets 2025 Hauts-de-France", "this region"),
+    ],
+)
+def test_mrae_only_qualification_still_requires_the_region_and_year(heading: str, error: str) -> None:
+    region = RegionConfig.model_validate(mrae_only_configuration())
+    with pytest.raises(ValueError, match=error):
+        qualify(f'<h1>{heading}</h1><a href="opinion.pdf">012345/AP</a>', NORMANDIE_2025, region, "mrae", 2025)
+
+
+def test_mrae_only_dreal_discovery_refuses_before_http(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.json"
+    region = RegionConfig.model_validate(mrae_only_configuration())
+    save_catalog(path, source_catalog.SourceCatalog(regions=(region,)))
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, text="")
+
+    with (
+        PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http,
+        pytest.raises(ValueError, match="DREAL source is not configured"),
+    ):
+        discover(http, path, "normandie", "dreal")
+    assert requests == [] and load_catalog(path).last_discovery == {}
+
+
+def test_mrae_only_dreal_adoption_refuses_before_http(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.json"
+    region = RegionConfig.model_validate(mrae_only_configuration())
+    candidate = SourceCandidate(
+        id=hashlib.sha256(f"dreal:normandie:2025:{NORMANDIE_2025}".encode()).hexdigest()[:24],
+        region="normandie",
+        source="dreal",
+        year=2025,
+        url=NORMANDIE_2025,
+        parent_url=NORMANDIE_2025,
+        link_text="2025",
+        observed_at="2026-10-29T08:00:00+00:00",
+        parent_sha256="a" * 64,
+    )
+    save_catalog(path, source_catalog.SourceCatalog(regions=(region,), candidates=(candidate,)))
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(
+            200,
+            text='<h1>Examen au cas par cas 2025</h1><a href="stockage-a1.html">Examen au cas par cas</a>',
+        )
+
+    with (
+        PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http,
+        pytest.raises(ValueError, match="DREAL source is not configured"),
+    ):
+        adopt(http, path, candidate.id)
+    assert requests == []
+    checked = load_catalog(path).candidates[0]
+    assert checked.state == "rejected" and checked.target_sha256 is None
+    assert "DREAL source is not configured" in (checked.qualification_error or "")
+    assert get_region("normandie", path).dreal_listings == ()
+
+
+def test_mrae_only_pure_dreal_helpers_refuse_an_empty_prefix() -> None:
+    region = RegionConfig.model_validate(mrae_only_configuration())
+    page = '<h1>Examen au cas par cas 2025</h1><a href="stockage-a1.html">Examen au cas par cas</a>'
+    with pytest.raises(ValueError, match="DREAL source is not configured"):
+        qualify(page, NORMANDIE_2025, region, "dreal", 2025)
+    with pytest.raises(ValueError, match="DREAL source is not configured"):
+        annual_links('<a href="2025-r1.html">2025</a>', NORMANDIE_2025, region, "dreal")
+
+
+@pytest.mark.parametrize("listings", [(), ("2025-r1.html",), (NORMANDIE_2025,)])
+def test_dreal_collection_without_a_base_refuses_even_overridden_listings(
+    tmp_path: Path, listings: tuple[str, ...]
+) -> None:
+    region = Region("normandie", ("14",), "", (), {2025: NORMANDIE_2025})
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, text="")
+
+    with (
+        Database(tmp_path / "state.sqlite") as db,
+        PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http,
+    ):
+        with pytest.raises(ValueError, match="DREAL source is not configured"):
+            collect_dreal(http, db, BlobStore(tmp_path / "blobs"), region, listings, 0)
+        assert db.collection_coverage() == []
+        with pytest.raises(ValueError, match="DREAL source is not configured"):
+            list(iter_articles(http, region, NORMANDIE_2025, 0))
+    assert requests == []
+
+
+@pytest.mark.parametrize("listing_args", [[], ["--listing", NORMANDIE_2025]])
+def test_cli_dreal_source_override_cannot_enable_a_mrae_only_region(
+    settings: Settings, db: Database, listing_args: list[str]
+) -> None:
+    region = RegionConfig.model_validate(mrae_only_configuration())
+    save_catalog(settings.catalog_path, source_catalog.SourceCatalog(regions=(region,)))
+    args = cli.build_parser().parse_args(["collect", "dreal", "--region", "normandie", *listing_args])
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, text="")
+
+    with (
+        PoliteHttp("t", default_interval_s=0, transport=httpx.MockTransport(handler)) as http,
+        pytest.raises(ValueError, match="DREAL source is not configured"),
+    ):
+        cli._collect_one("dreal", args, settings, http, db)
+    assert requests == [] and db.collection_coverage() == []
 
 
 def test_annual_links_reject_generic_future_ambiguous_and_foreign_pages(tmp_path: Path) -> None:

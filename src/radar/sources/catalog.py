@@ -76,7 +76,7 @@ class StrictModel(BaseModel):
 class RegionConfig(StrictModel):
     slug: str
     departments: tuple[str, ...]
-    dreal_base: str
+    dreal_base: str = ""  # No DREAL source; another source must then be explicitly configured.
     dreal_listings: tuple[str, ...] = ()
     mrae_pages: dict[int, str] = Field(default_factory=dict)
     prefectures: dict[str, str] = Field(default_factory=dict)
@@ -93,9 +93,15 @@ class RegionConfig(StrictModel):
             or set(self.departments) - DEPARTMENTS.keys()
         ):
             raise ValueError("Region requires unique known French department codes")
-        base = official_url(self.dreal_base)
-        if not base.endswith("/") or urlparse(base).query:
-            raise ValueError("DREAL base must end in / and contain no query")
+        base = self.dreal_base
+        if base:
+            official_url(base)
+            if not base.endswith("/") or urlparse(base).query:
+                raise ValueError("DREAL base must end in / and contain no query")
+        elif self.dreal_listings or self.dreal_periods or self.seeds.get("dreal"):
+            raise ValueError("DREAL listings, periods and discovery seeds require a configured DREAL base")
+        elif not (self.mrae_pages or self.prefectures or self.seeds.get("mrae")):
+            raise ValueError("Region requires at least one explicitly configured source")
         for listing in self.dreal_listings:
             if (
                 listing.startswith(("/", "http"))
@@ -131,6 +137,11 @@ class RegionConfig(StrictModel):
 
     def region(self) -> Region:
         return Region(**self.model_dump(exclude={"seeds"}))
+
+
+def _require_source(region: RegionConfig, source: Source) -> None:
+    if source == "dreal" and not region.dreal_base:
+        raise ValueError("DREAL source is not configured for this region")
 
 
 class SourceCandidate(StrictModel):
@@ -249,6 +260,7 @@ def annual_links(
     page: str, page_url: str, region: RegionConfig, source: Source, *, max_links: int = 500
 ) -> list[tuple[int, str, str]]:
     """Find explicit same-origin annual links, never infer a URL from a year."""
+    _require_source(region, source)
     found: dict[str, tuple[int, str, str]] = {}
     origin = urlparse(page_url).netloc.lower()
     if max_links <= 0:
@@ -338,6 +350,7 @@ def discover(
     region = next((r for r in catalog.regions if r.slug == region_slug), None)
     if region is None:
         raise ValueError("Configure regional seeds before discovering their annual pages")
+    _require_source(region, source)
     seeds = region.seeds.get(source) or (
         tuple(region.dreal_base + listing for listing in region.dreal_listings)
         if source == "dreal"
@@ -430,6 +443,7 @@ def discover(
 
 def qualify(page: str, url: str, region: RegionConfig, source: Source, year: int) -> None:
     """Check connector compatibility and regional/year identity before activating an observed candidate."""
+    _require_source(region, source)
     text = fold(strip_tags(page))
     heading = " ".join(re.findall(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>", page, re.I | re.S))
     identity = fold(f"{unquote(urlparse(url).path)} {strip_tags(heading)}")
@@ -461,6 +475,7 @@ def adopt(http: PoliteHttp, path: Path, candidate_id: str) -> dict[str, Any]:
     region = next(r for r in catalog.regions if r.slug == candidate.region)
     page = ""
     try:
+        _require_source(region, candidate.source)
         page = _get_page(http, candidate.url)
         qualify(page, candidate.url, region, candidate.source, candidate.year)
         if candidate.source == "mrae":

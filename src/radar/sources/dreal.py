@@ -59,7 +59,13 @@ def parse_article_pdfs(page: str, article_url: str) -> list[str]:
     return sorted({url for url, _, _ in links(page, article_url) if is_document_url(url)})
 
 
+def _require_source(region: Region) -> None:
+    if not region.dreal_base:
+        raise ValueError("DREAL source is not configured for this region")
+
+
 def iter_articles(http: PoliteHttp, region: Region, listing: str, max_offset: int) -> Iterator[Article]:
+    _require_source(region)
     first = http.get_text(region.dreal_base + listing)
     yield from parse_listing(first, region.dreal_base)
     for offset in range(PAGE_SIZE, min(last_offset(first), max_offset) + 1, PAGE_SIZE):
@@ -84,6 +90,7 @@ def collect_dreal(
 ) -> CollectReport:
     """Screen titles (layer 1), download the PDFs of kept articles and of the audit sample, ingest them. Idempotent.
     Every listed item is recorded (`listing_items`) so the screen's recall can be estimated later."""
+    _require_source(region)
     if max_offset < 0 or max_pages <= 0 or (max_articles is not None and max_articles <= 0):
         raise ValueError("Collection budgets must be positive (max-offset may be zero)")
     report = CollectReport()
