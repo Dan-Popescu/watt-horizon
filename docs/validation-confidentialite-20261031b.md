@@ -1,6 +1,6 @@
 # Validation du correctif de confidentialité 2026.10.31b
 
-Le correctif conserve les identités personnelles complètes connues, y compris leurs tokens
+Le masque prend en compte les identités personnelles complètes connues, y compris leurs tokens
 courts, et masque leurs fragments situés hors des noms complets de sociétés. Une exemption
 de société ne doit pas laisser réapparaître une identité après aplatissement des retours
 à la ligne. Une union ambiguë de plusieurs exemptions est masquée conservativement.
@@ -19,14 +19,20 @@ Les versions antérieures rejetées sont conservées dans les artefacts privés.
   `sha256:761399956b0f7f83c903d1238c52b2ddaabe0e298b903ff2b589d62e20cbdf53`.
 - Rejeu hors réseau dans une copie privée distincte : **553 fichiers, 285 dossiers** ;
   292 lectures complètes et 261 incomplètes ; 95 dossiers complets et 190 en attente.
-- Les valeurs métier brutes et classifications machine des 285 dossiers sont identiques
-  à celles du V1. Les agrégats de lecture et d'extraction sont également identiques.
+- Les 3 135 valeurs métier brutes (11 champs pour 285 dossiers) et les 285 classifications
+  machine sont identiques à celles du V1. Les candidats et citations de confidentialité
+  ont été masqués ; ils ne sont pas déclarés identiques. Les agrégats de lecture et
+  d'extraction sont également identiques.
 - Audit natif des sorties courantes : **quatre emplacements détectés avant, zéro après**,
   avec couverture des 285 dossiers et sans manque de cache requis pour cet audit.
 - Contrôle indépendant à déclencheurs figés depuis le V1 : **cinq chaînes détectées avant,
   zéro après**, dans toutes les chaînes et clés du dossier de développement concerné.
   Les quatre anciens emplacements sont inclus. Ce contrôle empêche un faux zéro obtenu
   en supprimant le candidat qui servait à reconstruire les déclencheurs de l'audit.
+- Sauvegarde native restaurée localement : 32 tables comparées sans différence et
+  553 blobs documentaires vérifiés par SHA-256. La base restaurée est identique à
+  celle du snapshot, empreinte
+  `9147bba8c53ca6eb18c90878f85074cc3e1deee4b5924406668a40bca669acc5`.
 
 Les deux audits n'ont pas le même périmètre de comptage. Ils ne constituent pas un détecteur
 général de noms ni une garantie d'anonymisation exhaustive. Les originaux et sorties antérieures
