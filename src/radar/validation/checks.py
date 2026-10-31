@@ -7,26 +7,15 @@ from radar.domain.enums import CheckStatus
 from radar.domain.ids import luhn_ok
 from radar.domain.models import Check
 from radar.domain.power import storage_duration_ok
-from radar.domain.privacy import MASKED_PERSON
+from radar.domain.privacy import MASKED_PERSON, looks_like_person
 from radar.domain.text import fold
 from radar.extraction.facts import Facts
 from radar.validation.lookups import CommuneInfo, Lookups
 
-_COMPANY_MARKERS = re.compile(
-    r"\b(?:sas|sasu|sarl|sa|sci|scea|earl|gaec|snc|eurl)\b|energ|power|storage|solar|stockage|poste|data|group|france"
-    r"|assets|industr|wind|sun|capital|invest|reseau|réseau|\d",
-    re.IGNORECASE,
-)
-_PERSON = re.compile(r"^(?:M\.|Mme|Monsieur|Madame)?\s*[A-ZÉ][a-zéèëï]+(?:-[A-ZÉ][a-zéèëï]+)?\s+[A-ZÉ][A-Za-zéèëï\-]+$")
-
-
-def looks_like_person(name: str | None) -> bool:
-    return bool(name) and bool(_PERSON.match(name or "")) and not _COMPANY_MARKERS.search(name or "")
-
 
 def check_natural_person(facts: Facts) -> Check:
     """GDPR minimisation: a developer that is a natural person is masked before anything is stored or published."""
-    if looks_like_person(facts.developer):
+    if facts.developer == MASKED_PERSON or looks_like_person(facts.developer):
         facts.developer = MASKED_PERSON
         facts.evidence.pop("developer", None)
         return Check(name="gdpr", status=CheckStatus.ALERT, detail="porteur = personne physique : nom masqué")

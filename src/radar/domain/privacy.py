@@ -29,6 +29,36 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _PHONE = re.compile(r"(?<![\d_-])(?:\+33\s?|0)[1-9](?:(?P<sep>[ .-])\d{2}(?:(?P=sep)\d{2}){3}|\d{8})(?![\d_-])")
 _REPEATED_MASK = re.compile(rf"{re.escape(MASK)}(?:\s*{re.escape(MASK)})+")
 _LABELS = frozenset({"nom", "prenom", "prenoms", "s", "madame", "monsieur"})  # form labels, not names
+_COMPANY_MARKERS = re.compile(
+    r"\b(?:sas|sasu|sarl|sa|sci|scea|earl|gaec|snc|eurl)\b|energ|power|storage|solar|stockage|poste|data|group|france"
+    r"|assets|industr|wind|sun|capital|invest|reseau|réseau|\d",
+    re.IGNORECASE,
+)
+_PERSON = re.compile(
+    r"^(?:M\.|Mme|Monsieur|Madame)?\s*[A-ZÉ][a-zéèëï]+(?:-[A-ZÉ][a-zéèëï]+)?\s+[A-ZÉ][A-Za-zéèëï\-]+$",
+)
+_ACCENT_VARIANTS = {
+    "a": "aàáâäãå",
+    "c": "cç",
+    "e": "eèéêë",
+    "i": "iìíîï",
+    "n": "nñ",
+    "o": "oòóôöõ",
+    "u": "uùúûü",
+    "y": "yýÿ",
+}
+
+
+def _company_pattern(name: str) -> str:
+    return r"[\W_]+".join(
+        "".join(f"[{_ACCENT_VARIANTS[letter]}]" if letter in _ACCENT_VARIANTS else re.escape(letter) for letter in word)
+        for word in fold(name).split()
+    )
+
+
+def looks_like_person(name: str | None) -> bool:
+    """Conservative applicant-name heuristic shared by minimisation and validation."""
+    return bool(name) and bool(_PERSON.match(name or "")) and not _COMPANY_MARKERS.search(name or "")
 
 
 def is_person_field(name: str) -> bool:
@@ -52,22 +82,61 @@ class PersonScrubber:
     """Masks the given name tokens (whole words, case-insensitive) plus civility names, e-mails and phones."""
 
     names: frozenset[str] = frozenset()
-    keep: frozenset[str] = frozenset()  # folded tokens that must stay visible (company names)
+    keep: frozenset[str] = frozenset()  # complete company names, never globally exempted person tokens
     _pattern: re.Pattern[str] | None = field(default=None, init=False, compare=False, repr=False)
+    _keep_pattern: re.Pattern[str] | None = field(default=None, init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:
-        tokens = sorted({n for n in self.names if fold(n) not in self.keep}, key=len, reverse=True)
+        tokens = sorted(self.names, key=len, reverse=True)
         if tokens:
             alternatives = "|".join(re.escape(t) for t in tokens)
             object.__setattr__(self, "_pattern", re.compile(rf"(?<![\w-])(?:{alternatives})(?![\w-])", re.IGNORECASE))
+        if self.keep:
+            companies = "|".join(
+                _company_pattern(name) for name in sorted(self.keep, key=len, reverse=True) if fold(name)
+            )
+            object.__setattr__(self, "_keep_pattern", re.compile(rf"(?<![\w-])(?:{companies})(?![\w-])", re.IGNORECASE))
 
     @classmethod
-    def for_filing(cls, forms: Iterable[Mapping[str, str]], companies: Iterable[str | None] = ()) -> "PersonScrubber":
+    def for_filing(
+        cls,
+        forms: Iterable[Mapping[str, str]],
+        companies: Iterable[str | None] = (),
+        *,
+        people: Iterable[str | None] = (),
+    ) -> "PersonScrubber":
         names: set[str] = set()
         for f in forms:
             names |= person_names(f)
-        keep = {token for c in companies if c for token in fold(c).split()}
+        for person in people:
+            names |= person_names({"nom": person or ""})
+        keep: set[str] = set()
+        for company in companies:
+            company_tokens = set(fold(company).split()) if company else set()
+            known_person = company_tokens and company_tokens <= {
+                token for name in names for token in fold(name).split()
+            }
+            if known_person:
+                # An extracted denomination may actually be a natural-person applicant.
+                # It must not exempt that person's tokens before validation runs.
+                names |= person_names({"nom": company or ""})
+            elif company:
+                keep.add(company)
         return cls(frozenset(names), frozenset(keep))
+
+    def _person_matches(self, text: str) -> list[re.Match[str]]:
+        if self._pattern is None:
+            return []
+        protected = [match.span() for match in self._keep_pattern.finditer(text)] if self._keep_pattern else []
+        result: list[re.Match[str]] = []
+        index = 0
+        for match in self._pattern.finditer(text):
+            while index < len(protected) and protected[index][1] <= match.start():
+                index += 1
+            if index < len(protected) and protected[index][0] <= match.start() and match.end() <= protected[index][1]:
+                continue
+            result.append(match)
+        return result
 
     def scrub(self, text: str | None) -> str | None:
         if text is None:
@@ -76,7 +145,12 @@ class PersonScrubber:
         text = _PHONE.sub(PHONE_MASK, text)
         text = _CIVILITY.sub(lambda m: f"{m['civ']} {MASK}" + (" " if m[0][-1].isspace() else ""), text)
         if self._pattern is not None:
-            text = self._pattern.sub(MASK, text)
+            parts: list[str] = []
+            start = 0
+            for match in self._person_matches(text):
+                parts.extend((text[start : match.start()], MASK))
+                start = match.end()
+            text = "".join([*parts, text[start:]])
         return _REPEATED_MASK.sub(MASK, text)
 
     def leaks(self, text: str) -> list[str]:
@@ -88,5 +162,5 @@ class PersonScrubber:
             if MASK not in m["name"] and not set(fold(m["name"]).split()) <= _LABELS  # « Monsieur Nom Prénom(s) »
         ]
         if self._pattern is not None:
-            found += [m[0] for m in self._pattern.finditer(text)]
+            found += [m[0] for m in self._person_matches(text)]
         return found

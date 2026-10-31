@@ -26,7 +26,7 @@ from radar.domain.models import (
     SecondOpinion,
 )
 from radar.domain.power import estimate_power
-from radar.domain.privacy import PersonScrubber
+from radar.domain.privacy import MASKED_PERSON, PersonScrubber, looks_like_person
 from radar.domain.text import contains_quote, squash
 from radar.extraction import EXTRACTION_VERSION
 from radar.extraction.cerfa import extract_cerfa, form_layout
@@ -305,6 +305,17 @@ def _locate_segments(
     return facts
 
 
+def _scrub_facts(facts: Facts, privacy: PersonScrubber) -> None:
+    if facts.developer and privacy.scrub(facts.developer) != facts.developer:
+        facts.developer = MASKED_PERSON
+        facts.evidence.pop("developer", None)
+    facts.description = privacy.scrub(facts.description)
+    facts.legal_name = privacy.scrub(facts.legal_name)
+    facts.evidence = {
+        name: ev.model_copy(update={"quote": privacy.scrub(ev.quote)}) for name, ev in facts.evidence.items()
+    }
+
+
 def build_filing(
     key: str, documents: list[DocumentRecord], services: Services, corrections: Sequence[Correction] = ()
 ) -> Filing:
@@ -324,26 +335,17 @@ def build_filing(
         for name in ALIAS_FIELDS:
             setattr(facts, name, services.aliases.apply(name, getattr(facts, name)))
     # GDPR: from here on, nothing derived from the documents may carry a natural person's name.
-    privacy = PersonScrubber.for_filing(form_fields, [facts.developer, facts.legal_name])
-    texts = [privacy.scrub(t) or "" for t in texts]
-    facts.description = privacy.scrub(facts.description)
-    facts.evidence = {
-        name: ev.model_copy(update={"quote": privacy.scrub(ev.quote)}) for name, ev in facts.evidence.items()
-    }
-    observations = tuple(
-        observation.model_copy(
-            update={
-                "quote": privacy.scrub(observation.quote) or "",
-                "header_quote": privacy.scrub(observation.header_quote) or "",
-                "phase": privacy.scrub(observation.phase),
-                "scenario": privacy.scrub(observation.scenario),
-                "project": privacy.scrub(observation.project),
-            }
-        )
-        for observation in observe_quantities(
-            (doc.id, content) for doc, content in zip(documents, contents, strict=True)
-        )
+    applicants = [facts.developer, form.developer, decision.developer]
+    applicants.extend(
+        candidate.value for candidate in extraction.candidates.get("developer", ()) if isinstance(candidate.value, str)
     )
+    privacy = PersonScrubber.for_filing(
+        form_fields,
+        [facts.developer, facts.legal_name],
+        people=[name for name in applicants if looks_like_person(name)],
+    )
+    _scrub_facts(facts, privacy)
+    texts = [privacy.scrub(t) or "" for t in texts]
     title = privacy.scrub(_best_title(documents, facts)) or ""
 
     screening = screen(title, facts.description, *texts, extra=services.screen_terms)
@@ -359,8 +361,47 @@ def build_filing(
             if ev is not None and ev.locator.startswith("llm-extract:"):
                 value = getattr(facts, ARBITRATED_ATTRS[name][0])
                 extraction.candidates.setdefault(name, []).append(Candidate(source="llm", value=comparable(value)))
+        applicants.extend(
+            candidate.value
+            for candidate in extraction.candidates.get("developer", ())
+            if isinstance(candidate.value, str)
+        )
         for document, content in zip(documents, contents, strict=True):
             _locate_segments(facts, content, document.id)
+        privacy = PersonScrubber.for_filing(
+            form_fields,
+            [facts.developer, facts.legal_name],
+            people=[name for name in [*applicants, facts.developer] if looks_like_person(name)],
+        )
+        _scrub_facts(facts, privacy)
+        texts = [privacy.scrub(text) or "" for text in texts]
+        title = privacy.scrub(title) or ""
+        classification = classification.model_copy(update={"quote": privacy.scrub(classification.quote) or ""})
+    extraction.candidates = {
+        name: [
+            candidate.model_copy(
+                update={
+                    "value": privacy.scrub(candidate.value) if isinstance(candidate.value, str) else candidate.value
+                }
+            )
+            for candidate in candidates
+        ]
+        for name, candidates in extraction.candidates.items()
+    }
+    observations = tuple(
+        observation.model_copy(
+            update={
+                "quote": privacy.scrub(observation.quote) or "",
+                "header_quote": privacy.scrub(observation.header_quote) or "",
+                "phase": privacy.scrub(observation.phase),
+                "scenario": privacy.scrub(observation.scenario),
+                "project": privacy.scrub(observation.project),
+            }
+        )
+        for observation in observe_quantities(
+            (doc.id, content) for doc, content in zip(documents, contents, strict=True)
+        )
+    )
     context_issues = quantity_issues(facts, observations)
     if len(observations) >= MAX_OBSERVATIONS:
         context_issues = (*context_issues, "quantity_observation_limit_reached")
@@ -440,6 +481,8 @@ def build_filing(
             )
         )
     gps_ok = any(c.name == "gps" and c.status is CheckStatus.OK for c in validation.checks)
+    # Disagreement flags can quote losing, still-raw form/decision candidates.
+    flags = [item.model_copy(update={"detail": privacy.scrub(item.detail) or ""}) for item in flags]
     needs_review = (
         bool(unread)
         or bool(context_issues)
@@ -474,7 +517,9 @@ def build_filing(
         containers=facts.containers,
         area_ha=facts.area_ha,
         classification=classification,
-        checks=validation.checks,
+        checks=tuple(
+            item.model_copy(update={"detail": privacy.scrub(item.detail) or ""}) for item in validation.checks
+        ),
         confidence=validation.confidence(needs_review),
         evidence=dict(facts.evidence),
         unread_scans=tuple(unread),
@@ -545,11 +590,11 @@ def build_filing(
     )
     texts_by_doc = {doc.id: text for doc, text in zip(documents, texts, strict=True)}
     if services.verifier is not None and classification.category in TARGET_CATEGORIES:
-        machine = _model_check(machine, texts_by_doc, services.verifier)
+        machine = _model_check(machine, texts_by_doc, services.verifier, privacy)
     return apply_corrections(with_machine(machine), corrections, services.lookups, texts_by_doc)
 
 
-def _model_check(machine: Filing, texts_by_doc: dict[str, str], verifier: Any) -> Filing:
+def _model_check(machine: Filing, texts_by_doc: dict[str, str], verifier: Any, privacy: PersonScrubber) -> Filing:
     """A model re-reads uncertain values against their passage; « disagree » becomes a flag, never a correction."""
     item = build_check_input(machine, texts_by_doc, field_values(machine))
     if item is None:
@@ -557,7 +602,19 @@ def _model_check(machine: Filing, texts_by_doc: dict[str, str], verifier: Any) -
     verdicts = verifier.check(item)
     checks = {name: str(v.get("verdict")) for name, v in verdicts.items() if v.get("verdict")}
     flags = [
-        flag("model_disagrees", name, f"propose : {v.get('value') or '—'}")
+        flag(
+            "model_disagrees",
+            name,
+            privacy.scrub(
+                "propose : "
+                + (
+                    MASKED_PERSON
+                    if name == "developer" and looks_like_person(v.get("value"))
+                    else str(v.get("value") or "—")
+                )
+            )
+            or "",
+        )
         for name, v in verdicts.items()
         if v.get("verdict") == "disagree"
     ]
