@@ -50,10 +50,41 @@ _ACCENT_VARIANTS = {
 
 
 def _company_pattern(name: str) -> str:
-    return r"[\W_]+".join(
-        "".join(f"[{_ACCENT_VARIANTS[letter]}]" if letter in _ACCENT_VARIANTS else re.escape(letter) for letter in word)
-        for word in fold(name).split()
-    )
+    # OCR may join or split a denomination on one line. Sentence punctuation,
+    # field delimiters and line breaks must never turn a person's surname plus
+    # the next heading into a complete company exemption.
+    # A single internal connector is an OCR spelling variant. Combining it
+    # with surrounding spaces would also accept an administrative separator.
+    ocr_spelling = r"(?:[ \u00a0\u202f]*|['’_\-])".join(_name_letters(name))
+    if any(char in name for char in "\r\n\t"):
+        return ocr_spelling
+    # Punctuation explicitly present in the known legal name is still valid.
+    # It is matched at its declared position, never inserted between any letters.
+    words = []
+    for word in name.split():
+        letters = []
+        for char in word:
+            letters.append("".join(_name_letters(char)) if fold(char) else re.escape(char))
+        words.append("".join(letters))
+    known_spelling = r"[ \u00a0\u202f]+".join(words)
+    return rf"(?:{known_spelling}|{ocr_spelling})"
+
+
+def _name_letters(name: str) -> list[str]:
+    return [
+        f"[{_ACCENT_VARIANTS[letter]}]" if letter in _ACCENT_VARIANTS else re.escape(letter)
+        for letter in _identity_key(name)
+    ]
+
+
+def _identity_key(name: str) -> str:
+    return fold(name).replace(" ", "")
+
+
+def _person_span_pattern(name: str) -> str:
+    # Privacy matching remains tolerant across source separators. Company
+    # exemptions deliberately use the narrower delimiter policy above.
+    return r"[\W_]*".join(_name_letters(name))
 
 
 def looks_like_person(name: str | None) -> bool:
@@ -79,7 +110,7 @@ def person_names(fields: Mapping[str, str]) -> set[str]:
 
 @dataclass(frozen=True)
 class PersonScrubber:
-    """Masks the given name tokens (whole words, case-insensitive) plus civility names, e-mails and phones."""
+    """Masks name tokens and complete known-person spans, plus civility names, e-mails and phones."""
 
     names: frozenset[str] = frozenset()
     keep: frozenset[str] = frozenset()  # complete company names, never globally exempted person tokens
@@ -89,7 +120,7 @@ class PersonScrubber:
     def __post_init__(self) -> None:
         tokens = sorted(self.names, key=len, reverse=True)
         if tokens:
-            alternatives = "|".join(re.escape(t) for t in tokens)
+            alternatives = "|".join(_person_span_pattern(token) for token in tokens)
             object.__setattr__(self, "_pattern", re.compile(rf"(?<![\w-])(?:{alternatives})(?![\w-])", re.IGNORECASE))
         if self.keep:
             companies = "|".join(
@@ -106,36 +137,72 @@ class PersonScrubber:
         people: Iterable[str | None] = (),
     ) -> "PersonScrubber":
         names: set[str] = set()
+        person_spans: set[str] = set()
         for f in forms:
             names |= person_names(f)
         for person in people:
             names |= person_names({"nom": person or ""})
+            if person and fold(person):
+                # Keep the complete explicit identity as well as its long tokens.
+                # A two-letter given name or initial must not make the applicant
+                # look like a company exemption or survive beside a masked surname.
+                person_spans.add(person.strip())
+        complete_people = {_identity_key(person) for person in person_spans}
         keep: set[str] = set()
         for company in companies:
             company_tokens = set(fold(company).split()) if company else set()
-            known_person = company_tokens and company_tokens <= {
-                token for name in names for token in fold(name).split()
-            }
+            known_person = _identity_key(company or "") in complete_people or (
+                company_tokens and company_tokens <= {token for name in names for token in fold(name).split()}
+            )
             if known_person:
                 # An extracted denomination may actually be a natural-person applicant.
                 # It must not exempt that person's tokens before validation runs.
                 names |= person_names({"nom": company or ""})
             elif company:
                 keep.add(company)
-        return cls(frozenset(names), frozenset(keep))
+        return cls(frozenset(names | person_spans), frozenset(keep))
 
-    def _person_matches(self, text: str) -> list[re.Match[str]]:
+    def _person_spans(self, text: str) -> list[tuple[int, int]]:
         if self._pattern is None:
             return []
         protected = [match.span() for match in self._keep_pattern.finditer(text)] if self._keep_pattern else []
-        result: list[re.Match[str]] = []
-        index = 0
+        result: list[tuple[int, int]] = []
+        company_index = 0
         for match in self._pattern.finditer(text):
-            while index < len(protected) and protected[index][1] <= match.start():
-                index += 1
-            if index < len(protected) and protected[index][0] <= match.start() and match.end() <= protected[index][1]:
+            while company_index < len(protected) and protected[company_index][1] <= match.start():
+                company_index += 1
+            # A whole identity inside one known company remains an exemption.
+            # A partly overlapping company must not exempt the personal prefix
+            # or suffix outside it, even after a reader flattened a field break.
+            if (
+                company_index < len(protected)
+                and protected[company_index][0] <= match.start()
+                and match.end() <= protected[company_index][1]
+            ):
                 continue
-            result.append(match)
+            fragments = []
+            start, index = match.start(), company_index
+            while index < len(protected) and protected[index][0] < match.end():
+                company_start, company_end = protected[index]
+                if start < company_start:
+                    fragments.append((start, company_start))
+                start = max(start, company_end)
+                index += 1
+            if start < match.end():
+                fragments.append((start, match.end()))
+            visible = []
+            for start, end in fragments:
+                # Preserve administrative punctuation beside a partial name.
+                while start < end and not text[start].isalnum():
+                    start += 1
+                while end > start and not text[end - 1].isalnum():
+                    end -= 1
+                if start < end:
+                    visible.append((start, end))
+            # Several short company matches cannot jointly exempt a complete
+            # known identity. With no remaining name fragment, mask the whole
+            # ambiguous identity instead of claiming a composite exemption.
+            result.extend(visible or [match.span()])
         return result
 
     def scrub(self, text: str | None) -> str | None:
@@ -147,9 +214,9 @@ class PersonScrubber:
         if self._pattern is not None:
             parts: list[str] = []
             start = 0
-            for match in self._person_matches(text):
-                parts.extend((text[start : match.start()], MASK))
-                start = match.end()
+            for begin, end in self._person_spans(text):
+                parts.extend((text[start:begin], MASK))
+                start = end
             text = "".join([*parts, text[start:]])
         return _REPEATED_MASK.sub(MASK, text)
 
@@ -162,5 +229,5 @@ class PersonScrubber:
             if MASK not in m["name"] and not set(fold(m["name"]).split()) <= _LABELS  # « Monsieur Nom Prénom(s) »
         ]
         if self._pattern is not None:
-            found += [m[0] for m in self._person_matches(text)]
+            found += [text[start:end] for start, end in self._person_spans(text)]
         return found

@@ -3,4 +3,4 @@
 Bump EXTRACTION_VERSION whenever an extractor's output can change (it is stored on every filing).
 """
 
-EXTRACTION_VERSION = "2026.10.31a"
+EXTRACTION_VERSION = "2026.10.31b"
