@@ -74,6 +74,52 @@ reproductibilité des avis, **pas une précision métier ni une vérité indépe
 classificateur indépendant configuré, la détection complète n'est pas évaluée. Les revues
 permettent un diagnostic de lecture et d'extraction, sans approuver un jeu de production.
 
+## Contrat de la seconde phase
+
+La seconde phase étend les lectures aux groupes candidats du corpus enrichi. Les nombres
+ci-dessus décrivent uniquement la première phase. Les nouveaux effectifs ne sont arrêtés
+qu'après collecte, lecture locale et vérification des regroupements. Un manifeste distinct
+conserve les dossiers et toutes leurs pièces observées, leurs empreintes et les limites de
+lecture. Une campagne d'avis IA sur des sources partielles reste explicitement observationnelle ;
+elle ne contourne pas les conditions de préparation ou de publication d'une campagne native.
+
+Le groupe est l'unité d'échantillonnage, mais **chaque dossier reçoit sa propre fiche par lecteur**.
+Une citation doit appartenir à une pièce attachée à ce dossier. La présence d'une pièce dans
+un autre dossier du même groupe ne suffit pas. Un groupe n'a deux revues complètes que lorsque
+chacun de ses dossiers possède les deux fiches valides. Les rôles d'une pièce partagée restent
+définis par dossier. Toute empreinte partagée entre groupes bloque l'export jusqu'à résolution
+du regroupement ; elle ne devient pas une observation supplémentaire.
+
+Les paquets de développement et les paquets réservés sont séparés. Les seconds sont destinés
+à des lecteurs IA isolés, qui ne reçoivent que les sources masquées, sans prédictions ni erreurs
+du pipeline. Le coordinateur du développement reçoit seulement leurs compteurs agrégés et ne
+consulte pas leurs valeurs, citations ou désaccords individuels. Ces annotations de sources ne
+sont ni importées comme références humaines ni utilisées pour régler le code. Toute appartenance
+historique à la calibration ou au test protège le groupe entier, même après une nouvelle liaison.
+Les manifestes anciens restent intacts ; une union entre anciennes partitions impose une
+nouvelle lignée observationnelle documentée, sans prétendre réparer l'indépendance historique.
+
+Chaque valeur présente exige deux lectures séparées. Les conclusions critiques présentes
+(catégorie, date de dépôt, décision, puissance, capacité et poste de raccordement), ainsi que
+les désaccords, nécessitent une troisième lecture des sources avant confrontation aux avis.
+Les inconnus ne sont pas transformés en absences ou en succès. Le contrôle automatique des
+citations et des empreintes vérifie la structure ; il ne certifie ni la lecture effective ni
+la justification sémantique d'une valeur.
+
+Le champ `mw` désigne une puissance du projet explicitement exprimée en MW. Le lecteur déclare
+l'actif, son état, la base de mesure et le périmètre. Une puissance installée éolienne ne prouve
+pas une puissance de raccordement AC ; cette dernière reste une observation distincte inconnue
+dans ce protocole. Les MWc/DC ne sont pas convertis implicitement. Les MWh de stockage restent
+distincts d'une production annuelle. Un poste existant cité dans le texte n'est pas un poste
+de raccordement établi. Une date isolée ou de signature n'est pas une date de dépôt complet.
+Un SIRET mal formé n'est pas corrigé par devinette ; plusieurs communes ne sont pas réduites
+arbitrairement à une seule. Le masque ou l'ambiguïté d'identité entraîne une abstention.
+
+Les formulaires humains restent vierges et séparés des avis IA. Les deux outils privés de
+cette phase doivent être testés sur des cas synthétiques et relus chacun par un agent distinct
+avant utilisation. Les sorties brutes, versions des paquets et éventuels avis invalides sont
+conservés ; aucune réécriture silencieuse ne remplace une lecture antérieure.
+
 ## Correctif de confidentialité et rejeu séparé
 
 Un cas synthétique reproduit la réexemption des noms d'un porteur personne physique comme
