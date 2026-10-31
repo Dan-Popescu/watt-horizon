@@ -63,6 +63,12 @@ Règles de notation :
 - `unknown` : masque, lecture partielle, ambiguïté, contradiction ou preuve insuffisante ;
 - `absent` : uniquement après lecture complète des pièces pertinentes, sans zone utile omise.
 
+Pour cette campagne observationnelle étendue, l'inventaire administratif externe n'est pas
+validé. Chaque avis conserve la limite `administrative_document_inventory_unverified` ; le
+statut `absent` n'est pas utilisé. Un fait non établi reste `unknown`, avec sa raison.
+Le [bilan arrêté du corpus étendu](bilan-corpus-etendu-20261031.md) décrit les effectifs et
+les travaux restant à terminer.
+
 Le validateur privé vérifie les empreintes, les slots séparés, les documents déclarés lus et
 les citations au repère exact. Il refuse les formulaires humains natifs et les avis sur une
 ancienne version. Il rapporte les accords explicites, doubles inconnus et désaccords séparément.
