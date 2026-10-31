@@ -105,6 +105,20 @@ processus et watchdogs. Un appel C non coopératif exige toujours ces watchdogs 
 Le timer ne borne pas la mémoire : conserver les plafonds CPU/mémoire/processus du service de jobs.
 Le service web ne lance aucun de ces traitements lourds.
 
+Précision vérifiée pendant le pilote du 31 octobre : `--max-bytes` resserre le plafond de chaque
+réponse HTTP, sans compteur cumulatif durable d'octets réseau par tâche. Les tentatives physiques
+et le temps consommé ont bien leurs compteurs cumulatifs. Le plafond d'octets d'un dossier et la
+surveillance du volume privé sont des protections distinctes ; ni les octets des blobs uniques,
+ni la taille d'une archive HTML ne mesurent le trafic réseau total. Dans le profil actuel,
+32 Mio par réponse HTTP est plus restrictif que 256 Mio lorsqu'on choisit cette dernière
+valeur pour `--max-bytes` ; 256 Mio n'est pas la valeur par défaut de `TaskLimits`.
+
+L'ingestion historique garde également ses propres valeurs par défaut : PDF limité à 500 pages
+et 30 secondes, alors que le lecteur de la variante du pilote utilise 300 pages et 60 secondes.
+Déclarer la limite de chaque étape ; une variable du lecteur ne modifie pas implicitement
+l'ingestion. Une pièce enregistrée à l'ingestion peut donc rester illisible sous un plafond
+plus restrictif lors de son traitement.
+
 Les contrôles des fichiers de règles, références, communes, catalogue et code portent sur leurs contenus,
 y compris lorsqu’une restauration conserve leur taille et leur date. Les options des collecteurs, dont
 les années et dates par défaut, sont matérialisées dès le plan. Une modification entre mise en file et calcul,

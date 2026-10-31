@@ -1,0 +1,166 @@
+{
+  "schema": "watthorizon-ai-review-diagnostic-v1",
+  "generated_on": "2026-10-31",
+  "base_commit": "ebcd27ae97fdd52f9c5ac5481d6fcd195e6a40dc",
+  "fix_commit": "7ff0700",
+  "extraction_version": "2026.10.31a",
+  "scope": "initial corpus; before extension",
+  "campaign": {
+    "filings": 90,
+    "groups": 84,
+    "unique_documents": 206,
+    "formats": {
+      "html": 97,
+      "pdf": 109
+    },
+    "group_partitions": {
+      "calibration": 22,
+      "dev": 36,
+      "test": 26
+    },
+    "filing_partitions": {
+      "calibration": 23,
+      "dev": 36,
+      "test": 31
+    },
+    "verified_raw_hashes": 206,
+    "manifest_sha256": "3733c49603cd6b07807f5f7d2c55049cf149113d7901e9c39f36274b335d5d8f"
+  },
+  "ai_review": {
+    "kind": "ai_review_diagnostic_only",
+    "human_verified": false,
+    "human_accuracy_measured": false,
+    "groups_reviewed": 36,
+    "documents_reviewed_per_reader": 84,
+    "field_positions": 360,
+    "three_same_present": 133,
+    "three_unknown": 208,
+    "discordant_positions": 19,
+    "adjudication": {
+      "positions": 19,
+      "groups": 15,
+      "reader_positions_examined": 57,
+      "reader_citations_checked": 45,
+      "reader_citations_exact": 45,
+      "source_first_semantic_counts": {
+        "supporté": 15,
+        "partiel": 3,
+        "non établi": 1
+      },
+      "field_contract_semantic_counts": {
+        "supporté": 13,
+        "partiel": 5,
+        "non établi": 1
+      },
+      "agent_source_position_changes": {
+        "c": 11,
+        "a": 2,
+        "b": 5
+      },
+      "unknown_field_positions_after_scope_check": 6,
+      "human_accuracy_measured": false,
+      "statistical_independence_established": false,
+      "revisions_are_proposals_only": true
+    },
+    "manifest_sha256": "3733c49603cd6b07807f5f7d2c55049cf149113d7901e9c39f36274b335d5d8f",
+    "source_index_sha256": "2af3e2dd2b9b312ad78217d3fc90ec512e6643dfd009032f82de980b141f4f50",
+    "review_sha256": {
+      "a": "f1f1ebdb6dddcdd4bda7ad589f8b0da00063551b9c2e0516095b4d17bd215610",
+      "b": "99a98c87ea3990588f35367c42e3737d2de2737f04a2a814f9154e7c8a8cddc5",
+      "c": "b7d82f8aa7ba1fe9ba9122224c284e7c7da1a0305a6ac5aef7b888eed35cf622"
+    }
+  },
+  "readers": {
+    "a": {
+      "groups": 36,
+      "documents": 84,
+      "present_fields": 150,
+      "unknown_fields": 210,
+      "citations": 188
+    },
+    "b": {
+      "groups": 36,
+      "documents": 84,
+      "present_fields": 151,
+      "unknown_fields": 209,
+      "citations": 190
+    },
+    "c": {
+      "groups": 36,
+      "documents": 84,
+      "present_fields": 136,
+      "unknown_fields": 224,
+      "citations": 158
+    }
+  },
+  "source_packets": {
+    "documents": 84,
+    "pdf_pages": 357,
+    "fully_masked_signature_pages": 51,
+    "components_checked": 19450,
+    "detected_failures": 0,
+    "exhaustive_anonymity_guaranteed": false,
+    "ocr_truth_measured": false,
+    "privacy_policy": "source-only-conservative-v2"
+  },
+  "human_review": {
+    "verified_filings": 0,
+    "corrections_added": 0,
+    "gold_added": 0,
+    "native_forms_modified": false,
+    "effort_measured": false
+  },
+  "private_replay": {
+    "filings": 91,
+    "policy_pdf_timeout_seconds": 60,
+    "audit_before": {
+      "locations": 14,
+      "filings": 3
+    },
+    "audit_after": {
+      "locations": 0,
+      "filings": 0
+    },
+    "run": {
+      "exit_code": 0,
+      "wall_seconds": 20.18129194,
+      "sampled_memory_peak_bytes": 265785344,
+      "memory_samples": 1
+    },
+    "eval_strict": {
+      "exit_code": 2,
+      "wall_seconds": 22.225430519,
+      "sampled_memory_peak_bytes": 288743424,
+      "memory_samples": 2,
+      "gate": "failed",
+      "quote_not_found": 2,
+      "human_reference_filings": 0,
+      "independent_classifier_samples": 0,
+      "comparison_regressions": []
+    },
+    "final_unsampled_interval_certified": false,
+    "approved_baseline": false,
+    "cold_warm_speed_comparison_valid": false,
+    "cache_hit_miss_counts_archived": false,
+    "cache_already_present": true,
+    "image_id": "sha256:d0bf7fba63b606cdc7c994e57451795378a9fbe46ff07053e157c29fa37ebc5d",
+    "source_tree_sha256": "a1f165a911dc4f3813e56f3be54856162b156203e8b806eb7488b0a49d9bd572"
+  },
+  "verification": {
+    "pytest_passed": 659,
+    "pytest_skipped": 1,
+    "pytest_seconds": 143.6,
+    "ruff_format": "passed",
+    "ruff_check": "passed",
+    "mypy": "passed",
+    "private_checker_synthetic_scenarios": 42,
+    "private_checker_direct_comparisons": 10,
+    "source_response_wrapper_tests": 4
+  },
+  "application_model_calls": 0,
+  "application_model_budget_usd": 0,
+  "independent_classifier_configured": false,
+  "business_accuracy_measured": false,
+  "detection_quality_evaluated": false,
+  "offsite_backup_verified": false
+}

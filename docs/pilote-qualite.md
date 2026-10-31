@@ -40,6 +40,11 @@ existante : provenance, protocole et références doivent être fournis même si
 non vérifiées. Seules des lignes vérifiées par une personne alimentent la mesure de découverte.
 Le logiciel vérifie ces déclarations et leur intégrité ; il ne peut pas prouver leur vérité.
 
+La [revue IA du corpus initial du 31 octobre](revue-ia-pilote-20261031.md) conserve trois lectures
+séparées et un contrôle du sens des preuves, sans annotation humaine ni score métier fabriqué.
+Le [protocole d'extension](protocole-revue-ia-20261031.md) distingue les fichiers, dossiers et groupes,
+ainsi que les partitions réservées et les limites statistiques de la cible 500–1 000 fichiers.
+
 Les filtres de date portent sur la **date de téléchargement enregistrée pour chaque pièce dans cette base**,
 pas sur une année juridique supposée. Les formats reprennent le type détecté à l’ingestion ;
 les anciennes pièces sans type utilisent leur extension. La lecture et sa validation contrôlent

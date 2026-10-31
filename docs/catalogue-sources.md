@@ -13,6 +13,14 @@ tous les projets. Un conflit ne remplace jamais silencieusement une région exis
 Un nouvel import peut ajouter des URL de départ à `seeds` lorsque la configuration active de la région est
 identique ; il ne supprime pas les anciennes URL ni les sources déjà adoptées.
 
+Une région peut déclarer uniquement une source MRAe. Dans ce cas, omettre `dreal_base` ou le
+laisser vide ; aucune liste, période ou URL de départ DREAL ne peut alors être déclarée.
+Au moins une autre source doit être configurée : page ou départ MRAe, ou préfecture.
+La découverte, l'adoption et la collecte DREAL sont refusées avant tout accès HTTP pour cette
+région. Cette possibilité évite de renseigner une adresse DREAL fictive ; elle ne découvre
+et n'active aucune URL automatiquement. Les liens MRAe doivent toujours être observés puis
+qualifiés pour leur région et leur année.
+
 La découverte parcourt séquentiellement au maximum le nombre de pages demandé (1 à 100, 8 par défaut), 500 liens
 par page, une file de 500 liens et un catalogue de 10 000 candidats. Le transport conserve ses limites HTTP ;
 chaque page doit également tenir dans 4 Mio pour l'analyse. Les liens vers des PDF ou autres pièces ne servent
